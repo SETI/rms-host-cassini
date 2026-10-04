@@ -13,6 +13,8 @@ from vicar     import VicarImage
 import oops
 from . import _Cassini
 
+__all__ = ['ISS', 'from_file', 'from_index']
+
 # There are two C-matrix conventions here, related by _CMATRIX_ROTATION (a 180-degree spin
 # about the boresight):
 #   * spice-frame: the pointing straight from SPICE (a CK or cspyce.pxform), i.e.
@@ -613,5 +615,7 @@ class ISS(oops.Host):
 
 
 ISS._register()
+from_file = ISS.from_file
+from_index = ISS.from_index
 
 ##########################################################################################

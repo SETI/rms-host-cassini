@@ -78,7 +78,7 @@ class _Cassini:
     @staticmethod
     def initialize(*, ck='reconstructed', spk='reconstructed', gapfill=True,
                    planets=None, asof=None, mst_pck=True, irregulars=True):
-        """Intialize the Cassini mission internals.
+        """Initialize the Cassini mission internals.
 
         After the first call, later calls to this function are ignored.
 

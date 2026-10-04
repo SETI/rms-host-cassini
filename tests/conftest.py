@@ -13,7 +13,6 @@ from typing import Any
 
 import cspyce
 import julian
-import numpy as np
 import oops
 import pytest
 import spicedb
@@ -32,13 +31,13 @@ PIXELS = 1024
 def iso_from_tdb(tdb: float) -> str:
     """The ISO date-time, to the millisecond, of a time in seconds TDB."""
 
-    return julian.iso_from_tai(julian.tai_from_tdb(tdb), digits=3)
+    return str(julian.iso_from_tai(julian.tai_from_tdb(tdb), digits=3))
 
 
 def tdb_in_month(month: float) -> float:
     """The time in seconds TDB at a fractional "month" of the Cassini mission."""
 
-    return _Cassini.TDB0 + month * _Cassini.DTDB
+    return float(_Cassini.TDB0 + month * _Cassini.DTDB)
 
 
 @dataclass
@@ -211,7 +210,7 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
     def spice_frame(spice_id: str, *, frame_id: str) -> oops.Frame:
         fake.spice_frames.append(spice_id)
-        return oops.frame.Cmatrix(np.eye(3), oops.Frame.J2000, frame_id=frame_id)
+        return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id=frame_id)
 
     def furnsh(*args: Any, **kwargs: Any) -> None:
         raise AssertionError(f'a test tried to furnish a SPICE kernel: {args}')

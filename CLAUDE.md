@@ -23,11 +23,13 @@ two published `.pyi` stubs and `stubtest`. Ignore those until this repo has the 
 
 ## Current state
 
-- No `pyproject.toml`, tests, CI or `scripts/run-all-checks.sh` exist yet, so the
-  `run-all-checks` skill has nothing to run.
-- The import name is `host_cassini`. The directory is still `src/host-cassini/` and must be
-  renamed to `src/host_cassini/`, because a hyphenated name can't be imported and `iss.py`
-  uses relative imports.
+- `scripts/run-all-checks.sh` doesn't exist yet, so the `run-all-checks` skill has nothing
+  to run. CI (`.github/workflows/run-tests.yml`) runs ruff, flake8 `E12`/`E13`, mypy on
+  `tests/`, pip-audit, codespell, PyMarkdown and pytest.
+- The `oops.Host` API is unreleased. CI installs rms-oops from its `mrs_260925_host_reorg`
+  branch; drop that step once a release has it.
+- Tests never touch SPICE kernels or spicedb. `tests/conftest.py` replaces them with fakes
+  for every test, so new tests get this automatically.
 
 ## Architecture gotchas
 

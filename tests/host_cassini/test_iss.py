@@ -45,7 +45,9 @@ def label_dict(**changes: Any) -> dict[str, Any]:
 def snapshot(**changes: Any) -> oops.observation.Snapshot:
     """A Snapshot made from `label_dict(**changes)` with default options."""
 
-    return ISS._make_snapshot(label_dict(**changes), filepath=INDEX_PATH)
+    obs: oops.observation.Snapshot = ISS._make_snapshot(label_dict(**changes),
+                                                        filepath=INDEX_PATH)
+    return obs
 
 ##########################################################################################
 # Distortion polynomials
@@ -91,6 +93,15 @@ def test_cmatrix_rotation_spins_180_degrees_about_boresight() -> None:
 
 def test_iss_is_registered_with_oops() -> None:
     assert oops.Host._LOOKUP['Cassini ISS'] is ISS
+
+
+@pytest.mark.parametrize('name', ['from_file', 'from_index'])
+def test_module_level_constructors(name: str) -> None:
+    assert getattr(iss, name) is getattr(ISS, name)
+
+
+def test_module_exports() -> None:
+    assert iss.__all__ == ['ISS', 'from_file', 'from_index']
 
 
 @pytest.mark.parametrize(('label', 'expected'), [
@@ -231,7 +242,7 @@ def test_camera_frame_is_flipped_spice_frame(camera: str) -> None:
     # rotation alone.
     ISS._define_camera_frames()
     frame = oops.Frame.as_frame('CASSINI_ISS_' + camera).wrt(oops.Frame.J2000)
-    matrix = frame.transform_at_time(tdb_in_month(100.)).matrix.vals
+    matrix = np.asarray(frame.transform_at_time(tdb_in_month(100.)).matrix.vals)
     assert matrix.tolist() == iss._CMATRIX_ROTATION.vals.tolist()
 
 
@@ -247,7 +258,7 @@ def test_define_camera_frames_only_once(fake_spice: FakeSpice) -> None:
 
 
 def test_define_camera_frames_skips_existing_camera(fake_spice: FakeSpice) -> None:
-    oops.frame.Cmatrix(np.eye(3), oops.Frame.J2000, frame_id='CASSINI_ISS_NAC')
+    oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id='CASSINI_ISS_NAC')
     ISS._define_camera_frames()
     assert fake_spice.spice_frames == ['CASSINI_ISS_WAC']
 
@@ -415,7 +426,7 @@ def test_snapshot_overrides() -> None:
 
 @pytest.fixture
 def custom_frame(initialized_iss: FakeSpiceDB) -> oops.Frame:
-    return oops.frame.Cmatrix(np.eye(3), oops.Frame.J2000, frame_id='TEST_CMATRIX')
+    return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id='TEST_CMATRIX')
 
 
 def test_custom_frame_is_used(custom_frame: oops.Frame) -> None:
@@ -608,7 +619,8 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def index_snapshots(tmp_path: pathlib.Path) -> list[oops.observation.Snapshot]:
-    return ISS.from_index(write_index(tmp_path))
+    snapshots: list[oops.observation.Snapshot] = ISS.from_index(write_index(tmp_path))
+    return snapshots
 
 
 def test_from_index_makes_one_snapshot_per_row(
