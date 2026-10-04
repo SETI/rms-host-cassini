@@ -61,7 +61,12 @@ pythonpath = [
 testpaths = ["tests"]
 addopts = ["-n", "auto", "--cov=src/host_cassini", "--strict-markers", "--strict-config"]
 markers = []
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # rms-pdstable assigns to ndarray.dtype when reading fixed-length tables, which NumPy
+  # 2.5 deprecates; the fix belongs in rms-pdstable.
+  "ignore:Setting the dtype on a NumPy array has been deprecated:DeprecationWarning:pdstable",
+]
 
 [tool.setuptools]
 [tool.setuptools.packages.find]

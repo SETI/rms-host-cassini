@@ -236,7 +236,7 @@ class _Cassini:
 
         # Find the range of months needed
         m1 = int((t0 - _Cassini.TDB0) // _Cassini.DTDB)
-        m2 = int((t1 - _Cassini.TDB0) // _Cassini.DTDB) + 1
+        m2 = int((t1 - _Cassini.TDB0) // _Cassini.DTDB)
 
         m1 = max(m1, 0)         # ignore time limits outside mission duration
         m2 = min(m2, _Cassini.MONTHS - 1)
@@ -279,7 +279,7 @@ class _Cassini:
             t1 = cspyce.str2et(kernel.stop_time)  + _Cassini.SLOP
 
             m1 = int((t0 - _Cassini.TDB0) // _Cassini.DTDB)
-            m2 = int((t1 - _Cassini.TDB0) // _Cassini.DTDB) + 1
+            m2 = int((t1 - _Cassini.TDB0) // _Cassini.DTDB)
 
             m1 = max(m1, 0)     # ignore time limits outside mission duration
             m2 = min(m2, _Cassini.MONTHS - 1)
