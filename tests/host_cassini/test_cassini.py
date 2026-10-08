@@ -14,7 +14,7 @@ from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
 
-from host_cassini import _Cassini
+from host_cassini._oops import _Cassini
 
 ##########################################################################################
 # Mission constants

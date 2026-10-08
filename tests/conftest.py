@@ -18,8 +18,8 @@ import pytest
 import spicedb
 from oops.body import Body
 
-from host_cassini import _Cassini
-from host_cassini.iss import ISS
+from host_cassini._oops import _Cassini
+from host_cassini.iss import CassiniISS
 
 # Nominal Cassini ISS camera geometry: 1024x1024 pixels; NAC 0.35 deg and WAC 3.5 deg
 # square fields of view.
@@ -231,18 +231,18 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
 @pytest.fixture(autouse=True)
 def reset_host() -> Any:
-    """Start and end every test with the Cassini and ISS class state reset."""
+    """Start and end every test with the Cassini and CassiniISS class state reset."""
 
-    ISS._reset()
+    CassiniISS._reset()
     yield
-    ISS._reset()
+    CassiniISS._reset()
 
 
 @pytest.fixture
 def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
-    """ISS initialized with default options against the fake spicedb."""
+    """CassiniISS initialized with default options against the fake spicedb."""
 
-    ISS._initialize()
+    CassiniISS._initialize()
     return fake_spicedb
 
 ##########################################################################################

@@ -1,19 +1,19 @@
 ##########################################################################################
-# host_cassini/iss.py
+# host_cassini/iss/_oops.py
 ##########################################################################################
 
 import numpy as np
 import julian
-import pdstable
 
 from filecache import FCPath
 from pdsparser import Pds3Label
 from vicar     import VicarImage
 
 import oops
-from . import _Cassini
+from .._oops import _Cassini
+from ._host  import _CassiniISSHost
 
-__all__ = ['ISS', 'from_file', 'from_index']
+__all__ = ['CassiniISS']
 
 # There are two C-matrix conventions here, related by _CMATRIX_ROTATION (a 180-degree spin
 # about the boresight):
@@ -156,9 +156,13 @@ _TARGET_NAME_REPAIRS = {
 _TARGET_STARS = {'FOMALHAUT', 'SPICA'}
 
 
-class ISS(oops.Host):
+class CassiniISS(_CassiniISSHost):
+    """The Cassini ISS host: Snapshot constructors for NAC and WAC images.
 
-    NAME = 'Cassini ISS'
+    The name and detectors are inherited from the registered
+    :class:`~host_cassini.iss._host._CassiniISSHost`, whose constructors pass their calls
+    on to this class.
+    """
 
     _INSTRUMENT_KERNEL = None
     _FOVS = {}
@@ -190,7 +194,7 @@ class ISS(oops.Host):
                 * "compound" is similar to "loose", but it parses a "compound" label,
                   i.e., one that might contain more than one "END" statement. This option
                   is not supported for attached labels.
-                * "fast": uses s a different parser, which executes ~ 30x fast than the
+                * "fast": uses a different parser, which executes ~30x faster than the
                   above and handles all the most common aspects of the PDS3 standard.
                   However, it is not guaranteed to provide an accurate parsing under all
                   circumstances.
@@ -240,11 +244,12 @@ class ISS(oops.Host):
             and `image_url` inserted.
         """
 
-        ISS._initialize()  # define everything the first time through; use defaults
-                           # unless _initialize() was called explicitly.
+        CassiniISS._initialize()  # define everything the first time through; use defaults
+                                  # unless _initialize() was called explicitly.
 
-        fileinfo = ISS._read_fileinfo(fileinfo, formats='PV', astrometry=astrometry,
-                                      pds3_method=pds3_method)
+        fileinfo = CassiniISS._read_fileinfo(fileinfo, formats='PV',
+                                             astrometry=astrometry,
+                                             pds3_method=pds3_method)
 
         data = None
         if isinstance(fileinfo, Pds3Label):
@@ -259,25 +264,57 @@ class ISS(oops.Host):
 
         filepath = FCPath(fileinfo.filepath)
 
-        snapshot = ISS._make_snapshot(dict_, filepath=filepath, data=data,
-                                      fast_distortion=fast_distortion,
-                                      return_all_planets=return_all_planets,
-                                      target=target, lightsource=lightsource, path=path,
-                                      frame=frame, fov=fov, calibrations=calibrations,
-                                      timeshift=timeshift, navigation=navigation,
-                                      parallel=parallel, tracker=tracker)
+        snapshot = CassiniISS._make_snapshot(dict_, filepath=filepath, data=data,
+                                             fast_distortion=fast_distortion,
+                                             return_all_planets=return_all_planets,
+                                             target=target, lightsource=lightsource,
+                                             path=path, frame=frame, fov=fov,
+                                             calibrations=calibrations,
+                                             timeshift=timeshift, navigation=navigation,
+                                             parallel=parallel, tracker=tracker)
         return snapshot
 
     @staticmethod
-    def from_index(filepath, *, fast_distortion=True, return_all_planets=False,
-                   target=None, lightsource=None, path=None, frame=None,
-                   calibrations=None, timeshift=None, navigation=None, tracker=None,
-                   **kwargs):
+    def from_index(filepath, *, supplement=None, row_dicts=None, pds3_method='fast',
+                   filter=None,     # noqa: A002 (keyword name set by oops.Host)
+                   fast_distortion=True, return_all_planets=False,
+                   select=None, target=None, lightsource=None, path=None, frame=None,
+                   fov=None, calibrations=None, timeshift=None, navigation=None,
+                   tracker=None, parallel=None, **kwargs):
         """A list of Snapshot objects, one for each row of a Cassini ISS index file.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
+            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
+                of a supplemental index file, whose columns are merged into each row.
+            row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
+                row of the index. Include if `filepath` and `supplement` have already been
+                read.
+            pds3_method (str, optional): The method of parsing a PDS3 index label. One of:
+
+                * "strict" performs strict parsing, which requires that the label conform
+                  to the full PDS3 standard.
+                * "loose" is similar to the above, but tolerates some common syntax
+                  errors.
+                * "compound" is similar to "loose", but it parses a "compound" label,
+                  i.e., one that might contain more than one "END" statement. This option
+                  is not supported for attached labels.
+                * "fast": uses a different parser, which executes ~30x faster than the
+                  above and handles all the most common aspects of the PDS3 standard.
+                  However, it is not guaranteed to provide an accurate parsing under all
+                  circumstances.
+
+            filter (dict[str, Any], optional): A dictionary of index column names and
+                their values or a set or tuple of values. If provided, only rows of the
+                index in which each named column equals the value, falls in the set of
+                values, or falls in a range defined by a tuple of two values, will be
+                included in the returned list.
+            select (int | slice | str | tuple[int | slice | str, ...]): An index, slice,
+                or tuple of indices and slices to apply to the returned array of
+                Observation objects. For example, if the file contains two Observations
+                but `select=1`, only the second Observation will be returned.
+                Alternatively, specify one or more host-specific names of the data arrays.
             fast_distortion (bool | None, optional): True to use a pre-inverted
                 polynomial; False to use a dynamically solved polynomial; None to use a
                 :class:`~oops.fov.FlatFOV`.
@@ -291,6 +328,8 @@ class ISS(oops.Host):
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of the observing
                 instrument.
+            fov (FOV, optional): Not supported, because no single FOV applies to every
+                row; must be None.
             calibrations (oops.Calibration | list[oops.Calibration], optional): Override
                 for the calibration or list of calibrations.
             timeshift (tuple[float, str], optional): Assign a Fittable time shift to one
@@ -310,7 +349,9 @@ class ISS(oops.Host):
                 of "start", "midtime", and "end", indicating the time within the
                 Observation at which the target body's calculated position within the FOV
                 is accurate.
-            **kwargs: Additional keyword arguments, ignored here except as noted below.
+            parallel (Observation, optional): Not supported, because no single parallel
+                Observation applies to every row; must be None.
+            **kwargs: Additional keyword arguments; they are accepted and ignored.
 
         Returns:
             list[Snapshot]: One observation per row of the index, each with subfields
@@ -322,28 +363,30 @@ class ISS(oops.Host):
         """
 
         # Check for unsupported options
-        for key in ('fov', 'parallel'):
-            if kwargs.get(key) is not None:
+        for (key, value) in (('fov', fov), ('parallel', parallel)):
+            if value is not None:
                 raise ValueError(f'disallowed Cassini ISS.from_index() option {key}')
 
-        ISS._initialize()
-        ISS._define_camera_frames()
+        CassiniISS._initialize()
 
-        # Read the index file
-        table = pdstable.PdsTable(FCPath(filepath), columns=[])
-        row_dicts = table.dicts_by_row()
+        # Read and filter the index table
+        if row_dicts is None:
+            row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
+                                                   pds3_method=pds3_method)
+        row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
 
         # Create the list of Snapshot objects
         snapshots = []
         for row_dict in row_dicts:
             fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
-            obs = ISS._make_snapshot(row_dict, filepath=fpath, data=None,
-                                     fast_distortion=fast_distortion,
-                                     return_all_planets=return_all_planets,
-                                     target=target, lightsource=lightsource, path=path,
-                                     frame=frame, calibrations=calibrations,
-                                     timeshift=timeshift, navigation=navigation,
-                                     tracker=tracker)
+            obs = CassiniISS._make_snapshot(row_dict, filepath=fpath, data=None,
+                                            fast_distortion=fast_distortion,
+                                            return_all_planets=return_all_planets,
+                                            target=target, lightsource=lightsource,
+                                            path=path, frame=frame,
+                                            calibrations=calibrations,
+                                            timeshift=timeshift, navigation=navigation,
+                                            tracker=tracker)
             snapshots.append(obs)
 
         return snapshots
@@ -360,41 +403,14 @@ class ISS(oops.Host):
         mode   = dict_['INSTRUMENT_MODE_ID']        # "FULL", "SUM2", or "SUM4"
         camera = 'WAC' if 'WIDE' in dict_['INSTRUMENT_NAME'] else 'NAC'
 
-        # Merge filter names, ignoring "CL1" and "CL2"
-        if 'FILTER_NAME' in dict_:
-            filter1, filter2 = dict_['FILTER_NAME']
-        else:
-            filter1 = dict_['FILTER1_NAME']
-            filter2 = dict_['FILTER2_NAME']
-
-        if filter1[:2] == 'CL':
-            if filter2[:2] == 'CL':
-                filter_ = 'CLEAR'
-            else:
-                filter_ = filter2
-        else:
-            if filter2[:2] == 'CL':
-                filter_ = filter1
-            else:
-                filter_ = '+'.join(sorted((filter1, filter2)))
-
-        gain_mode = None
-        if dict_['GAIN_MODE_ID'][:3] == '215':
-            gain_mode = 0
-        elif dict_['GAIN_MODE_ID'][:2] == '95':
-            gain_mode = 1
-        elif dict_['GAIN_MODE_ID'][:2] == '29':
-            gain_mode = 2
-        elif dict_['GAIN_MODE_ID'][:2] == '12':
-            gain_mode = 3
-
+        # Determine target and light source
         label_target = _TARGET_NAME_REPAIRS.get(dict_['TARGET_NAME'],
                                                 dict_['TARGET_NAME'])
         if label_target in _TARGET_STARS:
             label_lightsource = oops.lightsource.star_lookup(label_target)
             label_target = 'NONE'
         else:
-            label_target = ISS._fix_cassini_iss_target(label_target, dict_, tstart)
+            label_target = CassiniISS._fix_cassini_iss_target(label_target, dict_, tstart)
             label_lightsource = 'SUN'
 
         # Make sure the SPICE kernels are loaded; construct the frame
@@ -402,12 +418,12 @@ class ISS(oops.Host):
         using_cks = frame is None
         if using_cks:
             _Cassini.load_cks(tstart, tstart + texp)
-            ISS._define_camera_frames()
+            CassiniISS._define_camera_frames()
 
         # Define the Snapshot parameters
         params = {
             'cadence'     : oops.cadence.SnapCadence(tstart, texp),
-            'fov'         : ISS._FOVS[camera, mode, fast_distortion],
+            'fov'         : CassiniISS._FOVS[camera, mode, fast_distortion],
             'path'        : 'CASSINI',
             'frame'       : 'CASSINI_ISS_' + camera,
             'target'      : label_target,
@@ -430,16 +446,8 @@ class ISS(oops.Host):
         if data is not None:
             obs.insert_subfield('data', data)
 
-        # Extra attributes: use standardized names wherever practical
-        obs.insert_subfield('dict', dict_)
-        obs.insert_subfield('instrument', 'ISS')
-        obs.insert_subfield('detector', camera)
-        obs.insert_subfield('sampling', mode)
-        obs.insert_subfield('filter', filter_)
-        obs.insert_subfield('filter1', filter1)
-        obs.insert_subfield('filter2', filter2)
-        obs.insert_subfield('gain_mode', gain_mode)
-        obs.insert_subfield('label_target', dict_['TARGET_NAME'])
+        # Extra attributes
+        obs.insert_subfields(CassiniISS._get_subfields(dict_))
 
         # With a custom frame, pointing never came from a CK, so any CK that happens to be
         # furnished (e.g. the gapfill CKs loaded unconditionally by _Cassini.initialize())
@@ -455,17 +463,62 @@ class ISS(oops.Host):
         return obs
 
     @staticmethod
-    def _detect_in_pds3(label):
-        """True if the given parsed PDS3 label describes this host's data."""
+    def _get_subfields(dict_):
+        """Define attributes of the Observation.
 
-        return (label.get('INSTRUMENT_HOST_NAME', '').startswith('CASSINI')
-                and label.get('INSTRUMENT_ID', '').startswith('ISS'))
+        Parameters:
+            dict_ (dict): The parameter dictionary.
 
-    @staticmethod
-    def _detect_in_vicar(label):
-        """True if the given VicarLabel describes this host's data."""
+        Returns:
+            params (dict): The selected attributes and their values.
+        """
 
-        return ISS._detect_in_pds3(label)   # PDS3 and VICAR use the same names
+        params = {'dict': dict_}
+
+        # Merge filter names, ignoring "CL1" and "CL2"
+        if 'FILTER_NAME' in dict_:
+            filter1, filter2 = dict_['FILTER_NAME']
+        else:
+            filter1 = dict_['FILTER1_NAME']
+            filter2 = dict_['FILTER2_NAME']
+
+        if filter1[:2] == 'CL':
+            if filter2[:2] == 'CL':
+                filter_ = 'CLEAR'
+            else:
+                filter_ = filter2
+        else:
+            if filter2[:2] == 'CL':
+                filter_ = filter1
+            else:
+                filter_ = '+'.join(sorted((filter1, filter2)))
+
+        params['filter'] = filter_
+        params['filter1'] = filter1
+        params['filter2'] = filter2
+
+        # gain_mode
+        gain_mode = None
+        if dict_['GAIN_MODE_ID'][:3] == '215':
+            gain_mode = 0
+        elif dict_['GAIN_MODE_ID'][:2] == '95':
+            gain_mode = 1
+        elif dict_['GAIN_MODE_ID'][:2] == '29':
+            gain_mode = 2
+        elif dict_['GAIN_MODE_ID'][:2] == '12':
+            gain_mode = 3
+
+        params['gain_mode'] = gain_mode
+
+        # Other parameters
+        params['host'] = 'Cassini'
+        params['instrument'] = 'ISS'
+        params['detector'] = 'WAC' if 'WIDE' in dict_['INSTRUMENT_NAME'] else 'NAC'
+        params['texp'] = dict_['EXPOSURE_DURATION'] / 1000.
+        params['sampling'] = dict_['INSTRUMENT_MODE_ID']  # "FULL", "SUM2", or "SUM4"
+        params['label_target'] = dict_['TARGET_NAME']
+
+        return params
 
     @staticmethod
     def _fix_cassini_iss_target(target, dict_, tstart):
@@ -497,6 +550,10 @@ class ISS(oops.Host):
 
         return target
 
+    ######################################################################################
+    # Initialization
+    ######################################################################################
+
     @staticmethod
     def _initialize(*, ck='reconstructed', planets=None, asof=None, spk='reconstructed',
                     gapfill=True, mst_pck=True, irregulars=True):
@@ -524,7 +581,7 @@ class ISS(oops.Host):
         """
 
         # Quick exit after first call
-        if ISS._initialized:
+        if CassiniISS._initialized:
             return
 
         _Cassini.initialize(ck=ck, planets=planets, asof=asof, spk=spk, gapfill=gapfill,
@@ -532,12 +589,12 @@ class ISS(oops.Host):
         _Cassini.load_instruments(asof=asof)
 
         # Load the instrument kernel
-        ISS._INSTRUMENT_KERNEL = _Cassini.spice_instrument_kernel('ISS')[0]
+        CassiniISS._INSTRUMENT_KERNEL = _Cassini.spice_instrument_kernel('ISS')[0]
 
         # Construct a Polynomial FOV for each camera
         fovs = {}
         for detector in ['NAC', 'WAC']:
-            info = ISS._INSTRUMENT_KERNEL['INS']['CASSINI_ISS_' + detector]
+            info = CassiniISS._INSTRUMENT_KERNEL['INS']['CASSINI_ISS_' + detector]
 
             # Full field of view
             lines = info['PIXEL_LINES']
@@ -575,8 +632,8 @@ class ISS(oops.Host):
             fovs[detector, 'SUM2'] = oops.fov.SubsampledFOV(full_fov_none, 2)
             fovs[detector, 'SUM4'] = oops.fov.SubsampledFOV(full_fov_none, 4)
 
-        ISS._FOVS = fovs
-        ISS._initialized = True
+        CassiniISS._FOVS = fovs
+        CassiniISS._initialized = True
 
     @staticmethod
     def _define_camera_frames():
@@ -608,14 +665,9 @@ class ISS(oops.Host):
         Can be useful for debugging.
         """
 
-        ISS._INSTRUMENT_KERNEL = None
-        ISS._FOVS = {}
-        ISS._initialized = False
+        CassiniISS._INSTRUMENT_KERNEL = None
+        CassiniISS._FOVS = {}
+        CassiniISS._initialized = False
         _Cassini.reset()
-
-
-ISS._register()
-from_file = ISS.from_file
-from_index = ISS.from_index
 
 ##########################################################################################

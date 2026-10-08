@@ -3,7 +3,10 @@
 ##########################################################################################
 """Tests for the Cassini ISS host, host_cassini.iss."""
 
+import os
 import pathlib
+import subprocess
+import sys
 from typing import Any
 
 import julian
@@ -14,8 +17,11 @@ import vicar
 from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
                       FakeSpiceDB, tdb_in_month)
 
-from host_cassini import _Cassini, iss
-from host_cassini.iss import ISS
+import host_cassini
+import host_cassini.iss._oops as iss
+from host_cassini._oops import _Cassini
+from host_cassini.iss import CassiniISS
+from host_cassini.iss._host import _CassiniISSHost
 
 START_TIME = '2005-01-01T00:00:00.000'
 NAC_NAME = 'IMAGING SCIENCE SUBSYSTEM NARROW ANGLE'
@@ -45,8 +51,8 @@ def label_dict(**changes: Any) -> dict[str, Any]:
 def snapshot(**changes: Any) -> oops.observation.Snapshot:
     """A Snapshot made from `label_dict(**changes)` with default options."""
 
-    obs: oops.observation.Snapshot = ISS._make_snapshot(label_dict(**changes),
-                                                        filepath=INDEX_PATH)
+    obs: oops.observation.Snapshot = CassiniISS._make_snapshot(label_dict(**changes),
+                                                               filepath=INDEX_PATH)
     return obs
 
 ##########################################################################################
@@ -92,16 +98,51 @@ def test_cmatrix_rotation_spins_180_degrees_about_boresight() -> None:
 
 
 def test_iss_is_registered_with_oops() -> None:
-    assert oops.Host._LOOKUP['Cassini ISS'] is ISS
+    assert oops.Host._LOOKUP['Cassini ISS'] is _CassiniISSHost
 
 
-@pytest.mark.parametrize('name', ['from_file', 'from_index'])
-def test_module_level_constructors(name: str) -> None:
-    assert getattr(iss, name) is getattr(ISS, name)
+def test_cassini_iss_inherits_registered_host() -> None:
+    assert issubclass(CassiniISS, _CassiniISSHost)
 
 
-def test_module_exports() -> None:
-    assert iss.__all__ == ['ISS', 'from_file', 'from_index']
+_LAZY_IMPORT_SCRIPT = '''
+import sys
+import oops
+import host_cassini
+print('host_cassini.iss._oops' in sys.modules)
+print(oops.Host._LOOKUP['Cassini ISS'].__name__)
+_ = host_cassini.CassiniISS
+print('host_cassini.iss._oops' in sys.modules)
+'''
+
+
+def test_import_registers_host_without_loading_implementation() -> None:
+    src = pathlib.Path(__file__).parents[2] / 'src'
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join([str(src), env.get('PYTHONPATH', '')])
+    result = subprocess.run([sys.executable, '-c', _LAZY_IMPORT_SCRIPT], env=env,
+                            capture_output=True, text=True, check=True)
+    assert result.stdout.split() == ['False', '_CassiniISSHost', 'True']
+
+
+@pytest.mark.parametrize('module', [host_cassini, host_cassini.iss],
+                         ids=['host_cassini', 'host_cassini.iss'])
+def test_unknown_attribute(module: Any) -> None:
+    with pytest.raises(AttributeError, match=f"module '{module.__name__}' has no "
+                                             "attribute 'Nope'"):
+        _ = module.Nope
+
+
+@pytest.mark.parametrize('module', [host_cassini, host_cassini.iss, iss],
+                         ids=['host_cassini', 'host_cassini.iss', 'iss._oops'])
+def test_module_exports(module: Any) -> None:
+    assert module.__all__ == ['CassiniISS']
+
+
+@pytest.mark.parametrize('module', [host_cassini, host_cassini.iss],
+                         ids=['host_cassini', 'host_cassini.iss'])
+def test_package_exposes_host(module: Any) -> None:
+    assert module.CassiniISS is iss.CassiniISS
 
 
 @pytest.mark.parametrize(('label', 'expected'), [
@@ -113,8 +154,20 @@ def test_module_exports() -> None:
     ({}, False),
 ], ids=['nac', 'wac', 'other-instrument', 'other-host', 'no-host', 'empty'])
 def test_detection(label: dict[str, str], expected: bool) -> None:
-    assert ISS._detect_in_pds3(label) is expected
-    assert ISS._detect_in_vicar(label) is expected
+    assert _CassiniISSHost._detect_in_pds3(label) is expected
+    assert _CassiniISSHost._detect_in_vicar(label) is expected
+
+
+@pytest.mark.parametrize(('row', 'expected'), [
+    ({'INSTRUMENT_HOST_NAME': 'CASSINI ORBITER', 'INSTRUMENT_NAME': NAC_NAME}, True),
+    ({'INSTRUMENT_HOST_NAME': 'CASSINI ORBITER', 'INSTRUMENT_NAME': WAC_NAME}, True),
+    ({'INSTRUMENT_HOST_NAME': 'CASSINI ORBITER',
+      'INSTRUMENT_NAME': 'VISUAL AND INFRARED MAPPING SPECTROMETER'}, False),
+    ({'INSTRUMENT_HOST_NAME': 'GALILEO ORBITER', 'INSTRUMENT_NAME': NAC_NAME}, False),
+    ({}, False),
+], ids=['nac', 'wac', 'other-instrument', 'other-host', 'empty'])
+def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
+    assert _CassiniISSHost._detect_in_row(row) is expected
 
 ##########################################################################################
 # _fix_cassini_iss_target()
@@ -133,11 +186,12 @@ def test_detection(label: dict[str, str], expected: bool) -> None:
         'empty'])
 def test_fix_target(observation_id: str, tstart: float, expected: str) -> None:
     dict_ = {'OBSERVATION_ID': observation_id}
-    assert ISS._fix_cassini_iss_target('ENCELADUS', dict_, tstart) == expected
+    assert CassiniISS._fix_cassini_iss_target('ENCELADUS', dict_, tstart) == expected
 
 
 def test_fix_target_without_observation_id() -> None:
-    assert ISS._fix_cassini_iss_target('ENCELADUS', {}, _Cassini.TOUR) == 'ENCELADUS'
+    target = CassiniISS._fix_cassini_iss_target('ENCELADUS', {}, _Cassini.TOUR)
+    assert target == 'ENCELADUS'
 
 ##########################################################################################
 # _initialize()
@@ -150,7 +204,7 @@ def test_initialize_builds_every_fov(initialized_iss: FakeSpiceDB) -> None:
         for mode in ('FULL', 'SUM2', 'SUM4') for fast in (True, False, None)}
     expected |= {(camera, mode) for camera in ('NAC', 'WAC')
                  for mode in ('FULL', 'SUM2', 'SUM4')}
-    assert set(ISS._FOVS) == expected
+    assert set(CassiniISS._FOVS) == expected
 
 
 @pytest.mark.parametrize('fast', [True, False, None])
@@ -158,7 +212,7 @@ def test_initialize_builds_every_fov(initialized_iss: FakeSpiceDB) -> None:
 @pytest.mark.parametrize('camera', ['NAC', 'WAC'])
 def test_fov_shapes(initialized_iss: FakeSpiceDB, camera: str, mode: str, size: int,
                     fast: bool | None) -> None:
-    assert tuple(ISS._FOVS[camera, mode, fast].uv_shape.vals) == (size, size)
+    assert tuple(CassiniISS._FOVS[camera, mode, fast].uv_shape.vals) == (size, size)
 
 
 @pytest.mark.parametrize(('camera', 'half_fov'), [('NAC', NAC_HALF_FOV_DEG),
@@ -166,14 +220,16 @@ def test_fov_shapes(initialized_iss: FakeSpiceDB, camera: str, mode: str, size: 
 def test_flat_fov_scale(initialized_iss: FakeSpiceDB, camera: str,
                         half_fov: float) -> None:
     scale = np.arctan(np.tan(np.radians(half_fov)) / (PIXELS / 2.))
-    assert ISS._FOVS[camera, 'FULL', None].uv_scale.vals == pytest.approx([scale, scale])
+    uv_scale = CassiniISS._FOVS[camera, 'FULL', None].uv_scale.vals
+    assert uv_scale == pytest.approx([scale, scale])
 
 
 @pytest.mark.parametrize('mode', ['FULL', 'SUM2', 'SUM4'])
 def test_two_part_fov_keys_are_flat(initialized_iss: FakeSpiceDB, mode: str) -> None:
-    flat = ISS._FOVS['NAC', mode, None]
-    assert type(ISS._FOVS['NAC', mode]) is type(flat)
-    assert ISS._FOVS['NAC', mode].uv_scale.vals == pytest.approx(flat.uv_scale.vals)
+    flat = CassiniISS._FOVS['NAC', mode, None]
+    assert type(CassiniISS._FOVS['NAC', mode]) is type(flat)
+    uv_scale = CassiniISS._FOVS['NAC', mode].uv_scale.vals
+    assert uv_scale == pytest.approx(flat.uv_scale.vals)
 
 
 @pytest.mark.parametrize(('camera', 'tolerance'), [('NAC', 0.0014), ('WAC', 0.054)])
@@ -182,19 +238,19 @@ def test_fast_and_solved_distortion_agree(initialized_iss: FakeSpiceDB, camera: 
     # Tolerances in pixels are the maximum U,V errors stated beside the inverse
     # coefficients, converted to radians at the camera's pixel scale.
     uv = oops.Pair([[0., 0.], [512., 512.], [1024., 1024.], [0., 1024.], [300., 700.]])
-    fast = ISS._FOVS[camera, 'FULL', True].xy_from_uv(uv).vals
-    solved = ISS._FOVS[camera, 'FULL', False].xy_from_uv(uv).vals
+    fast = CassiniISS._FOVS[camera, 'FULL', True].xy_from_uv(uv).vals
+    solved = CassiniISS._FOVS[camera, 'FULL', False].xy_from_uv(uv).vals
     pixel_scale = iss._DISTORTION_COEFF_UV_TO_XY[camera][1, 0, 0]
     assert np.abs(fast - solved).max() <= tolerance * pixel_scale
 
 
 def test_fov_center_is_on_axis(initialized_iss: FakeSpiceDB) -> None:
-    xy = ISS._FOVS['NAC', 'FULL', True].xy_from_uv(oops.Pair((512., 512.))).vals
+    xy = CassiniISS._FOVS['NAC', 'FULL', True].xy_from_uv(oops.Pair((512., 512.))).vals
     assert xy == pytest.approx([0., 0.], abs=1.e-9)
 
 
 def test_initialize_reads_instrument_kernel(initialized_iss: FakeSpiceDB) -> None:
-    assert ISS._INSTRUMENT_KERNEL is initialized_iss.kernel_dict
+    assert CassiniISS._INSTRUMENT_KERNEL is initialized_iss.kernel_dict
 
 
 def test_initialize_loads_default_instruments(initialized_iss: FakeSpiceDB) -> None:
@@ -203,8 +259,8 @@ def test_initialize_loads_default_instruments(initialized_iss: FakeSpiceDB) -> N
 
 def test_initialize_passes_options_to_mission(fake_spicedb: FakeSpiceDB,
                                               fake_spice: FakeSpice) -> None:
-    ISS._initialize(ck='predicted', spk='predicted', planets=[6], asof='2010-02-03',
-                    mst_pck=False, irregulars=False)
+    CassiniISS._initialize(ck='predicted', spk='predicted', planets=[6],
+                           asof='2010-02-03', mst_pck=False, irregulars=False)
     assert fake_spicedb.named('select_spk')[0][1]['name'] == 'CAS-SPK-PREDICTED'
     assert fake_spicedb.named('select_ck')[0][1]['name'] == 'CAS-CK-PREDICTED'
     assert fake_spice.solar_system[0][1] == {'asof': '2010-02-03', 'planets': [6],
@@ -212,18 +268,18 @@ def test_initialize_passes_options_to_mission(fake_spicedb: FakeSpiceDB,
 
 
 def test_initialize_ignores_later_calls(initialized_iss: FakeSpiceDB) -> None:
-    fovs = ISS._FOVS
+    fovs = CassiniISS._FOVS
     count = len(initialized_iss.calls)
-    ISS._initialize(spk='predicted')
+    CassiniISS._initialize(spk='predicted')
     assert len(initialized_iss.calls) == count
-    assert ISS._FOVS is fovs
+    assert CassiniISS._FOVS is fovs
 
 
 def test_reset_clears_state(initialized_iss: FakeSpiceDB) -> None:
-    ISS._reset()
-    assert not ISS._initialized
-    assert ISS._FOVS == {}
-    assert ISS._INSTRUMENT_KERNEL is None
+    CassiniISS._reset()
+    assert not CassiniISS._initialized
+    assert CassiniISS._FOVS == {}
+    assert CassiniISS._INSTRUMENT_KERNEL is None
     assert not _Cassini.initialized
 
 ##########################################################################################
@@ -232,7 +288,7 @@ def test_reset_clears_state(initialized_iss: FakeSpiceDB) -> None:
 
 
 def test_define_camera_frames_builds_both_cameras(fake_spice: FakeSpice) -> None:
-    ISS._define_camera_frames()
+    CassiniISS._define_camera_frames()
     assert fake_spice.spice_frames == ['CASSINI_ISS_NAC', 'CASSINI_ISS_WAC']
 
 
@@ -240,26 +296,26 @@ def test_define_camera_frames_builds_both_cameras(fake_spice: FakeSpice) -> None
 def test_camera_frame_is_flipped_spice_frame(camera: str) -> None:
     # The fake SpiceFrame is J2000 itself, so the camera frame relative to J2000 is the
     # rotation alone.
-    ISS._define_camera_frames()
+    CassiniISS._define_camera_frames()
     frame = oops.Frame.as_frame('CASSINI_ISS_' + camera).wrt(oops.Frame.J2000)
     matrix = np.asarray(frame.transform_at_time(tdb_in_month(100.)).matrix.vals)
     assert matrix.tolist() == iss._CMATRIX_ROTATION.vals.tolist()
 
 
 def test_camera_flipped_frame_is_registered() -> None:
-    ISS._define_camera_frames()
+    CassiniISS._define_camera_frames()
     assert oops.Frame.frame_id_exists('CASSINI_ISS_NAC_FLIPPED')
 
 
 def test_define_camera_frames_only_once(fake_spice: FakeSpice) -> None:
-    ISS._define_camera_frames()
-    ISS._define_camera_frames()
+    CassiniISS._define_camera_frames()
+    CassiniISS._define_camera_frames()
     assert fake_spice.spice_frames == ['CASSINI_ISS_NAC', 'CASSINI_ISS_WAC']
 
 
 def test_define_camera_frames_skips_existing_camera(fake_spice: FakeSpice) -> None:
     oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id='CASSINI_ISS_NAC')
-    ISS._define_camera_frames()
+    CassiniISS._define_camera_frames()
     assert fake_spice.spice_frames == ['CASSINI_ISS_WAC']
 
 ##########################################################################################
@@ -295,9 +351,9 @@ def test_snapshot_spice_frame_id(name: str, frame_id: int) -> None:
 @pytest.mark.parametrize('fast', [True, False, None])
 @pytest.mark.parametrize('mode', ['FULL', 'SUM2', 'SUM4'])
 def test_snapshot_fov(mode: str, fast: bool | None) -> None:
-    obs = ISS._make_snapshot(label_dict(INSTRUMENT_MODE_ID=mode), filepath=INDEX_PATH,
-                             fast_distortion=fast)
-    assert obs.fov is ISS._FOVS['NAC', mode, fast]
+    obs = CassiniISS._make_snapshot(label_dict(INSTRUMENT_MODE_ID=mode),
+                                    filepath=INDEX_PATH, fast_distortion=fast)
+    assert obs.fov is CassiniISS._FOVS['NAC', mode, fast]
     assert obs.sampling == mode
 
 
@@ -325,7 +381,7 @@ def test_snapshot_filter(filters: list[str], expected: str) -> None:
 def test_snapshot_filter_from_separate_keywords() -> None:
     dict_ = label_dict(FILTER1_NAME='RED', FILTER2_NAME='CL2')
     del dict_['FILTER_NAME']
-    assert ISS._make_snapshot(dict_, filepath=INDEX_PATH).filter == 'RED'
+    assert CassiniISS._make_snapshot(dict_, filepath=INDEX_PATH).filter == 'RED'
 
 
 @uses_iss
@@ -372,8 +428,10 @@ def test_snapshot_star_target(star: str) -> None:
 @uses_iss
 def test_snapshot_subfields() -> None:
     dict_ = label_dict()
-    obs = ISS._make_snapshot(dict_, filepath=INDEX_PATH)
+    obs = CassiniISS._make_snapshot(dict_, filepath=INDEX_PATH)
+    assert obs.host == 'Cassini'
     assert obs.instrument == 'ISS'
+    assert obs.texp == 1.
     assert obs.dict is dict_
     assert obs.filepath == INDEX_PATH
     assert obs.basename == 'N1484506648_1.IMG'
@@ -384,7 +442,7 @@ def test_snapshot_subfields() -> None:
 @uses_iss
 def test_snapshot_data() -> None:
     data = np.zeros((PIXELS, PIXELS), dtype='uint8')
-    obs = ISS._make_snapshot(label_dict(), filepath=INDEX_PATH, data=data)
+    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, data=data)
     assert obs.data is data
 
 
@@ -418,8 +476,8 @@ def test_snapshot_loads_kernels_for_its_month() -> None:
 def test_snapshot_overrides() -> None:
     target = 'TITAN'
     calibrations = ['calibration']
-    obs = ISS._make_snapshot(label_dict(), filepath=INDEX_PATH, target=target,
-                             calibrations=calibrations)
+    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, target=target,
+                                    calibrations=calibrations)
     assert obs.target == target
     assert obs.calibrations is calibrations
 
@@ -430,24 +488,24 @@ def custom_frame(initialized_iss: FakeSpiceDB) -> oops.Frame:
 
 
 def test_custom_frame_is_used(custom_frame: oops.Frame) -> None:
-    obs = ISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
     assert obs.frame == custom_frame.wayframe
 
 
 def test_custom_frame_loads_no_cks(custom_frame: oops.Frame) -> None:
-    ISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
     assert not _Cassini.CK_LOADED.any()
     assert _Cassini.SPK_LOADED.any()
 
 
 def test_custom_frame_defines_no_camera_frames(custom_frame: oops.Frame) -> None:
-    ISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
     assert not oops.Frame.frame_id_exists('CASSINI_ISS_NAC')
 
 
 def test_custom_frame_reports_no_cks(custom_frame: oops.Frame,
                                      initialized_iss: FakeSpiceDB) -> None:
-    ISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
     assert 'CK' not in initialized_iss.named('used_basenames')[0][1]['types']
 
 ##########################################################################################
@@ -498,23 +556,23 @@ def write_vicar_image(directory: pathlib.Path, *, lines: int = 256,
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_pds3(tmp_path: pathlib.Path) -> None:
-    obs = ISS.from_file(write_pds3_image(tmp_path))
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path))
     assert obs.data.shape == (256, 256)
     assert obs.data[1, 2] == 258 % 256
     assert obs.basename == 'N0000000001_1.LBL'
-    assert obs.fov is ISS._FOVS['NAC', 'SUM4', True]
+    assert obs.fov is CassiniISS._FOVS['NAC', 'SUM4', True]
 
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_pds3_astrometry(tmp_path: pathlib.Path) -> None:
-    obs = ISS.from_file(write_pds3_image(tmp_path), astrometry=True)
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True)
     assert not hasattr(obs, 'data')
     assert obs.filter == 'GRN'
 
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_vicar(tmp_path: pathlib.Path) -> None:
-    obs = ISS.from_file(write_vicar_image(tmp_path, INSTRUMENT_NAME=WAC_NAME))
+    obs = CassiniISS.from_file(write_vicar_image(tmp_path, INSTRUMENT_NAME=WAC_NAME))
     assert obs.data.shape == (256, 256)
     assert obs.data[1, 2] == 258 % 256
     assert obs.detector == 'WAC'
@@ -523,7 +581,7 @@ def test_from_file_vicar(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_vicar_astrometry(tmp_path: pathlib.Path) -> None:
-    obs = ISS.from_file(write_vicar_image(tmp_path), astrometry=True)
+    obs = CassiniISS.from_file(write_vicar_image(tmp_path), astrometry=True)
     assert not hasattr(obs, 'data')
     assert obs.filter == 'GRN'
 
@@ -531,13 +589,13 @@ def test_from_file_vicar_astrometry(tmp_path: pathlib.Path) -> None:
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_sets_local_paths(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path)
-    obs = ISS.from_file(path, astrometry=True)
+    obs = CassiniISS.from_file(path, astrometry=True)
     assert obs.abspath == path.resolve()
 
 
 def test_from_file_initializes_iss(tmp_path: pathlib.Path) -> None:
-    ISS.from_file(write_pds3_image(tmp_path), astrometry=True)
-    assert ISS._initialized
+    CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True)
+    assert CassiniISS._initialized
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -550,7 +608,7 @@ def test_host_from_file_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
 def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, INSTRUMENT_HOST_NAME='GALILEO ORBITER')
     with pytest.raises(oops.host.HostError, match='unrecognized host'):
-        ISS.from_file(path, astrometry=True)
+        CassiniISS.from_file(path, astrometry=True)
 
 ##########################################################################################
 # from_index()
@@ -619,7 +677,8 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def index_snapshots(tmp_path: pathlib.Path) -> list[oops.observation.Snapshot]:
-    snapshots: list[oops.observation.Snapshot] = ISS.from_index(write_index(tmp_path))
+    snapshots: list[oops.observation.Snapshot] = CassiniISS.from_index(
+        write_index(tmp_path))
     return snapshots
 
 
@@ -658,6 +717,23 @@ def test_from_index_defines_camera_frames(
 def test_from_index_rejects_per_row_options(tmp_path: pathlib.Path, option: str) -> None:
     with pytest.raises(ValueError, match=f'disallowed Cassini ISS.from_index.. option '
                                          f'{option}'):
-        ISS.from_index(write_index(tmp_path), **{option: 'anything'})
+        CassiniISS.from_index(write_index(tmp_path), **{option: 'anything'})
+
+
+def test_from_index_filter(tmp_path: pathlib.Path) -> None:
+    snapshots = CassiniISS.from_index(write_index(tmp_path),
+                                      filter={'INSTRUMENT_MODE_ID': {'SUM2'}})
+    assert [obs.detector for obs in snapshots] == ['WAC']
+
+
+def test_from_index_uses_given_rows(tmp_path: pathlib.Path) -> None:
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    snapshots = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1])
+    assert [obs.detector for obs in snapshots] == ['NAC']
+
+
+def test_registered_host_from_index_delegates(tmp_path: pathlib.Path) -> None:
+    snapshots = _CassiniISSHost.from_index(write_index(tmp_path))
+    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
 
 ##########################################################################################
