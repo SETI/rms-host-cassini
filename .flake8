@@ -25,4 +25,4 @@ per-file-ignores =
     __init__.py: F401, E402
 
     # E126 Continuation line over-indented for hanging indent
-    iss.py: E126
+    src/host_cassini/iss/_oops.py: E126
