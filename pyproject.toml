@@ -1,0 +1,168 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools_scm[toml]"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rms-host-cassini"
+dynamic = ["version"]
+description = "Cassini mission host (ISS) for the OOPS observation geometry toolkit"
+requires-python = ">=3.11"
+dependencies = [
+  "cspyce",
+  "numpy>=2.0",
+  "rms-filecache>=2.0.3",
+  "rms-julian",
+  # Also provides spicedb.
+  "rms-oops",
+  "rms-pdsparser",
+  "rms-pdstable",
+  # 1.3.0 adds VicarLabel.is_vicar_file, which oops uses to identify VICAR files.
+  "rms-vicar>=1.3.0",
+]
+license = "Apache-2.0"
+keywords = ["oops", "cassini", "iss", "spice"]
+classifiers = [
+  "Natural Language :: English",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Astronomy",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows"
+]
+
+[project.urls]
+Homepage = "https://github.com/SETI/rms-host-cassini"
+Repository = "https://github.com/SETI/rms-host-cassini"
+Source = "https://github.com/SETI/rms-host-cassini"
+Issues = "https://github.com/SETI/rms-host-cassini/issues"
+
+[project.optional-dependencies]
+dev = [
+  "codespell>=2.4",
+  "coverage>=7.0",
+  "flake8",
+  "mypy>=1.0",
+  "pip-audit>=2.7",
+  "pymarkdownlnt>=0.9.35",
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "pytest-xdist>=3.8.0",
+  "ruff>=0.8",
+  "pyroma>=4.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "src"
+]
+testpaths = ["tests"]
+addopts = ["-n", "auto", "--cov=src/host_cassini", "--strict-markers", "--strict-config"]
+markers = []
+filterwarnings = [
+  "error",
+  # rms-pdstable assigns to ndarray.dtype when reading fixed-length tables, which NumPy
+  # 2.5 deprecates; the fix belongs in rms-pdstable.
+  "ignore:Setting the dtype on a NumPy array has been deprecated:DeprecationWarning:pdstable",
+]
+
+[tool.setuptools]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"
+write_to = "src/host_cassini/_version.py"
+
+# Tool configuration
+
+[tool.coverage.run]
+branch = true
+parallel = true
+# Must match --cov in the pytest addopts above, or fail_under measures something else
+source = ["src/host_cassini"]
+omit = ["tests/*", "_version.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "raise NotImplementedError",
+]
+
+[tool.mypy]
+strict = true
+
+# src is deliberately unannotated (see .claude/rules/python.md), so mypy checks only the
+# tests and treats everything imported from host_cassini as Any.
+[[tool.mypy.overrides]]
+module = ["host_cassini", "host_cassini.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["cspyce", "cspyce.*", "julian", "julian.*"]
+ignore_missing_imports = true
+
+# attr-defined is off in the tests for two reasons that no change to the tests can fix:
+#   - Observation subfields such as detector and filter are attached at runtime by
+#     insert_subfield(), so no declaration of them can exist.
+#   - The oops and spicedb stubs do not yet declare oops.Host, oops.host or
+#     spicedb.KERNEL_TYPE_SORT_ORDER.
+[[tool.mypy.overrides]]
+module = ["conftest", "test_cassini", "test_iss", "test_uvis", "test_vims"]
+disable_error_code = ["attr-defined"]
+
+[tool.ruff]
+target-version = "py311"
+# Must match max-line-length in .flake8.
+line-length = 90
+# The spyceman support is not yet linted.
+extend-exclude = ["src/host_cassini/spyceman"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+# E, W = pycodestyle errors/warnings; F = Pyflakes; I = isort; UP = pyupgrade;
+# B = bugbear; SIM = simplify; C4 = comprehensions; A = builtins (no shadowing);
+# N = pep8-naming; PT = pytest-style; RUF = Ruff-specific (e.g. unused noqa).
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "A", "N", "PT", "RUF"]
+# PT011 - pytest.raises is too broad.
+# SIM105 - Use contextlib.suppress for suppressions.
+# SIM108 - Use ternary operator for simple if/else.
+# I001 - Import sorting. The fix collapses the column-aligned `import` keywords
+#   this codebase uses (the same alignment .flake8 preserves by ignoring E221).
+# RUF005 - Collection literal concatenation. `[a] + list_` is the preferred style here.
+extend-ignore = ["PT011", "SIM105", "SIM108", "I001", "RUF005"]
+
+[tool.ruff.lint.per-file-ignores]
+# E501: test files are exempt from the line length limit so that expected-value
+#   tables can stay aligned and readable.
+"tests/*" = ["E501"]
+
+# RUF012 wants ClassVar annotations, but annotations are not permitted anywhere
+# under src (see .claude/rules/python.md), so the rule cannot be satisfied.
+"src/*" = ["RUF012"]
+
+[tool.codespell]
+# Enforce American spelling as well as typos (see .claude/rules/doc_python.md).
+builtin = "clear,en-GB_to_en-US"
+regex = "[a-zA-Z]+"
+# The spyceman support is not yet spell-checked.
+skip = "*/spyceman/*,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
+
+[tool.pymarkdown.extensions.front-matter]
+# The rules and skills under .claude/ open with a YAML front-matter block, which would
+# otherwise be read as a setext heading.
+enabled = true
+
+[tool.pymarkdown.plugins.md013]
+# Line length (disable so README/CONTRIBUTING can use longer lines).
+enabled = false
+
+[tool.pymarkdown.plugins.md033]
+# Inline HTML (e.g. <br>) allowed in Markdown.
+enabled = false
