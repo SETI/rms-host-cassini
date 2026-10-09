@@ -119,6 +119,8 @@ disable_error_code = ["attr-defined"]
 target-version = "py311"
 # Must match max-line-length in .flake8.
 line-length = 90
+# The spyceman support is not yet linted.
+extend-exclude = ["src/host_cassini/spyceman"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -149,7 +151,8 @@ extend-ignore = ["PT011", "SIM105", "SIM108", "I001", "RUF005"]
 # Enforce American spelling as well as typos (see .claude/rules/doc_python.md).
 builtin = "clear,en-GB_to_en-US"
 regex = "[a-zA-Z]+"
-skip = "*/.git/*,*.egg-info,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
+# The spyceman support is not yet spell-checked.
+skip = "*/spyceman/*,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
 
 [tool.pymarkdown.extensions.front-matter]
 # The rules and skills under .claude/ open with a YAML front-matter block, which would

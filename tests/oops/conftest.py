@@ -1,5 +1,5 @@
 ##########################################################################################
-# tests/conftest.py
+# tests/oops/conftest.py
 ##########################################################################################
 """Shared fixtures that let the Cassini host run without SPICE kernels or spicedb.
 
@@ -18,8 +18,8 @@ import pytest
 import spicedb
 from oops.body import Body
 
-from host_cassini._oops import _Cassini
-from host_cassini.iss import CassiniISS
+from host_cassini.oops._cassini import _Cassini
+from host_cassini.oops.iss      import CassiniISS
 
 # Nominal Cassini ISS camera geometry: 1024x1024 pixels; NAC 0.35 deg and WAC 3.5 deg
 # square fields of view.

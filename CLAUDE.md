@@ -28,24 +28,24 @@ two published `.pyi` stubs and `stubtest`. Ignore those until this repo has the 
   `tests/`, pip-audit, codespell, PyMarkdown and pytest.
 - The `oops.Host` API is unreleased. CI installs rms-oops from its `mrs_260925_host_reorg`
   branch; drop that step once a release has it.
-- Tests never touch SPICE kernels or spicedb. `tests/conftest.py` replaces them with fakes
-  for every test, so new tests get this automatically.
+- Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
+  fakes for every test, so new tests get this automatically.
 
 ## Architecture gotchas
 
-- Each instrument is a subpackage (`iss/`) split in two so that the host registers at
-  import time while its implementation loads lazily. `Host.from_file()` dispatches through
-  the registered hosts' `_detect_in_*` methods, so a host is invisible until registered.
-  - `iss/_host.py` is imported eagerly. It defines the registered `_CassiniISSHost`
-    (`NAME`, the detectors, and `from_file`/`from_index` that import and call the full
-    class) and calls `_register()`. Keep its imports cheap.
-  - `iss/_oops.py` defines the full `CassiniISS`, which subclasses `_CassiniISSHost` and is
-    not registered itself. The `__getattr__` in `host_cassini/__init__.py` and
-    `iss/__init__.py` imports it on first access to `CassiniISS`.
-- `_Cassini` in `host_cassini/_oops.py` is never instantiated; all its state lives in class
-  attributes. CK and SPK kernels load lazily by "month": the 1997-10-01 to 2017-10-01
-  mission is split into 240 equal periods, each padded by `SLOP`. Before `TOUR` the Jupiter
-  system is used, after it the Saturn system.
+- The oops support lives in the `host_cassini.oops` subpackage, one module per instrument
+  (`oops/iss.py`). Each host class (e.g., `CassiniISS`) calls `_register()` at import
+  time, and `oops/__init__.py` imports every instrument module. `Host.from_file()`
+  dispatches through the registered hosts' `_detect_in_*` methods, so a host is invisible
+  until `host_cassini.oops` (or its module) is imported.
+- `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
+  `host_cassini.spyceman` works without oops and `CassiniISS` without spyceman. Keep any
+  import of either subpackage out of `host_cassini/__init__.py`.
+- Don't edit `host_cassini/spyceman/`.
+- `_Cassini` in `host_cassini/oops/_cassini.py` is never instantiated; all its state
+  lives in class attributes. CK and SPK kernels load lazily by "month": the 1997-10-01 to
+  2017-10-01 mission is split into 240 equal periods, each padded by `SLOP`. Before `TOUR`
+  the Jupiter system is used, after it the Saturn system.
 - Running anything needs a SPICE kernel database through `spicedb` (`SPICE_PATH`, or
   `$OOPS_RESOURCES/SPICE`, plus `SPICE_SQLITE_DB_NAME`). It must contain the kernel sets
   `CAS-SPK-*`, `CAS-CK-*` and `CAS-CK-GAPFILL`. `spicedb` currently ships inside rms-oops.

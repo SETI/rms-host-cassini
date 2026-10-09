@@ -1,5 +1,5 @@
 ##########################################################################################
-# host_cassini/iss/_oops.py
+# host_cassini/oops/iss.py
 ##########################################################################################
 
 import numpy as np
@@ -10,8 +10,7 @@ from pdsparser import Pds3Label
 from vicar     import VicarImage
 
 import oops
-from .._oops import _Cassini
-from ._host  import _CassiniISSHost
+from ._cassini import _Cassini
 
 __all__ = ['CassiniISS']
 
@@ -156,13 +155,10 @@ _TARGET_NAME_REPAIRS = {
 _TARGET_STARS = {'FOMALHAUT', 'SPICA'}
 
 
-class CassiniISS(_CassiniISSHost):
-    """The Cassini ISS host: Snapshot constructors for NAC and WAC images.
+class CassiniISS(oops.Host):
+    """The Cassini ISS host: Snapshot constructors for NAC and WAC images."""
 
-    The name and detectors are inherited from the registered
-    :class:`~host_cassini.iss._host._CassiniISSHost`, whose constructors pass their calls
-    on to this class.
-    """
+    NAME = 'Cassini ISS'
 
     _INSTRUMENT_KERNEL = None
     _FOVS = {}
@@ -551,6 +547,42 @@ class CassiniISS(_CassiniISSHost):
         return target
 
     ######################################################################################
+    # Detectors
+    ######################################################################################
+
+    @staticmethod
+    def _detect_in_pds3(label):
+        """True if the given parsed PDS3 label describes data from this host/instrument.
+        """
+
+        return (label.get('INSTRUMENT_HOST_NAME', '').startswith('CASSINI')
+                and label.get('INSTRUMENT_ID', '').startswith('ISS'))
+
+    @staticmethod
+    def _detect_in_vicar(label):
+        """True if the given VicarLabel describes data from this host/instrument."""
+
+        # PDS3 and VICAR use the same names
+        return CassiniISS._detect_in_pds3(label)
+
+    @staticmethod
+    def _detect_in_index(label):
+        """True if the given index label refers to this host/instrument.
+
+        Return None if the host/instrument cannot be inferred from the label, only from
+        individual records.
+        """
+
+        return label.get('IMAGE_INDEX_TABLE', '').startswith('COISS')
+
+    @staticmethod
+    def _detect_in_row(row_dict):
+        """True if the given row of an index file label refers to this host/instrument."""
+
+        return (row_dict.get('INSTRUMENT_HOST_NAME', '').startswith('CASSINI')
+                and row_dict.get('INSTRUMENT_NAME', '').startswith('IMAGING SCIENCE'))
+
+    ######################################################################################
     # Initialization
     ######################################################################################
 
@@ -669,5 +701,8 @@ class CassiniISS(_CassiniISSHost):
         CassiniISS._FOVS = {}
         CassiniISS._initialized = False
         _Cassini.reset()
+
+
+CassiniISS._register()
 
 ##########################################################################################

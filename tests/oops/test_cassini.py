@@ -1,7 +1,7 @@
 ##########################################################################################
-# tests/host_cassini/test_cassini.py
+# tests/oops/test_cassini.py
 ##########################################################################################
-"""Tests for the mission-level kernel management in host_cassini._Cassini."""
+"""Tests for the mission-level kernel management in host_cassini.oops._cassini."""
 
 from typing import Any
 
@@ -14,7 +14,7 @@ from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
 
-from host_cassini._oops import _Cassini
+from host_cassini.oops._cassini import _Cassini
 
 ##########################################################################################
 # Mission constants

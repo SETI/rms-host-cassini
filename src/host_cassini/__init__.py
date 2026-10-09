@@ -4,20 +4,18 @@
 
 import importlib
 
-# Importing each instrument subpackage registers its host with oops.Host right away; the
-# full host classes are imported only when their names are first used.
-from . import iss     # noqa: F401 (imported to register the host)
-
 __all__ = ['CassiniISS']
 
-# Public name -> the instrument subpackage that provides it
+# The oops hosts are imported on first access so that host_cassini.spyceman can be used
+# without oops, and the hosts without spyceman. Importing host_cassini.oops registers
+# every host with oops.Host.
 _LAZY_NAMES = {
-    'CassiniISS': 'host_cassini.iss',
+    'CassiniISS': 'host_cassini.oops',
 }
 
 
 def __getattr__(name):
-    """Import a full host class on first access (PEP 562)."""
+    """Import an oops host class on first access (PEP 562)."""
 
     if name in _LAZY_NAMES:
         return getattr(importlib.import_module(_LAZY_NAMES[name]), name)

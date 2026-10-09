@@ -1,7 +1,7 @@
 ##########################################################################################
-# tests/host_cassini/test_iss.py
+# tests/oops/test_iss.py
 ##########################################################################################
-"""Tests for the Cassini ISS host, host_cassini.iss."""
+"""Tests for the Cassini ISS host, host_cassini.oops.iss."""
 
 import os
 import pathlib
@@ -18,10 +18,10 @@ from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
                       FakeSpiceDB, tdb_in_month)
 
 import host_cassini
-import host_cassini.iss._oops as iss
-from host_cassini._oops import _Cassini
-from host_cassini.iss import CassiniISS
-from host_cassini.iss._host import _CassiniISSHost
+import host_cassini.oops
+import host_cassini.oops.iss as iss
+from host_cassini.oops._cassini import _Cassini
+from host_cassini.oops.iss      import CassiniISS
 
 START_TIME = '2005-01-01T00:00:00.000'
 NAC_NAME = 'IMAGING SCIENCE SUBSYSTEM NARROW ANGLE'
@@ -98,51 +98,47 @@ def test_cmatrix_rotation_spins_180_degrees_about_boresight() -> None:
 
 
 def test_iss_is_registered_with_oops() -> None:
-    assert oops.Host._LOOKUP['Cassini ISS'] is _CassiniISSHost
+    assert oops.Host._LOOKUP['Cassini ISS'] is CassiniISS
 
 
-def test_cassini_iss_inherits_registered_host() -> None:
-    assert issubclass(CassiniISS, _CassiniISSHost)
+@pytest.mark.parametrize('module', [host_cassini, host_cassini.oops, iss],
+                         ids=['host_cassini', 'oops', 'oops.iss'])
+def test_module_exports(module: Any) -> None:
+    assert module.__all__ == ['CassiniISS']
 
 
-_LAZY_IMPORT_SCRIPT = '''
+@pytest.mark.parametrize('module', [host_cassini, host_cassini.oops],
+                         ids=['host_cassini', 'oops'])
+def test_package_exposes_host(module: Any) -> None:
+    assert module.CassiniISS is iss.CassiniISS
+
+
+# Prints whether oops, host_cassini.oops.iss and host_cassini.spyceman are loaded after
+# importing host_cassini, and again after its CassiniISS is used.
+_LAZY_IMPORT_SCRIPT = """
 import sys
-import oops
+names = ('oops', 'host_cassini.oops.iss', 'host_cassini.spyceman')
 import host_cassini
-print('host_cassini.iss._oops' in sys.modules)
-print(oops.Host._LOOKUP['Cassini ISS'].__name__)
-_ = host_cassini.CassiniISS
-print('host_cassini.iss._oops' in sys.modules)
-'''
+print(*(name in sys.modules for name in names))
+from host_cassini import CassiniISS
+print(*(name in sys.modules for name in names))
+print(sys.modules['oops'].Host._LOOKUP['Cassini ISS'] is CassiniISS)
+"""
 
 
-def test_import_registers_host_without_loading_implementation() -> None:
+def test_host_is_imported_lazily() -> None:
     src = pathlib.Path(__file__).parents[2] / 'src'
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join([str(src), env.get('PYTHONPATH', '')])
     result = subprocess.run([sys.executable, '-c', _LAZY_IMPORT_SCRIPT], env=env,
                             capture_output=True, text=True, check=True)
-    assert result.stdout.split() == ['False', '_CassiniISSHost', 'True']
+    assert result.stdout.splitlines() == ['False False False', 'True True False', 'True']
 
 
-@pytest.mark.parametrize('module', [host_cassini, host_cassini.iss],
-                         ids=['host_cassini', 'host_cassini.iss'])
-def test_unknown_attribute(module: Any) -> None:
-    with pytest.raises(AttributeError, match=f"module '{module.__name__}' has no "
-                                             "attribute 'Nope'"):
-        _ = module.Nope
-
-
-@pytest.mark.parametrize('module', [host_cassini, host_cassini.iss, iss],
-                         ids=['host_cassini', 'host_cassini.iss', 'iss._oops'])
-def test_module_exports(module: Any) -> None:
-    assert module.__all__ == ['CassiniISS']
-
-
-@pytest.mark.parametrize('module', [host_cassini, host_cassini.iss],
-                         ids=['host_cassini', 'host_cassini.iss'])
-def test_package_exposes_host(module: Any) -> None:
-    assert module.CassiniISS is iss.CassiniISS
+def test_unknown_attribute() -> None:
+    with pytest.raises(AttributeError,
+                       match="module 'host_cassini' has no attribute 'Nope'"):
+        _ = host_cassini.Nope
 
 
 @pytest.mark.parametrize(('label', 'expected'), [
@@ -154,17 +150,8 @@ def test_package_exposes_host(module: Any) -> None:
     ({}, False),
 ], ids=['nac', 'wac', 'other-instrument', 'other-host', 'no-host', 'empty'])
 def test_detection(label: dict[str, str], expected: bool) -> None:
-    assert _CassiniISSHost._detect_in_pds3(label) is expected
-    assert _CassiniISSHost._detect_in_vicar(label) is expected
-
-
-@pytest.mark.parametrize(('label', 'expected'), [
-    ({'^IMAGE_INDEX_TABLE': 'index.tab', 'IMAGE_INDEX_TABLE': {}}, None),
-    ({'^INDEX_TABLE': 'index.tab', 'INDEX_TABLE': {}}, False),
-    ({}, False),
-], ids=['image-index-table', 'index-table', 'empty'])
-def test_detection_in_index(label: dict[str, Any], expected: bool | None) -> None:
-    assert _CassiniISSHost._detect_in_index(label) is expected
+    assert CassiniISS._detect_in_pds3(label) is expected
+    assert CassiniISS._detect_in_vicar(label) is expected
 
 
 @pytest.mark.parametrize(('row', 'expected'), [
@@ -176,7 +163,7 @@ def test_detection_in_index(label: dict[str, Any], expected: bool | None) -> Non
     ({}, False),
 ], ids=['nac', 'wac', 'other-instrument', 'other-host', 'empty'])
 def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
-    assert _CassiniISSHost._detect_in_row(row) is expected
+    assert CassiniISS._detect_in_row(row) is expected
 
 ##########################################################################################
 # _fix_cassini_iss_target()
@@ -627,7 +614,6 @@ def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
 _INDEX_COLUMNS = [
     ('VOLUME_ID', 'CHARACTER', 10),
     ('FILE_SPECIFICATION_NAME', 'CHARACTER', 45),
-    ('INSTRUMENT_HOST_NAME', 'CHARACTER', 15),
     ('INSTRUMENT_NAME', 'CHARACTER', 38),
     ('START_TIME', 'CHARACTER', 23),
     ('EXPOSURE_DURATION', 'ASCII_REAL', 10),
@@ -640,12 +626,10 @@ _INDEX_COLUMNS = [
 ]
 
 _INDEX_ROWS = [
-    ('COISS_2009', 'data/1484506648_1484573295/N1484506648_1.IMG', 'CASSINI ORBITER',
-     NAC_NAME,
+    ('COISS_2009', 'data/1484506648_1484573295/N1484506648_1.IMG', NAC_NAME,
      '2005-01-15T18:30:00.000', 1000.0, 'FULL', 'CL1', 'GRN', '12 ELECTRONS PER DN',
      'SATURN', 'ISS_000SA_TEST001_PRIME'),
-    ('COISS_2009', 'data/1484506648_1484573295/W1484506649_1.IMG', 'CASSINI ORBITER',
-     WAC_NAME,
+    ('COISS_2009', 'data/1484506648_1484573295/W1484506649_1.IMG', WAC_NAME,
      '2005-01-15T18:31:00.000', 500.0, 'SUM2', 'RED', 'CL2', '29 ELECTRONS PER DN',
      'ERRIAPO', 'ISS_000SA_TEST001_PRIME'),
 ]
@@ -671,7 +655,7 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
 
     text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
             f'RECORD_BYTES = {row_bytes}', f'FILE_RECORDS = {len(_INDEX_ROWS)}',
-            '^IMAGE_INDEX_TABLE = "INDEX.TAB"', 'OBJECT = IMAGE_INDEX_TABLE',
+            '^INDEX_TABLE = "INDEX.TAB"', 'OBJECT = INDEX_TABLE',
             '  INTERCHANGE_FORMAT = ASCII', f'  ROWS = {len(_INDEX_ROWS)}',
             f'  COLUMNS = {len(_INDEX_COLUMNS)}', f'  ROW_BYTES = {row_bytes}']
     start = 1
@@ -681,7 +665,7 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
                  f'    START_BYTE = {start + offset}', f'    BYTES = {width}',
                  '  END_OBJECT = COLUMN']
         start += field_width + 1
-    text += ['END_OBJECT = IMAGE_INDEX_TABLE', 'END', '']
+    text += ['END_OBJECT = INDEX_TABLE', 'END', '']
     path = directory / 'INDEX.LBL'
     path.write_text('\r\n'.join(text))
     return path
@@ -743,14 +727,5 @@ def test_from_index_uses_given_rows(tmp_path: pathlib.Path) -> None:
     snapshots = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1])
     assert [obs.detector for obs in snapshots] == ['NAC']
 
-
-def test_registered_host_from_index_delegates(tmp_path: pathlib.Path) -> None:
-    snapshots = _CassiniISSHost.from_index(write_index(tmp_path))
-    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
-
-
-def test_host_from_index_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
-    snapshots = oops.Host.from_index(write_index(tmp_path))
-    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
 
 ##########################################################################################

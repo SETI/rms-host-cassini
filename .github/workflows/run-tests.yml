@@ -87,7 +87,7 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m pip install --force-reinstall --no-deps "rms-oops @ git+https://github.com/SETI/rms-oops@mrs_260925_host_reorg"
 
-      # The tests need no SPICE kernels or data files; see tests/conftest.py.
+      # The tests need no SPICE kernels or data files; see tests/oops/conftest.py.
       - name: Test with coverage
         run: |
           python -m pytest --cov-report=xml
