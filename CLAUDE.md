@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `rms-host-cassini` is the Cassini host plug-in for `oops` (rms-oops). It is a port of
 `rms-oops/src/hosts/cassini/` to the newer `oops.Host` / `oops.host` API, part of splitting
-the mission hosts out of rms-oops (see the sibling `rms-host-galileo`). Only ISS is ported so
-far; rms-oops still has VIMS and UVIS.
+the mission hosts out of rms-oops (see the sibling `rms-host-galileo`). ISS, VIMS and UVIS are
+ported.
 
 ## Standards
 
@@ -34,10 +34,14 @@ two published `.pyi` stubs and `stubtest`. Ignore those until this repo has the 
 ## Architecture gotchas
 
 - The oops support lives in the `host_cassini.oops` subpackage, one module per instrument
-  (`oops/iss.py`). Each host class (e.g., `CassiniISS`) calls `_register()` at import
+  (`iss.py`, `vims.py`, `uvis.py`). Each host class calls `_register()` at import
   time, and `oops/__init__.py` imports every instrument module. `Host.from_file()`
   dispatches through the registered hosts' `_detect_in_*` methods, so a host is invisible
-  until `host_cassini.oops` (or its module) is imported.
+  until `host_cassini.oops` (or its module) is imported. VIMS and UVIS build their
+  observations through `_build_observation()` in `oops/_cassini.py`, which applies the
+  standard `oops.Host` overrides, and apply `select` through `_apply_select()` there.
+- TARGET_NAME repairs are per instrument: each module keeps its own
+  `_TARGET_NAME_REPAIRS`. Don't merge them into `_cassini.py`.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
   `host_cassini.spyceman` works without oops and `CassiniISS` without spyceman. Keep any
   import of either subpackage out of `host_cassini/__init__.py`.

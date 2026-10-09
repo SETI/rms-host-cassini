@@ -1,7 +1,7 @@
 ##########################################################################################
 # tests/oops/test_cassini.py
 ##########################################################################################
-"""Tests for the mission-level kernel management in host_cassini.oops._cassini."""
+"""Tests for the mission-level support in host_cassini.oops._cassini."""
 
 from typing import Any
 
@@ -14,7 +14,7 @@ from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
 
-from host_cassini.oops._cassini import _Cassini
+from host_cassini.oops._cassini import _apply_select, _Cassini
 
 ##########################################################################################
 # Mission constants
@@ -454,5 +454,43 @@ def test_no_kernels_reach_cspyce() -> None:
     # The autouse fixtures replace cspyce.furnsh; confirm the guard is in place.
     with pytest.raises(AssertionError, match='tried to furnish a SPICE kernel'):
         cspyce.furnsh('x.bsp')
+
+##########################################################################################
+# _apply_select()
+##########################################################################################
+
+_ITEMS = ('a', 'b', 'c')
+_NAMES = {'FIRST': 0, 'LAST': 2}
+
+
+@pytest.mark.parametrize(('select', 'expected'), [
+    (None, _ITEMS),
+    (1, 'b'),
+    (np.int64(-1), 'c'),
+    ('first', 'a'),
+    (slice(1, None), ('b', 'c')),
+    (('LAST', 0), ('c', 'a')),
+    ((slice(None, 2), 'last'), ('a', 'b', 'c')),
+    ((), ()),
+], ids=['none', 'index', 'numpy-index', 'name', 'slice', 'names', 'slice-and-name',
+        'empty'])
+def test_apply_select(select: Any, expected: Any) -> None:
+    assert _apply_select(_ITEMS, select, _NAMES) == expected
+
+
+@pytest.mark.parametrize(('select', 'error', 'message'), [
+    ('middle', ValueError, "unrecognized select name: 'middle'"),
+    (3, IndexError, 'tuple index out of range'),
+    (True, TypeError, 'invalid select: True'),
+    (((0,),), TypeError, r'invalid select item: \(0,\)'),
+], ids=['name', 'index', 'bool', 'nested-tuple'])
+def test_apply_select_errors(select: Any, error: type[Exception], message: str) -> None:
+    with pytest.raises(error, match=message):
+        _apply_select(_ITEMS, select, _NAMES)
+
+
+def test_apply_select_without_names() -> None:
+    with pytest.raises(ValueError, match="unrecognized select name: 'first'"):
+        _apply_select(_ITEMS, 'first')
 
 ##########################################################################################

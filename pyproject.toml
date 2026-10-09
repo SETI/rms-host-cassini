@@ -112,7 +112,7 @@ ignore_missing_imports = true
 #   - The oops and spicedb stubs do not yet declare oops.Host, oops.host or
 #     spicedb.KERNEL_TYPE_SORT_ORDER.
 [[tool.mypy.overrides]]
-module = ["conftest", "test_cassini", "test_iss"]
+module = ["conftest", "test_cassini", "test_iss", "test_uvis", "test_vims"]
 disable_error_code = ["attr-defined"]
 
 [tool.ruff]

@@ -4,13 +4,15 @@
 
 import importlib
 
-__all__ = ['CassiniISS']
+__all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
 # The oops hosts are imported on first access so that host_cassini.spyceman can be used
 # without oops, and the hosts without spyceman. Importing host_cassini.oops registers
 # every host with oops.Host.
 _LAZY_NAMES = {
-    'CassiniISS': 'host_cassini.oops',
+    'CassiniISS' : 'host_cassini.oops',
+    'CassiniUVIS': 'host_cassini.oops',
+    'CassiniVIMS': 'host_cassini.oops',
 }
 
 

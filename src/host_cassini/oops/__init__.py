@@ -3,8 +3,10 @@
 ##########################################################################################
 
 # Importing each instrument module registers its host with oops.Host
-from .iss import CassiniISS
+from .iss  import CassiniISS
+from .uvis import CassiniUVIS
+from .vims import CassiniVIMS
 
-__all__ = ['CassiniISS']
+__all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
 ##########################################################################################

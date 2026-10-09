@@ -8,6 +8,7 @@ oops and cspyce calls that would read SPICE kernels directly are replaced by
 kernel-free equivalents. Everything else, including oops itself, runs for real.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,12 +21,33 @@ from oops.body import Body
 
 from host_cassini.oops._cassini import _Cassini
 from host_cassini.oops.iss      import CassiniISS
+from host_cassini.oops.uvis     import CassiniUVIS
+from host_cassini.oops.vims     import CassiniVIMS
 
 # Nominal Cassini ISS camera geometry: 1024x1024 pixels; NAC 0.35 deg and WAC 3.5 deg
 # square fields of view.
 NAC_HALF_FOV_DEG = 0.175
 WAC_HALF_FOV_DEG = 1.75
 PIXELS = 1024
+
+
+_ISO_TIME = re.compile(r'\d{4}-\d{2}-\d{2}T[\d:.]+')
+
+
+def pds3_value(value: Any) -> str:
+    """A Python value formatted for a PDS3 label; ISO times and numbers stay unquoted."""
+
+    if isinstance(value, (list, tuple)):
+        return '(' + ', '.join(pds3_value(item) for item in value) + ')'
+    if isinstance(value, str) and not _ISO_TIME.fullmatch(value):
+        return f'"{value}"'
+    return str(value)
+
+
+def pds3_lines(keywords: dict[str, Any], indent: str = '') -> list[str]:
+    """PDS3 label lines assigning each keyword its formatted value."""
+
+    return [f'{indent}{key} = {pds3_value(value)}' for (key, value) in keywords.items()]
 
 
 def iso_from_tdb(tdb: float) -> str:
@@ -231,11 +253,22 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
 @pytest.fixture(autouse=True)
 def reset_host() -> Any:
-    """Start and end every test with the Cassini and CassiniISS class state reset."""
+    """Start and end every test with the Cassini and instrument class states reset."""
 
-    CassiniISS._reset()
+    hosts = (CassiniISS, CassiniUVIS, CassiniVIMS)
+    for host in hosts:
+        host._reset()
     yield
-    CassiniISS._reset()
+    for host in hosts:
+        host._reset()
+
+
+@pytest.fixture
+def saturn_path() -> oops.Path:
+    """A fixed path registered as SATURN, which a TrackerFrame can track."""
+
+    return oops.path.FixedPath((1.e9, 0., 0.), oops.Path.SSB, oops.Frame.J2000,
+                               path_id='SATURN')
 
 
 @pytest.fixture

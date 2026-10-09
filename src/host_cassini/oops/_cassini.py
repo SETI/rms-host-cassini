@@ -2,6 +2,8 @@
 # host_cassini/oops/_cassini.py
 ##########################################################################################
 
+import numbers
+
 import numpy as np
 
 import julian
@@ -434,5 +436,83 @@ class _Cassini:
 
         return spicedb.used_basenames(types=types, time=time, inst=inst, sc=-82,
                                       bodies=bodies)
+
+
+def _apply_select(observations, select, names=None):
+    """The observations chosen by the `select` option of a host's from_file().
+
+    Parameters:
+        observations (tuple[Observation | None, ...]): The observations from one file.
+        select (int | slice | str | tuple[int | slice | str, ...] | None): An index, a
+            slice, or the name of one observation, or a tuple of these; None to choose
+            them all.
+        names (dict[str, int], optional): The host-specific names of the observations,
+            in upper case, each mapped to its index in `observations`. Names in `select`
+            are matched without regard to case.
+
+    Returns:
+        Observation | None | tuple[Observation | None, ...]: `observations` itself if
+        `select` is None; the one observation chosen by an index or a name; or a tuple of
+        the observations chosen by a slice or by a tuple, in the order given, with each
+        slice in a tuple contributing all of its observations.
+
+    Raises:
+        IndexError: If an index is out of range.
+        ValueError: If a name is not one of `names`.
+        TypeError: If `select`, or an item of a tuple, is not an int, slice or str.
+    """
+
+    if select is None:
+        return observations
+
+    if isinstance(select, tuple):
+        chosen = []
+        for item in select:
+            if isinstance(item, tuple):
+                raise TypeError(f'invalid select item: {item!r}')
+            if isinstance(item, slice):
+                chosen += observations[item]
+            else:
+                chosen.append(_apply_select(observations, item, names))
+        return tuple(chosen)
+
+    if isinstance(select, slice):
+        return observations[select]
+
+    if isinstance(select, str):
+        names = names or {}
+        if select.upper() not in names:
+            raise ValueError(f'unrecognized select name: {select!r}')
+        return observations[names[select.upper()]]
+
+    if isinstance(select, numbers.Integral) and not isinstance(select, bool):
+        return observations[select]
+
+    raise TypeError(f'invalid select: {select!r}')
+
+
+def _build_observation(obs_class, axes, params, filepath, overrides):
+    """An Observation built from its constructor inputs after the standard overrides.
+
+    Parameters:
+        obs_class (type): The Observation subclass to construct. A Slit1D receives the
+            cadence as its `tstart`; any other subclass receives it as `cadence`.
+        axes (tuple[str, ...]): The names of the axes of the data array.
+        params (dict): The constructor inputs other than `axes`, including "cadence",
+            "fov", "path" and "frame". It is modified in place.
+        filepath (str | FCPath): The path to the data file.
+        overrides (dict): The standard override options of :meth:`oops.Host.from_file`,
+            as passed to :meth:`oops.Host._apply_overrides`.
+
+    Returns:
+        Observation: The new observation, with every remaining item of `params` as a
+        subfield.
+    """
+
+    oops.Host._apply_overrides(params, filepath, **overrides)
+    if obs_class is oops.observation.Slit1D:
+        tstart = params.pop('cadence')
+        return obs_class(axes, tstart, None, **params)
+    return obs_class(axes, **params)
 
 ##########################################################################################

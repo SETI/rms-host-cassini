@@ -15,7 +15,7 @@ import oops
 import pytest
 import vicar
 from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
-                      FakeSpiceDB, tdb_in_month)
+                      FakeSpiceDB, pds3_lines, tdb_in_month)
 
 import host_cassini
 import host_cassini.oops
@@ -101,10 +101,14 @@ def test_iss_is_registered_with_oops() -> None:
     assert oops.Host._LOOKUP['Cassini ISS'] is CassiniISS
 
 
-@pytest.mark.parametrize('module', [host_cassini, host_cassini.oops, iss],
-                         ids=['host_cassini', 'oops', 'oops.iss'])
-def test_module_exports(module: Any) -> None:
-    assert module.__all__ == ['CassiniISS']
+@pytest.mark.parametrize('module', [host_cassini, host_cassini.oops],
+                         ids=['host_cassini', 'oops'])
+def test_package_exports(module: Any) -> None:
+    assert module.__all__ == ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
+
+
+def test_module_exports() -> None:
+    assert iss.__all__ == ['CassiniISS']
 
 
 @pytest.mark.parametrize('module', [host_cassini, host_cassini.oops],
@@ -509,14 +513,6 @@ def test_custom_frame_reports_no_cks(custom_frame: oops.Frame,
 ##########################################################################################
 
 
-def _pds3_value(value: Any) -> str:
-    if isinstance(value, list):
-        return '(' + ', '.join(_pds3_value(item) for item in value) + ')'
-    if isinstance(value, str) and value != START_TIME:
-        return f'"{value}"'
-    return str(value)
-
-
 def write_pds3_image(directory: pathlib.Path, *, lines: int = 256,
                      **changes: Any) -> pathlib.Path:
     """Write a detached PDS3 label and its 8-bit image; return the label's path."""
@@ -528,7 +524,7 @@ def write_pds3_image(directory: pathlib.Path, *, lines: int = 256,
     text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
             f'RECORD_BYTES = {lines}', f'FILE_RECORDS = {lines}',
             '^IMAGE = "N0000000001_1.IMG"']
-    text += [f'{key} = {_pds3_value(value)}' for (key, value) in keywords.items()]
+    text += pds3_lines(keywords)
     text += ['OBJECT = IMAGE', f'  LINES = {lines}', f'  LINE_SAMPLES = {lines}',
              '  SAMPLE_BITS = 8', '  SAMPLE_TYPE = MSB_UNSIGNED_INTEGER',
              'END_OBJECT = IMAGE', 'END', '']
@@ -714,6 +710,15 @@ def test_from_index_rejects_per_row_options(tmp_path: pathlib.Path, option: str)
     with pytest.raises(ValueError, match=f'disallowed Cassini ISS.from_index.. option '
                                          f'{option}'):
         CassiniISS.from_index(write_index(tmp_path), **{option: 'anything'})
+
+
+def test_host_from_index_passes_parallel(tmp_path: pathlib.Path,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    # Identify the test index as Cassini ISS from its label alone.
+    monkeypatch.setattr(CassiniISS, '_detect_in_index', staticmethod(lambda label: True))
+    with pytest.raises(ValueError, match=r'disallowed Cassini ISS.from_index\(\) option '
+                                         'parallel'):
+        oops.Host.from_index(write_index(tmp_path), parallel='anything')
 
 
 def test_from_index_filter(tmp_path: pathlib.Path) -> None:
