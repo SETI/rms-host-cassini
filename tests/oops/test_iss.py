@@ -7,7 +7,7 @@ import os
 import pathlib
 import subprocess
 import sys
-from typing import Any
+from typing import Any, cast
 
 import julian
 import numpy as np
@@ -534,7 +534,9 @@ def test_from_file_pds3(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_pds3_astrometry(tmp_path: pathlib.Path) -> None:
-    obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True)
+    path = write_pds3_image(tmp_path)
+    (tmp_path / 'N0000000001_1.IMG').unlink()
+    obs = CassiniISS.from_file(path, astrometry=True)
     assert not hasattr(obs, 'data')
     assert obs.filter == 'GRN'
 
@@ -549,10 +551,26 @@ def test_from_file_vicar(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.usefixtures('initialized_iss')
-def test_from_file_vicar_astrometry(tmp_path: pathlib.Path) -> None:
-    obs = CassiniISS.from_file(write_vicar_image(tmp_path), astrometry=True)
+def test_from_file_vicar_astrometry(tmp_path: pathlib.Path,
+                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    path = write_vicar_image(tmp_path)
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError('the VICAR image array was read')
+
+    monkeypatch.setattr(vicar.VicarImage, 'from_file', fail)
+    obs = CassiniISS.from_file(path, astrometry=True)
     assert not hasattr(obs, 'data')
     assert obs.filter == 'GRN'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_vicar_image_astrometry(tmp_path: pathlib.Path) -> None:
+    path = write_vicar_image(tmp_path)
+    vic = cast(vicar.VicarImage, vicar.VicarImage.from_file(path, strict=False))
+    vic.filepath = path
+    obs = CassiniISS.from_file(vic, astrometry=True)
+    assert not hasattr(obs, 'data')
 
 
 @pytest.mark.usefixtures('initialized_iss')

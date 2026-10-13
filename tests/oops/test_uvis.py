@@ -4,6 +4,7 @@
 """Tests for the Cassini UVIS host, host_cassini.oops.uvis."""
 
 import pathlib
+from collections.abc import Callable
 from typing import Any
 
 import julian
@@ -315,6 +316,18 @@ def test_time_series_cadence(tmp_path: pathlib.Path) -> None:
 def test_time_series_rejects_other_detectors(tmp_path: pathlib.Path) -> None:
     with pytest.raises(oops.OopsValueError, match='neither HSP nor HDAC'):
         CassiniUVIS.from_file(write_time_series(tmp_path, 'XYZ2005_001_00_00'))
+
+
+@pytest.mark.parametrize(('write', 'data_name'), [
+    (write_time_series, 'HSP2005_001_00_00.DAT'),
+    (write_spectrum, 'EUV2005_001_00_00.DAT'),
+], ids=['time-series', 'spectrum'])
+def test_astrometry_reads_no_data(tmp_path: pathlib.Path,
+                                  write: Callable[[pathlib.Path], pathlib.Path],
+                                  data_name: str) -> None:
+    path = write(tmp_path)
+    (tmp_path / data_name).unlink()
+    assert not hasattr(CassiniUVIS.from_file(path, astrometry=True), 'data')
 
 
 def test_spectrum(tmp_path: pathlib.Path) -> None:

@@ -255,7 +255,8 @@ class CassiniISS(oops.Host):
                 data = oops.host.read_pds3_image_array(fileinfo)
             dict_ = fileinfo.dict
         elif isinstance(fileinfo, VicarImage):
-            data = fileinfo.data_2d
+            if not astrometry:
+                data = fileinfo.data_2d
             dict_ = fileinfo.label
         else:   # VicarLabel, with astrometry == True
             dict_ = fileinfo
