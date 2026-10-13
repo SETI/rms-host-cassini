@@ -273,7 +273,7 @@ class CassiniVIMS(oops.Host):
                 observations, which is otherwise derived from TARGET_NAME in the label.
                 Use "NONE" for inertial pointing, indicating that no Solar System body
                 was tracked.
-            lightsource (oops.Lightsource, optional): Override for the Lightsource of both
+            lightsource (oops.LightSource, optional): Override for the LightSource of both
                 observations, which is otherwise the Sun.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of both channels.

@@ -172,8 +172,8 @@ class CassiniISS(oops.Host):
         """A Snapshot object based on a given Cassini ISS image file.
 
         Parameters:
-            fileinfo (str | pathlib.Path | FCPath | PdsLabel | VicarLabel | VicarImage):
-                The file path or its parsed content as a PdsLabel, VicarLabel, or
+            fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
+                The file path or its parsed content as a Pds3Label, VicarLabel, or
                 VicarImage.
             fast_distortion (bool | None, optional): True to use a pre-inverted
                 polynomial; False to use a dynamically solved polynomial; None to use a
@@ -202,7 +202,7 @@ class CassiniISS(oops.Host):
             target (str | oops.Body, optional): Override for the default target Body of
                 the observation. Use "NONE" for inertial pointing, indicating that no
                 Solar System body was tracked.
-            lightsource (oops.Lightsource, optional): Override for the default Lightsource
+            lightsource (oops.LightSource, optional): Override for the default LightSource
                 of the observation.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of the observing
@@ -319,7 +319,7 @@ class CassiniISS(oops.Host):
             target (str | oops.Body, optional): Override for the default target Body of
                 every observation. Use "NONE" for inertial pointing, indicating that no
                 Solar System body was tracked.
-            lightsource (oops.Lightsource, optional): Override for the default Lightsource
+            lightsource (oops.LightSource, optional): Override for the default LightSource
                 of every observation.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of the observing

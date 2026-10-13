@@ -36,14 +36,16 @@ jobs:
           ruff check src tests
 
       # Ruff implements no rule in the E121-E133 range, so continuation-line
-      # indentation is the one pycodestyle family it cannot gate. This step reads the
-      # per-file-ignores in .flake8.
+      # indentation is the one pycodestyle family it cannot gate. This step matches
+      # `--flake8-cont` in scripts/run-all-checks.sh and reads the per-file-ignores in
+      # .flake8.
       - name: Flake8 continuation-line indent
         run: |
           flake8 --select=E12,E13 src tests
 
       # Every module under tests/ is checked. src/ is deliberately unannotated, so
-      # mypy treats it as Any through the overrides in pyproject.toml.
+      # mypy treats it as Any through the overrides in pyproject.toml; this step
+      # matches `--mypy` in scripts/run-all-checks.sh.
       - name: Mypy
         run: |
           MYPYPATH=src mypy tests
@@ -54,13 +56,23 @@ jobs:
         run: |
           pip-audit --skip-editable
 
+      - name: Pyroma
+        run: |
+          pyroma .
+
+      # -W makes warnings errors and -n (nitpicky) makes a cross-reference with no
+      # target one of them.
+      - name: Sphinx
+        run: |
+          sphinx-build -W -n -b html docs docs/_build
+
       - name: Codespell
         run: |
-          codespell src tests CLAUDE.md
+          codespell src tests docs scripts README.md CONTRIBUTING.md CLAUDE.md
 
       - name: PyMarkdown
         run: |
-          pymarkdown scan -r .claude/ CLAUDE.md
+          pymarkdown scan -r docs/ .claude/ README.md CONTRIBUTING.md CLAUDE.md
 
   test:
     name: Test rms-host-cassini

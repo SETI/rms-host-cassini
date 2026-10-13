@@ -11,10 +11,11 @@ ported.
 
 Tooling and conventions follow **rms-polymath**. `.claude/rules/*.md`, which were copied from
 it, are the authoritative coding, testing, documentation, dependency and environment
-standards. When adding packaging, CI or scripts, model them on rms-polymath's
-`pyproject.toml`, `.flake8`, `.github/workflows/` and `scripts/` (`setup-venv.sh`,
-`run-all-checks.sh`). Some details in the rules are polymath-specific, for example the
-two published `.pyi` stubs and `stubtest`. Ignore those until this repo has the equivalent.
+standards. The repo layout, CI and scripts come from `rms-devenv/repo_template`, adapted as
+rms-polymath adapted them. Model changes to packaging, CI or scripts on rms-polymath's
+`pyproject.toml`, `.flake8`, `.github/workflows/` and `scripts/`. Some details in the rules
+are polymath-specific, for example the two published `.pyi` stubs and `stubtest`. Ignore
+those until this repo has the equivalent.
 
 - Hand-aligned columns (assignments, dict colons, `from x     import`) are deliberate. Never
   run `ruff format` or any other auto-formatter.
@@ -23,11 +24,18 @@ two published `.pyi` stubs and `stubtest`. Ignore those until this repo has the 
 
 ## Current state
 
-- `scripts/run-all-checks.sh` doesn't exist yet, so the `run-all-checks` skill has nothing
-  to run. CI (`.github/workflows/run-tests.yml`) runs ruff, flake8 `E12`/`E13`, mypy on
-  `tests/`, pip-audit, codespell, PyMarkdown and pytest.
-- The `oops.Host` API is unreleased. CI installs rms-oops from its `mrs_260925_host_reorg`
-  branch; drop that step once a release has it.
+- `scripts/run-all-checks.sh` is the single source of truth for the checks: ruff, flake8
+  `E12`/`E13`, mypy on `tests/`, pytest, pyroma, pip-audit, the Sphinx build (`-W -n`),
+  codespell and PyMarkdown. `ruff format` is disabled. `.github/workflows/run-tests.yml`
+  runs the same set. `scripts/setup-venv.sh` builds the `venv/` that the scripts expect;
+  set `VENV` to use another.
+- The `oops.Host` API is unreleased. CI, `.readthedocs.yaml` and `scripts/setup-venv.sh`
+  install rms-oops from its `mrs_260925_host_reorg` branch, and `docs/conf.py` ignores the
+  unresolvable `oops.host.host_.Host` reference. Drop all four once a release has it.
+- `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
+  ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
+  reports a class from another RMS package.
+- Coverage has no `fail_under` yet: `spyceman/` has no tests, and the rest is at 87%.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
   fakes for every test, so new tests get this automatically.
 

@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rms-host-cassini"
 dynamic = ["version"]
-description = "Cassini mission host (ISS) for the OOPS observation geometry toolkit"
+description = "Cassini mission hosts (ISS, UVIS, VIMS) for the OOPS observation geometry toolkit"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "cspyce",
@@ -20,8 +21,15 @@ dependencies = [
   "rms-vicar>=1.3.0",
 ]
 license = "Apache-2.0"
-keywords = ["oops", "cassini", "iss", "spice"]
+authors = [
+  {name = "Mark R. Showalter", email = "mshowalter@seti.org"}
+]
+maintainers = [
+  {name = "Mark R. Showalter", email = "mshowalter@seti.org"}
+]
+keywords = ["oops", "cassini", "iss", "uvis", "vims", "spice"]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Natural Language :: English",
   "Topic :: Scientific/Engineering",
   "Topic :: Scientific/Engineering :: Astronomy",
@@ -36,6 +44,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/SETI/rms-host-cassini"
+Documentation = "https://rms-host-cassini.readthedocs.io/en/latest"
 Repository = "https://github.com/SETI/rms-host-cassini"
 Source = "https://github.com/SETI/rms-host-cassini"
 Issues = "https://github.com/SETI/rms-host-cassini/issues"
@@ -52,7 +61,16 @@ dev = [
   "pytest-cov>=4.0",
   "pytest-xdist>=3.8.0",
   "ruff>=0.8",
+  # "bandit[toml]>=1.8",
   "pyroma>=4.2",
+  # "vulture>=2.14",
+  "rms-host-cassini[docs]",
+]
+docs = [
+  "myst-parser",
+  "sphinx>=7",
+  "sphinxcontrib-mermaid",
+  "sphinx-rtd-theme",
 ]
 
 [tool.pytest.ini_options]
@@ -72,6 +90,9 @@ filterwarnings = [
 [tool.setuptools]
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+host_cassini = ["py.typed"]
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
@@ -148,11 +169,25 @@ extend-ignore = ["PT011", "SIM105", "SIM108", "I001", "RUF005"]
 "src/*" = ["RUF012"]
 
 [tool.codespell]
-# Enforce American spelling as well as typos (see .claude/rules/doc_python.md).
+# Two dictionaries: the default typo list, and the British-to-American list that
+# enforces the spelling rule in .claude/rules/doc_python.md.
 builtin = "clear,en-GB_to_en-US"
+# The builtin British list carries a base word but not every inflection, so it
+# catches `catalogue` and lets `catalogued` through. `.codespell-dictionary.txt`
+# adds the inflections this tree uses, in codespell's `wrong->right` format --
+# one pair per line, no comments or blank lines, which that parser rejects. The
+# `-` is what keeps the builtins above: naming a dictionary without it replaces
+# them rather than extending them, and it trails the filename because a value
+# opening with `-` reads as another flag.
+dictionary = ".codespell-dictionary.txt,-"
+# Split on everything that is not an ASCII letter. The default word pattern
+# keeps hyphens and apostrophes, which hides two whole classes: a compound like
+# `optical-centre` is one unknown token, and -- because this project quotes
+# strings with single quotes -- so is every string literal, `'colour'` included.
 regex = "[a-zA-Z]+"
-# The spyceman support is not yet spell-checked.
-skip = "*/spyceman/*,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
+# The spyceman support is not yet spell-checked. *.egg-info holds the build metadata,
+# whose commit hashes can read as misspellings.
+skip = "*/spyceman/*,*.egg-info,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
 
 [tool.pymarkdown.extensions.front-matter]
 # The rules and skills under .claude/ open with a YAML front-matter block, which would
@@ -166,3 +201,14 @@ enabled = false
 [tool.pymarkdown.plugins.md033]
 # Inline HTML (e.g. <br>) allowed in Markdown.
 enabled = false
+
+# Uncomment when enabling bandit in [project.optional-dependencies].dev.
+# [tool.bandit]
+# exclude_dirs = ["tests", "venv", ".venv"]
+# targets = ["src"]
+
+# Uncomment when enabling vulture in [project.optional-dependencies].dev.
+# [tool.vulture]
+# paths = ["src"]
+# exclude = ["tests/"]
+# min_confidence = 70

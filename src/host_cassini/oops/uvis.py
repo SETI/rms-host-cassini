@@ -140,7 +140,7 @@ class CassiniUVIS(oops.Host):
                 observation, which is otherwise derived from TARGET_NAME in the label.
                 Use "NONE" for inertial pointing, indicating that no Solar System body
                 was tracked.
-            lightsource (oops.Lightsource, optional): Override for the Lightsource of
+            lightsource (oops.LightSource, optional): Override for the LightSource of
                 every observation, which is otherwise the Sun.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of the observing
