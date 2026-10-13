@@ -235,9 +235,11 @@ class CassiniISS(oops.Host):
             **kwargs: Additional keyword arguments; they are accepted and ignored.
 
         Returns:
-            Snapshot: The observation, with subfields `spice_kernels`, `filepath`,
-            `basename`, `spice_to_frame`, `spice_frame_name`, `spice_frame_id`, `abspath`
-            and `image_url` inserted.
+            Snapshot: The observation, with subfields `dict`, `host`, `instrument`,
+            `detector`, `sampling`, `filter`, `filter1`, `filter2`, `gain_mode`, `texp`,
+            `label_target`, `observation_id`, `spice_kernels`, `filepath`, `basename`,
+            `spice_to_frame`, `spice_frame_name`, `spice_frame_id`, `abspath` and
+            `image_url` inserted, and `data` unless `astrometry` is True.
         """
 
         CassiniISS._initialize()  # define everything the first time through; use defaults
@@ -351,6 +353,8 @@ class CassiniISS(oops.Host):
 
         Returns:
             list[Snapshot]: One observation per row of the index, each with subfields
+            `dict`, `host`, `instrument`, `detector`, `sampling`, `filter`, `filter1`,
+            `filter2`, `gain_mode`, `texp`, `label_target`, `observation_id`,
             `spice_kernels`, `filepath`, `basename`, `spice_to_frame`, `spice_frame_name`
             and `spice_frame_id` inserted.
 
@@ -513,6 +517,7 @@ class CassiniISS(oops.Host):
         params['texp'] = dict_['EXPOSURE_DURATION'] / 1000.
         params['sampling'] = dict_['INSTRUMENT_MODE_ID']  # "FULL", "SUM2", or "SUM4"
         params['label_target'] = dict_['TARGET_NAME']
+        params['observation_id'] = dict_['OBSERVATION_ID']
 
         return params
 

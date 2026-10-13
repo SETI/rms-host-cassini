@@ -315,8 +315,8 @@ class CassiniVIMS(oops.Host):
             observations chosen by a slice or a tuple.
 
             Each observation has subfields `dict`, `host`, `instrument`, `detector`,
-            `sampling`, `label_target`, `filepath` and `basename`, and `data` unless
-            `astrometry` is True.
+            `sampling`, `label_target`, `observation_id`, `filepath` and `basename`, and
+            `data` unless `astrometry` is True.
 
         Raises:
             ValueError: If `fov` is given, or if `select` names neither channel.

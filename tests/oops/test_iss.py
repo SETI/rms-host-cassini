@@ -391,6 +391,7 @@ def test_snapshot_target(label_target: str, target: str) -> None:
 def test_snapshot_ring_target() -> None:
     obs = snapshot(OBSERVATION_ID='ISS_053RI_PHOTOMDRK002_PRIME')
     assert obs.target == 'SATURN_RING_PLANE'
+    assert obs.observation_id == 'ISS_053RI_PHOTOMDRK002_PRIME'
 
 
 @uses_iss
@@ -603,7 +604,7 @@ _INDEX_ROWS = [
      'SATURN', 'ISS_000SA_TEST001_PRIME'),
     ('COISS_2009', 'data/1484506648_1484573295/W1484506649_1.IMG', WAC_NAME,
      '2005-01-15T18:31:00.000', 500.0, 'SUM2', 'RED', 'CL2', '29 ELECTRONS PER DN',
-     'ERRIAPO', 'ISS_000SA_TEST001_PRIME'),
+     'ERRIAPO', 'ISS_000SA_TEST002_PRIME'),
 ]
 
 
@@ -669,6 +670,8 @@ def test_from_index_rows(index_snapshots: list[oops.observation.Snapshot]) -> No
     assert [obs.filter for obs in index_snapshots] == ['GRN', 'RED']
     assert [obs.gain_mode for obs in index_snapshots] == [3, 2]
     assert [obs.target for obs in index_snapshots] == ['SATURN', 'ERRIAPUS']
+    assert [obs.observation_id for obs in index_snapshots] == [
+        'ISS_000SA_TEST001_PRIME', 'ISS_000SA_TEST002_PRIME']
 
 
 def test_from_index_times(index_snapshots: list[oops.observation.Snapshot]) -> None:

@@ -182,8 +182,8 @@ class CassiniUVIS(oops.Host):
 
             Each observation has subfields `dict`, `host`, `instrument`, `detector`,
             `product_type`, `line_window`, `line_bin`, `band_window`, `band_bin`,
-            `samples`, `label_target`, `filepath` and `basename`; `sampling` unless it is
-            a TIME_SERIES; and `data` unless `astrometry` is True.
+            `samples`, `label_target`, `observation_id`, `filepath` and `basename`;
+            `sampling` unless it is a TIME_SERIES; and `data` unless `astrometry` is True.
 
         Raises:
             IndexError: If an index in `select` is out of range.
