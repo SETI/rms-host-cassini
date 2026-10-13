@@ -2,7 +2,8 @@ coverage:
   status:
     project:
       default:
-        target: 90%
+        # Must match fail_under in pyproject.toml.
+        target: 65%
     patch:
       default:
         target: 90%
