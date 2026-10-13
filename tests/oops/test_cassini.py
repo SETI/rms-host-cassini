@@ -14,7 +14,8 @@ from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
 
-from host_cassini.oops._cassini import _apply_select, _Cassini
+from host_cassini.oops._cassini import (_apply_select, _Cassini, _cassini_obs_id_code,
+                                        _fix_cassini_ring_target)
 
 ##########################################################################################
 # Mission constants
@@ -492,5 +493,44 @@ def test_apply_select_errors(select: Any, error: type[Exception], message: str) 
 def test_apply_select_without_names() -> None:
     with pytest.raises(ValueError, match="unrecognized select name: 'first'"):
         _apply_select(_ITEMS, 'first')
+
+##########################################################################################
+# _fix_cassini_ring_target()
+##########################################################################################
+
+
+@pytest.mark.parametrize(('observation_id', 'tstart', 'expected'), [
+    ('ISS_053RI_PHOTOMDRK002_PRIME', _Cassini.TOUR, 'SATURN_RING_PLANE'),
+    ('ISS_C23RG_SPOKES001_PRIME', _Cassini.TOUR, 'SATURN_RING_PLANE'),
+    ('ISS_C23RA_RINGS001_PRIME', _Cassini.TOUR - 1., 'JUPITER_RING_PLANE'),
+    ('ISS_053EN_ENCELADUS001_PRIME', _Cassini.TOUR, 'ENCELADUS'),
+    ('ISS_053RH_TEST001_PRIME', _Cassini.TOUR, 'ENCELADUS'),
+    ('ISS_053RI', _Cassini.TOUR, 'ENCELADUS'),
+    ('', _Cassini.TOUR, 'ENCELADUS'),
+], ids=['ring-RI', 'ring-RG', 'jupiter-ring', 'not-ring', 'RH-not-ring', 'too-short',
+        'empty'])
+def test_fix_target(observation_id: str, tstart: float, expected: str) -> None:
+    dict_ = {'OBSERVATION_ID': observation_id}
+    assert _fix_cassini_ring_target('ENCELADUS', dict_, tstart) == expected
+
+
+def test_fix_target_without_observation_id() -> None:
+    target = _fix_cassini_ring_target('ENCELADUS', {}, _Cassini.TOUR)
+    assert target == 'ENCELADUS'
+
+##########################################################################################
+# _cassini_obs_id_code()
+##########################################################################################
+
+
+@pytest.mark.parametrize(('obs_id', 'expected'), [
+    ('ISS_053RI_PHOTOMDRK002_PRIME', 'PHOTOMDRK'),
+    ('UVIS_034RI_ALPVIROCC001_PRIME', 'ALPVIROCC'),
+    ('VIMS_000SA_TEST001_PRIME', 'TEST'),
+    ('ISS_053RI', ''),
+    ('NAC_053RI_PHOTOMDRK002_PRIME', ''),
+], ids=['iss', 'uvis', 'vims', 'too-short', 'other-instrument'])
+def test_cassini_obs_id_code(obs_id: str, expected: str) -> None:
+    assert _cassini_obs_id_code(obs_id) == expected
 
 ##########################################################################################

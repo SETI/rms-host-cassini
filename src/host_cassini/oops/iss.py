@@ -10,7 +10,7 @@ from pdsparser import Pds3Label
 from vicar     import VicarImage
 
 import oops
-from ._cassini import _Cassini
+from ._cassini import _Cassini, _fix_cassini_ring_target
 
 __all__ = ['CassiniISS']
 
@@ -406,7 +406,7 @@ class CassiniISS(oops.Host):
             label_lightsource = oops.lightsource.star_lookup(label_target)
             label_target = 'NONE'
         else:
-            label_target = CassiniISS._fix_cassini_iss_target(label_target, dict_, tstart)
+            label_target = _fix_cassini_ring_target(label_target, dict_, tstart)
             label_lightsource = 'SUN'
 
         # Make sure the SPICE kernels are loaded; construct the frame
@@ -515,36 +515,6 @@ class CassiniISS(oops.Host):
         params['label_target'] = dict_['TARGET_NAME']
 
         return params
-
-    @staticmethod
-    def _fix_cassini_iss_target(target, dict_, tstart):
-        """The target of a ring observation, or the given target otherwise.
-
-        The observation is identified as a ring observation by the target code in its
-        OBSERVATION_ID, which has the form "ISS_<orbit><code>_<activity>_<suffix>" (e.g.,
-        "ISS_053RI_PHOTOMDRK002_PRIME"); the ring codes are RI and RA through RG.
-
-        Parameters:
-            target (str): The target name from the label, after repairs.
-            dict_ (dict): The label or index row, from which OBSERVATION_ID is read.
-            tstart (float): The observation start time in seconds TDB, which determines
-                whether a ring observation is of Jupiter's rings or Saturn's.
-
-        Returns:
-            str: "JUPITER_RING_PLANE" for a ring observation before the Saturn tour,
-            "SATURN_RING_PLANE" for one during it, and `target` for any other observation
-            or if OBSERVATION_ID is absent or not of the expected form.
-        """
-
-        parts = dict_.get('OBSERVATION_ID', '').split('_')
-        if len(parts) < 3:
-            return target
-        if parts[1][-2:] in {'RI', 'RA', 'RB', 'RC', 'RD', 'RE', 'RF', 'RG'}:
-            if tstart < _Cassini.TOUR:
-                return 'JUPITER_RING_PLANE'
-            return 'SATURN_RING_PLANE'
-
-        return target
 
     ######################################################################################
     # Detectors

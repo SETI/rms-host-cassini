@@ -9,6 +9,8 @@
 # pixel.
 ##########################################################################################
 
+import re
+
 import numpy as np
 from numpy.lib import stride_tricks
 
@@ -19,7 +21,8 @@ from filecache import FCPath
 from pdsparser import Pds3Label
 
 import oops
-from ._cassini import _apply_select, _build_observation, _Cassini
+from ._cassini import (_apply_select, _build_observation, _Cassini,
+                       _cassini_obs_id_code, _fix_cassini_ring_target)
 
 __all__ = ['CassiniVIMS']
 
@@ -79,6 +82,7 @@ _VIS_FULL_FOV = oops.fov.FlatFOV(_VIS_NORMAL_SCALE, oops.Pair((64,64)))
 # TARGET_NAME in a VIMS label -> the target body; "NONE" if no body was targeted
 _TARGET_NAME_REPAIRS = {
     'DARK SKY': 'NONE',
+    'DUST'    : 'NONE',
     'OTHER'   : 'NONE',
     'SKY'     : 'NONE',
     'UNK'     : 'NONE',
@@ -86,6 +90,15 @@ _TARGET_NAME_REPAIRS = {
 
 # These are star targets and need to be defined as LightSources
 _TARGET_STARS = {'FOMALHAUT', 'SPICA'}
+
+# These are repairs to star names embedded in the OBSERVATION_ID
+# A second value is an alternative name.
+_OBS_CODE_REPAIRS = {
+    'ALCENA'    : 'alf01 Cen',
+    'ALPBO'     : 'alf Boo',
+    'CWSTAR'    : 'CW Leo',
+    'GAMCRUETA' : 'gam Cru',
+}
 
 # Names for the `select` option of from_file() -> index in the returned (vis, ir) pair
 _CHANNELS = {'VIS': 0, 'IR': 1}
@@ -353,9 +366,9 @@ class CassiniVIMS(oops.Host):
         Returns:
             tuple[dict, FCPath, int]: (label, data_file, header_recs), where:
 
-            * `label`: A copy of `dict_` that has the cube's description in both
-              "QUBE" and "SPECTRAL_QUBE" and its non-structural keywords at the top
-              level, so that ISIS and PDS3 labels can be read the same way.
+            * `label`: A copy of `dict_` that has the cube's description in both "QUBE"
+              and "SPECTRAL_QUBE" and its non-structural keywords at the top level, so
+              that ISIS and PDS3 labels can be read the same way.
             * `data_file`: The path to the cube.
             * `header_recs`: The number of records that precede the cube's data.
         """
@@ -586,8 +599,16 @@ class CassiniVIMS(oops.Host):
         # Construct the Observation objects
         ##################################################################################
 
-        target_name = label['TARGET_NAME']
-        label_target = _TARGET_NAME_REPAIRS.get(target_name, target_name)
+        # Determine target and light source
+        label_target = _TARGET_NAME_REPAIRS.get(label['TARGET_NAME'],
+                                                label['TARGET_NAME'])
+        if label_target in _TARGET_STARS:
+            label_lightsource = oops.lightsource.star_lookup(label_target)
+            label_target = 'NONE'
+        else:
+            obs_id = label['OBSERVATION_ID']
+            label_lightsource = CassiniVIMS._star_from_obs_id(obs_id) or 'SUN'
+            label_target = _fix_cassini_ring_target(label_target, label, tstart)
 
         def build(obs_class, axes, cadence, fov, frame_id):
             params = {
@@ -596,7 +617,7 @@ class CassiniVIMS(oops.Host):
                 'path'        : 'CASSINI',
                 'frame'       : frame_id,
                 'target'      : label_target,
-                'lightsource' : 'SUN',
+                'lightsource' : label_lightsource,
                 'calibrations': [],         # TBD
             }
             return _build_observation(obs_class, axes, params, filepath, overrides)
@@ -693,6 +714,7 @@ class CassiniVIMS(oops.Host):
             obs.insert_subfield('detector', detector)
             obs.insert_subfield('sampling', sampling)
             obs.insert_subfield('label_target', label['TARGET_NAME'])
+            obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
             if data is not None:
                 obs.insert_subfield('data', data)
 
@@ -926,6 +948,42 @@ class CassiniVIMS(oops.Host):
         time = obs.uvt(obs.fov.nearest_uv(meshgrid.uv).swapxy())[1]
 
         return (meshgrid, time)
+
+    _OBS_CODE_CLEANUP = re.compile(r'(?:UR|)(.*?)(?:CAL|OCCA?B?)$')
+
+    @staticmethod
+    def _star_from_obs_id(obs_id):
+        """The StarSource from a Cassini Observation ID; None otherwise.
+
+        If the star is identified by a different name in the OBSERVATION ID, add this as
+        an `alt_name`.
+        """
+
+        # Extract the code, strip "UR", "OCC", etc.
+        obs_code = _cassini_obs_id_code(obs_id)
+        match = CassiniVIMS._OBS_CODE_CLEANUP.match(obs_code)
+        if not match:
+            return None
+        obs_code = match.group(1)
+
+        # Apply repairs for known issues
+        repaired = _OBS_CODE_REPAIRS.get(obs_code, obs_code)
+        if isinstance(repaired, tuple):
+            star_code, alt_name = repaired
+        else:
+            star_code, alt_name = (repaired, '')
+
+        # Construct the StarSource if possible
+        try:
+            star = oops.lightsource.star_lookup(star_code)
+        except KeyError:
+            return None
+
+        # Add an alternative name if any
+        if alt_name:
+            star.add_name(alt_name)
+
+        return star
 
     ######################################################################################
     # Detectors

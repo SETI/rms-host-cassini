@@ -3,6 +3,7 @@
 ##########################################################################################
 
 import numbers
+import re
 
 import numpy as np
 
@@ -514,5 +515,51 @@ def _build_observation(obs_class, axes, params, filepath, overrides):
         tstart = params.pop('cadence')
         return obs_class(axes, tstart, None, **params)
     return obs_class(axes, **params)
+
+
+_OBS_CODE_PATTERN = re.compile(r'(?:ISS|UVIS|VIMS)_\d\d\w\w\w_(.*?)\d\d\d_\w+$')
+
+
+def _cassini_obs_id_code(obs_id):
+    """The observation code from a Cassini Observation ID.
+
+    This is the third element in the OBSERVATION_ID without the trailing three digits.
+    """
+
+    match = _OBS_CODE_PATTERN.match(obs_id)
+    if not match:
+        return ''
+
+    return match.group(1)
+
+
+def _fix_cassini_ring_target(target, dict_, tstart):
+    """The target of a ring observation, or the given target otherwise.
+
+    For ISS and VIMS, an observation is identified as a ring observation by the target
+    code in its OBSERVATION_ID, which has the form "ISS_<orbit><code>_<activity>_<suffix>"
+    (e.g., "ISS_053RI_PHOTOMDRK002_PRIME"); the ring codes are RI and RA through RG.
+
+    Parameters:
+        target (str): The target name from the label, after repairs.
+        dict_ (dict): The label or index row, from which OBSERVATION_ID is read.
+        tstart (float): The observation start time in seconds TDB, which determines
+            whether a ring observation is of Jupiter's rings or Saturn's.
+
+    Returns:
+        str: "JUPITER_RING_PLANE" for a ring observation before the Saturn tour,
+        "SATURN_RING_PLANE" for one during it, and `target` for any other observation
+        or if OBSERVATION_ID is absent or not of the expected form.
+    """
+
+    parts = dict_.get('OBSERVATION_ID', '').split('_')
+    if len(parts) < 3:
+        return target
+    if parts[1][-2:] in {'RI', 'RA', 'RB', 'RC', 'RD', 'RE', 'RF', 'RG'}:
+        if tstart < _Cassini.TOUR:
+            return 'JUPITER_RING_PLANE'
+        return 'SATURN_RING_PLANE'
+
+    return target
 
 ##########################################################################################

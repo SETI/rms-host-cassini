@@ -324,6 +324,25 @@ def test_target_from_label(tmp_path: pathlib.Path, target_name: str, target: str
     assert [obs.lightsource for obs in pair] == ['SUN', 'SUN']
 
 
+@pytest.mark.parametrize(('obs_id', 'star'), [
+    ('VIMS_000SA_ALPBOOCC001_PRIME', 'alf Boo'),
+    ('VIMS_000SA_URGAMCRUETACAL001_PRIME', 'gam Cru'),
+], ids=['occultation', 'repaired'])
+def test_star_lightsource_from_observation_id(tmp_path: pathlib.Path, obs_id: str,
+                                              star: str) -> None:
+    pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path, OBSERVATION_ID=obs_id))
+    source = oops.lightsource.star_lookup(star)
+    assert [obs.lightsource for obs in pair] == [source, source]
+    assert [obs.observation_id for obs in pair] == [obs_id, obs_id]
+
+
+def test_star_target_from_label(tmp_path: pathlib.Path) -> None:
+    pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path, TARGET_NAME='SPICA'))
+    source = oops.lightsource.star_lookup('SPICA')
+    assert [obs.target for obs in pair] == ['NONE', 'NONE']
+    assert [obs.lightsource for obs in pair] == [source, source]
+
+
 @pytest.mark.usefixtures('saturn_path')
 def test_tracker_follows_label_target(tmp_path: pathlib.Path) -> None:
     pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path), tracker='midtime')

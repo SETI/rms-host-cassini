@@ -57,6 +57,7 @@ def label_keywords(product_id: str, **changes: Any) -> dict[str, Any]:
         'INSTRUMENT_HOST_NAME': 'CASSINI_ORBITER',
         'INSTRUMENT_ID'       : 'UVIS',
         'TARGET_NAME'         : 'SATURN',
+        'OBSERVATION_ID'      : 'UVIS_000SA_TEST001_PRIME',
         'INTEGRATION_DURATION': 2.,
         'SLIT_STATE'          : 'HIGH_RESOLUTION',
     }
@@ -339,6 +340,25 @@ def test_target_from_label(tmp_path: pathlib.Path, target_name: str, target: str
     assert obs.target == target
     assert obs.label_target == target_name
     assert obs.lightsource == 'SUN'
+
+
+@pytest.mark.parametrize(('obs_id', 'star'), [
+    ('UVIS_034RI_ALPVIROCC001_PRIME', 'alf Vir'),
+    ('UVIS_034RI_URZETAORIOCC001_PRIME', 'zet Ori'),
+    ('UVIS_034RI_205839TI001_PRIME', 'b Cen'),
+], ids=['occultation', 'repaired', 'repaired-with-alt-name'])
+def test_star_lightsource_from_observation_id(tmp_path: pathlib.Path, obs_id: str,
+                                              star: str) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, OBSERVATION_ID=obs_id))
+    assert obs.lightsource is oops.lightsource.star_lookup(star)
+    assert obs.observation_id == obs_id
+
+
+def test_star_lightsource_gets_alt_name_from_observation_id(
+        tmp_path: pathlib.Path) -> None:
+    CassiniUVIS.from_file(write_qube(tmp_path,
+                                     OBSERVATION_ID='UVIS_034RI_205839OCC001_PRIME'))
+    assert 'SAO 205839' in oops.lightsource.star_lookup('b Cen').alt_names
 
 
 @pytest.mark.usefixtures('saturn_path')

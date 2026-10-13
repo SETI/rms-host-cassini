@@ -40,6 +40,9 @@ two published `.pyi` stubs and `stubtest`. Ignore those until this repo has the 
   until `host_cassini.oops` (or its module) is imported. VIMS and UVIS build their
   observations through `_build_observation()` in `oops/_cassini.py`, which applies the
   standard `oops.Host` overrides, and apply `select` through `_apply_select()` there.
+  The OBSERVATION_ID helpers shared by the instruments, `_cassini_obs_id_code()` and
+  `_fix_cassini_ring_target()`, live there too. Keep them out of `oops/__init__.py`,
+  which the instrument modules can't import from without a circular import.
 - TARGET_NAME repairs are per instrument: each module keeps its own
   `_TARGET_NAME_REPAIRS`. Don't merge them into `_cassini.py`.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so

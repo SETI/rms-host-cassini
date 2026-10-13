@@ -3,6 +3,7 @@
 ##########################################################################################
 
 import numbers
+import re
 
 import numpy as np
 import julian
@@ -10,21 +11,43 @@ import julian
 from filecache import FCPath
 
 import oops
-from ._cassini import _apply_select, _build_observation, _Cassini
+from ._cassini import (_apply_select, _build_observation, _Cassini,
+                       _cassini_obs_id_code)
 
 __all__ = ['CassiniUVIS']
 
 _DEBUG = False      # True to assert that the data array must have null values outside the
                     # active windows
 
-_ARRAY_NULL = 65535 # Incorrectly -1 in many labels
+_ARRAY_NULL = 65535  # Incorrectly -1 in many labels
 
 # TARGET_NAME in a UVIS label -> the target body; "NONE" if no body was targeted
 _TARGET_NAME_REPAIRS = {
-    'N/A' : 'NONE',
-    'STAR': 'NONE',
-    'SKY' : 'NONE',
-    'UNK' : 'NONE',
+    'AG'        : 'AEGAEON',
+    'ATLAS:'    : 'ATLAS',
+    'CALIB'     : 'NONE',
+    'DA'        : 'DAPHNIS',
+    'IPH'       : 'NONE',
+    'ME'        : 'METHONE',
+    'N/A'       : 'NONE',
+    'PL'        : 'PALLENE',
+    'PO'        : 'POLYDEUCES',
+    'SKY'       : 'NONE',
+    'SOLAR WIND': 'NONE',
+    'STAR'      : 'NONE',
+    'UNK'       : 'NONE',
+}
+
+# These are repairs to star names embedded in the OBSERVATION_ID
+# A second value is an alternative name.
+_OBS_CODE_REPAIRS = {
+    '205839'    : ('b Cen', 'SAO 205839'),
+    'ALPCRUSA'  : 'ALPCRU',
+    'BETCENSA'  : 'BETCRU',
+    'CWLEON'    : 'CW Leo',
+    'SAKAPCEN'  : 'KAPCEN',
+    'SPICARAST' : 'SPICA',
+    'ZETAORI'   : 'ZETORI',
 }
 
 # Map NAIF body names to (detector, resolution)
@@ -581,13 +604,14 @@ class CassiniUVIS(oops.Host):
         """
 
         target = _TARGET_NAME_REPAIRS.get(label['TARGET_NAME'], label['TARGET_NAME'])
+        lightsource = CassiniUVIS._star_from_obs_id(label['OBSERVATION_ID']) or 'SUN'
         return {
             'cadence'     : cadence,
             'fov'         : fov,
             'path'        : 'CASSINI',
             'frame'       : frame_id,
             'target'      : target,
-            'lightsource' : 'SUN',
+            'lightsource' : lightsource,
             'calibrations': [],         # TBD
         }
 
@@ -619,13 +643,12 @@ class CassiniUVIS(oops.Host):
             obs.insert_subfield('sampling', sampling)
         obs.insert_subfield('product_type', product_type)
         obs.insert_subfield('label_target', label['TARGET_NAME'])
+        obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
 
         obs.insert_subfield('line_window', line_window)
         obs.insert_subfield('line_bin', line_bin)
-
         obs.insert_subfield('band_window', band_window)
         obs.insert_subfield('band_bin', band_bin)
-
         obs.insert_subfield('samples', samples)
 
         if array is not None:
@@ -656,6 +679,42 @@ class CassiniUVIS(oops.Host):
             local_path = data_filepath.retrieve()
 
         return np.fromfile(local_path, sep='', dtype=dtype)
+
+    _OBS_CODE_CLEANUP = re.compile(r'(?:UR|)(.*?)(?:OCC|TI|V1|RDI|TK[ABC]|)$')
+
+    @staticmethod
+    def _star_from_obs_id(obs_id):
+        """The StarSource from a Cassini Observation ID; None otherwise.
+
+        If the star is identified by a different name in the OBSERVATION ID, add this as
+        an `alt_name`.
+        """
+
+        # Extract the code, strip "UR", "OCC", etc.
+        obs_code = _cassini_obs_id_code(obs_id)
+        match = CassiniUVIS._OBS_CODE_CLEANUP.match(obs_code)
+        if not match:
+            return None
+        obs_code = match.group(1)
+
+        # Apply repairs for known issues
+        repaired = _OBS_CODE_REPAIRS.get(obs_code, obs_code)
+        if isinstance(repaired, tuple):
+            star_code, alt_name = repaired
+        else:
+            star_code, alt_name = (repaired, '')
+
+        # Construct the StarSource if possible
+        try:
+            star = oops.lightsource.star_lookup(star_code)
+        except KeyError:
+            return None
+
+        # Add an alternative name if any
+        if alt_name:
+            star.add_name(alt_name)
+
+        return star
 
     ######################################################################################
     # Detectors

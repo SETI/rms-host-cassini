@@ -170,30 +170,6 @@ def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
     assert CassiniISS._detect_in_row(row) is expected
 
 ##########################################################################################
-# _fix_cassini_iss_target()
-##########################################################################################
-
-
-@pytest.mark.parametrize(('observation_id', 'tstart', 'expected'), [
-    ('ISS_053RI_PHOTOMDRK002_PRIME', _Cassini.TOUR, 'SATURN_RING_PLANE'),
-    ('ISS_C23RG_SPOKES001_PRIME', _Cassini.TOUR, 'SATURN_RING_PLANE'),
-    ('ISS_C23RA_RINGS001_PRIME', _Cassini.TOUR - 1., 'JUPITER_RING_PLANE'),
-    ('ISS_053EN_ENCELADUS001_PRIME', _Cassini.TOUR, 'ENCELADUS'),
-    ('ISS_053RH_TEST001_PRIME', _Cassini.TOUR, 'ENCELADUS'),
-    ('ISS_053RI', _Cassini.TOUR, 'ENCELADUS'),
-    ('', _Cassini.TOUR, 'ENCELADUS'),
-], ids=['ring-RI', 'ring-RG', 'jupiter-ring', 'not-ring', 'RH-not-ring', 'too-short',
-        'empty'])
-def test_fix_target(observation_id: str, tstart: float, expected: str) -> None:
-    dict_ = {'OBSERVATION_ID': observation_id}
-    assert CassiniISS._fix_cassini_iss_target('ENCELADUS', dict_, tstart) == expected
-
-
-def test_fix_target_without_observation_id() -> None:
-    target = CassiniISS._fix_cassini_iss_target('ENCELADUS', {}, _Cassini.TOUR)
-    assert target == 'ENCELADUS'
-
-##########################################################################################
 # _initialize()
 ##########################################################################################
 
