@@ -117,11 +117,11 @@ def test_package_exposes_host(module: Any) -> None:
     assert module.CassiniISS is iss.CassiniISS
 
 
-# Prints whether oops, host_cassini.oops.iss and host_cassini.spyceman are loaded after
-# importing host_cassini, and again after its CassiniISS is used.
+# Prints whether oops and host_cassini.oops.iss are loaded after importing host_cassini,
+# and again after its CassiniISS is used.
 _LAZY_IMPORT_SCRIPT = """
 import sys
-names = ('oops', 'host_cassini.oops.iss', 'host_cassini.spyceman')
+names = ('oops', 'host_cassini.oops.iss')
 import host_cassini
 print(*(name in sys.modules for name in names))
 from host_cassini import CassiniISS
@@ -136,7 +136,7 @@ def test_host_is_imported_lazily() -> None:
     env['PYTHONPATH'] = os.pathsep.join([str(src), env.get('PYTHONPATH', '')])
     result = subprocess.run([sys.executable, '-c', _LAZY_IMPORT_SCRIPT], env=env,
                             capture_output=True, text=True, check=True)
-    assert result.stdout.splitlines() == ['False False False', 'True True False', 'True']
+    assert result.stdout.splitlines() == ['False False', 'True True', 'True']
 
 
 def test_unknown_attribute() -> None:

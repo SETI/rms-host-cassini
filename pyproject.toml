@@ -140,8 +140,6 @@ disable_error_code = ["attr-defined"]
 target-version = "py311"
 # Must match max-line-length in .flake8.
 line-length = 90
-# The spyceman support is not yet linted.
-extend-exclude = ["src/host_cassini/spyceman"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -185,9 +183,8 @@ dictionary = ".codespell-dictionary.txt,-"
 # `optical-centre` is one unknown token, and -- because this project quotes
 # strings with single quotes -- so is every string literal, `'colour'` included.
 regex = "[a-zA-Z]+"
-# The spyceman support is not yet spell-checked. *.egg-info holds the build metadata,
-# whose commit hashes can read as misspellings.
-skip = "*/spyceman/*,*.egg-info,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
+# *.egg-info holds the build metadata, whose commit hashes can read as misspellings.
+skip = "*.egg-info,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
 
 [tool.pymarkdown.extensions.front-matter]
 # The rules and skills under .claude/ open with a YAML front-matter block, which would

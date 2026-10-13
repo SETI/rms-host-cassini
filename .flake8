@@ -3,8 +3,6 @@
 # indent checks come from `flake8 --select=E12,E13`.
 [flake8]
 max-line-length: 90
-# The spyceman support is not yet linted.
-extend-exclude = src/host_cassini/spyceman
 extend-ignore =
     # E114 Indentation is not a multiple of four (comment)
     # E116 Unexpected indentation (comment)

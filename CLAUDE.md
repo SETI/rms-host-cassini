@@ -35,7 +35,7 @@ those until this repo has the equivalent.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
-- Coverage has no `fail_under` yet: `spyceman/` has no tests, and the rest is at 87%.
+- Coverage has no `fail_under` yet: it is at 87%, held down by `vims.py` at 70%.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
   fakes for every test, so new tests get this automatically.
 
@@ -54,9 +54,8 @@ those until this repo has the equivalent.
 - TARGET_NAME repairs are per instrument: each module keeps its own
   `_TARGET_NAME_REPAIRS`. Don't merge them into `_cassini.py`.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
-  `host_cassini.spyceman` works without oops and `CassiniISS` without spyceman. Keep any
-  import of either subpackage out of `host_cassini/__init__.py`.
-- Don't edit `host_cassini/spyceman/`.
+  that importing `host_cassini` does not import oops. Keep any import of
+  `host_cassini.oops` out of `host_cassini/__init__.py`.
 - `_Cassini` in `host_cassini/oops/_cassini.py` is never instantiated; all its state
   lives in class attributes. CK and SPK kernels load lazily by "month": the 1997-10-01 to
   2017-10-01 mission is split into 240 equal periods, each padded by `SLOP`. Before `TOUR`
