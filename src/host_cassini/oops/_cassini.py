@@ -343,8 +343,6 @@ class _Cassini:
     # Routines for managing text kernel information
     ######################################################################################
 
-    ### TODO: finish these routines...
-
     @staticmethod
     def spice_instrument_kernel(inst, asof=None):
         """A dictionary containing the Instrument Kernel information.
