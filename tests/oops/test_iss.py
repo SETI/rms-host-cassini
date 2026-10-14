@@ -158,6 +158,15 @@ def test_detection(label: dict[str, str], expected: bool) -> None:
     assert CassiniISS._detect_in_vicar(label) is expected
 
 
+@pytest.mark.parametrize(('label', 'expected'), [
+    ({'^IMAGE_INDEX_TABLE': 'index.tab', 'IMAGE_INDEX_TABLE': {}}, None),
+    ({'^INDEX_TABLE': 'index.tab', 'INDEX_TABLE': {}}, False),
+    ({}, False),
+], ids=['image-index-table', 'index-table', 'empty'])
+def test_detection_in_index(label: dict[str, Any], expected: bool | None) -> None:
+    assert CassiniISS._detect_in_index(label) is expected
+
+
 @pytest.mark.parametrize(('row', 'expected'), [
     ({'INSTRUMENT_HOST_NAME': 'CASSINI ORBITER', 'INSTRUMENT_NAME': NAC_NAME}, True),
     ({'INSTRUMENT_HOST_NAME': 'CASSINI ORBITER', 'INSTRUMENT_NAME': WAC_NAME}, True),
@@ -605,6 +614,7 @@ def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
 _INDEX_COLUMNS = [
     ('VOLUME_ID', 'CHARACTER', 10),
     ('FILE_SPECIFICATION_NAME', 'CHARACTER', 45),
+    ('INSTRUMENT_HOST_NAME', 'CHARACTER', 15),
     ('INSTRUMENT_NAME', 'CHARACTER', 38),
     ('START_TIME', 'CHARACTER', 23),
     ('EXPOSURE_DURATION', 'ASCII_REAL', 10),
@@ -617,10 +627,12 @@ _INDEX_COLUMNS = [
 ]
 
 _INDEX_ROWS = [
-    ('COISS_2009', 'data/1484506648_1484573295/N1484506648_1.IMG', NAC_NAME,
+    ('COISS_2009', 'data/1484506648_1484573295/N1484506648_1.IMG', 'CASSINI ORBITER',
+     NAC_NAME,
      '2005-01-15T18:30:00.000', 1000.0, 'FULL', 'CL1', 'GRN', '12 ELECTRONS PER DN',
      'SATURN', 'ISS_000SA_TEST001_PRIME'),
-    ('COISS_2009', 'data/1484506648_1484573295/W1484506649_1.IMG', WAC_NAME,
+    ('COISS_2009', 'data/1484506648_1484573295/W1484506649_1.IMG', 'CASSINI ORBITER',
+     WAC_NAME,
      '2005-01-15T18:31:00.000', 500.0, 'SUM2', 'RED', 'CL2', '29 ELECTRONS PER DN',
      'ERRIAPO', 'ISS_000SA_TEST002_PRIME'),
 ]
@@ -646,7 +658,7 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
 
     text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
             f'RECORD_BYTES = {row_bytes}', f'FILE_RECORDS = {len(_INDEX_ROWS)}',
-            '^INDEX_TABLE = "INDEX.TAB"', 'OBJECT = INDEX_TABLE',
+            '^IMAGE_INDEX_TABLE = "INDEX.TAB"', 'OBJECT = IMAGE_INDEX_TABLE',
             '  INTERCHANGE_FORMAT = ASCII', f'  ROWS = {len(_INDEX_ROWS)}',
             f'  COLUMNS = {len(_INDEX_COLUMNS)}', f'  ROW_BYTES = {row_bytes}']
     start = 1
@@ -656,7 +668,7 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
                  f'    START_BYTE = {start + offset}', f'    BYTES = {width}',
                  '  END_OBJECT = COLUMN']
         start += field_width + 1
-    text += ['END_OBJECT = INDEX_TABLE', 'END', '']
+    text += ['END_OBJECT = IMAGE_INDEX_TABLE', 'END', '']
     path = directory / 'INDEX.LBL'
     path.write_text('\r\n'.join(text))
     return path
@@ -709,10 +721,12 @@ def test_from_index_rejects_per_row_options(tmp_path: pathlib.Path, option: str)
         CassiniISS.from_index(write_index(tmp_path), **{option: 'anything'})
 
 
-def test_host_from_index_passes_parallel(tmp_path: pathlib.Path,
-                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    # Identify the test index as Cassini ISS from its label alone.
-    monkeypatch.setattr(CassiniISS, '_detect_in_index', staticmethod(lambda label: True))
+def test_host_from_index_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
+    snapshots = oops.Host.from_index(write_index(tmp_path))
+    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
+
+
+def test_host_from_index_passes_parallel(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match=r'disallowed Cassini ISS.from_index\(\) option '
                                          'parallel'):
         oops.Host.from_index(write_index(tmp_path), parallel='anything')
