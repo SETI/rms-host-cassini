@@ -12,6 +12,7 @@ from typing import Any, cast
 import julian
 import numpy as np
 import oops
+from pdsparser import Pds3Label
 import pytest
 import vicar
 from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
@@ -158,13 +159,26 @@ def test_detection(label: dict[str, str], expected: bool) -> None:
     assert CassiniISS._detect_in_vicar(label) is expected
 
 
-@pytest.mark.parametrize(('label', 'expected'), [
-    ({'^IMAGE_INDEX_TABLE': 'index.tab', 'IMAGE_INDEX_TABLE': {}}, None),
-    ({'^INDEX_TABLE': 'index.tab', 'INDEX_TABLE': {}}, False),
-    ({}, False),
-], ids=['image-index-table', 'index-table', 'empty'])
-def test_detection_in_index(label: dict[str, Any], expected: bool | None) -> None:
-    assert CassiniISS._detect_in_index(label) is expected
+_INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = IMAGE_INDEX_TABLE',
+                'END_OBJECT = IMAGE_INDEX_TABLE', 'END', '']
+
+
+@pytest.mark.parametrize(('relpath', 'expected'), [
+    ('COISS_2001/index/index.lbl', True),
+    ('COISS_2999_index.lbl', True),
+    ('index/index.lbl', None),
+    ('coiss_2001/index/index.lbl', True),
+], ids=['coiss-directory', 'coiss-file', 'no-coiss', 'lowercase'])
+def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
+                            expected: bool | None) -> None:
+    path = tmp_path / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('\r\n'.join(_INDEX_LABEL))
+    assert CassiniISS._detect_in_index(Pds3Label(path)) is expected
+
+
+def test_detection_in_index_without_a_path() -> None:
+    assert CassiniISS._detect_in_index(Pds3Label(_INDEX_LABEL[:-1])) is None
 
 
 @pytest.mark.parametrize(('row', 'expected'), [
@@ -723,6 +737,13 @@ def test_from_index_rejects_per_row_options(tmp_path: pathlib.Path, option: str)
 
 def test_host_from_index_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
     snapshots = oops.Host.from_index(write_index(tmp_path))
+    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
+
+
+def test_host_from_index_dispatches_by_coiss_path(tmp_path: pathlib.Path) -> None:
+    directory = tmp_path / 'COISS_2001' / 'index'
+    directory.mkdir(parents=True)
+    snapshots = oops.Host.from_index(write_index(directory))
     assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
 
 

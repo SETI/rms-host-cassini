@@ -543,25 +543,22 @@ class CassiniISS(oops.Host):
 
     @staticmethod
     def _detect_in_index(label):
-        """Whether the given index label could describe Cassini ISS data.
-
-        A Cassini ISS index label describes its table as an IMAGE_INDEX_TABLE object, but
-        records nothing else that identifies the instrument, so the label alone can only
-        rule Cassini ISS out.
+        """Whether the given index label describes Cassini ISS data.
 
         Parameters:
             label (Pds3Label): The parsed PDS3 label of an index file.
 
         Returns:
-            bool | None: None if the label has an IMAGE_INDEX_TABLE object, meaning the
-            host must be inferred from the index rows; False otherwise.
+            bool | None: True if the label was read from a file whose path contains
+            "COISS", in any case; otherwise None, meaning the host must be inferred from
+            the index rows.
         """
 
-        # Other missions' indexes (e.g., Voyager ISS) use INDEX_TABLE, and some (e.g.,
-        # Galileo SSI) use IMAGE_INDEX_TABLE too, so the rows decide
-        if 'IMAGE_INDEX_TABLE' in label:
-            return None
-        return False
+        # The label itself records nothing that identifies the instrument, but the PDS
+        # volume and RMS Node metadata names all start with COISS
+        if label.filepath is not None and 'COISS' in label.filepath.as_posix().upper():
+            return True
+        return None
 
     @staticmethod
     def _detect_in_row(row_dict):
