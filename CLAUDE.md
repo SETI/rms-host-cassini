@@ -35,8 +35,8 @@ those until this repo has the equivalent.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
-- Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project
-  target in `codecov.yml`); it is at 87%, held down by `vims.py` at 70%. The ubuntu /
+- Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project and
+  patch targets in `codecov.yml`); it is at 87%, held down by `vims.py` at 70%. The ubuntu /
   Python 3.13 CI job uploads to Codecov and fails if the upload fails. The upload
   authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with

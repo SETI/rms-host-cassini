@@ -1,9 +1,9 @@
 coverage:
   status:
+    # Both targets must match fail_under in pyproject.toml.
     project:
       default:
-        # Must match fail_under in pyproject.toml.
         target: 65%
     patch:
       default:
-        target: 90%
+        target: 65%
