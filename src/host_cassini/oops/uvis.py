@@ -63,7 +63,7 @@ _ABBREVS = {
     'CASSINI_UVIS_HDAC'   : ('HDAC',    ''),
 }
 
-# Map detector to NAIF frame ID
+# Map detector to SPICE frame name
 _FRAME_NAMES = {
     'FUV'    : 'CASSINI_UVIS_FUV',
     'EUV'    : 'CASSINI_UVIS_EUV',
@@ -73,8 +73,20 @@ _FRAME_NAMES = {
     'HDAC'   : 'CASSINI_UVIS_HDAC',
 }
 
-# Map NAIF body names to the NAIF IDs that key them in the instrument kernel
-_NAIF_IDS = {
+# Map SPICE frame name to its frame ID in the Cassini frame kernel
+_FRAME_IDS = {
+    'CASSINI_UVIS_FUV'    : -82840,
+    'CASSINI_UVIS_EUV'    : -82842,
+    'CASSINI_UVIS_SOLAR'  : -82843,
+    'CASSINI_UVIS_HSP'    : -82844,
+    'CASSINI_UVIS_HDAC'   : -82845,
+    'CASSINI_UVIS_SOL_OFF': -82849,
+}
+
+# Map NAIF body names to the instrument codes that key them in the instrument kernel.
+# SOL_OFF uses the SOLAR code, -82848: the instrument kernels before v06 do not define
+# -82849, and the two FOVs have the same size.
+_INSTRUMENT_IDS = {
     'CASSINI_UVIS_FUV_HI' : -82840,
     'CASSINI_UVIS_FUV_LO' : -82841,
     'CASSINI_UVIS_FUV_OCC': -82842,
@@ -85,8 +97,6 @@ _NAIF_IDS = {
     'CASSINI_UVIS_HDAC'   : -82847,
     'CASSINI_UVIS_SOLAR'  : -82848,
     'CASSINI_UVIS_SOL_OFF': -82848,
-    'CASSINI_UVIS_FUV'    : -82840,
-    'CASSINI_UVIS_EUV'    : -82842,
 }
 
 
@@ -742,7 +752,7 @@ class CassiniUVIS(oops.Host):
         obs.insert_subfield('spice_kernels', kernels)
         obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
         obs.insert_subfield('spice_frame_name', frame_name)
-        obs.insert_subfield('spice_frame_id', _NAIF_IDS[frame_name])
+        obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_name])
 
     @staticmethod
     def _load_data(filepath, body, dtype):
@@ -869,7 +879,7 @@ class CassiniUVIS(oops.Host):
         # Load the instrument kernel
         CassiniUVIS._INSTRUMENT_KERNEL = _Cassini.spice_instrument_kernel('UVIS')[0]
 
-        # The instrument kernel keys each detector by its NAIF ID rather than its name
+        # The instrument kernel keys each detector by its instrument code, not its name
         ins = CassiniUVIS._INSTRUMENT_KERNEL['INS']
 
         # Construct a flat FOV for each detector
@@ -877,7 +887,7 @@ class CassiniUVIS(oops.Host):
         for (key, (detector, resolution)) in _ABBREVS.items():
 
             # Get the FOV angles
-            info = ins[_NAIF_IDS[key]]
+            info = ins[_INSTRUMENT_IDS[key]]
 
             if info['FOV_SHAPE'] == 'RECTANGLE':
                 u_angle = 2. * info['FOV_CROSS_ANGLE'] * oops.RPD

@@ -341,6 +341,22 @@ def test_spectrum(tmp_path: pathlib.Path) -> None:
     assert obs.band_window == (100, 106)
     assert tuple(obs.fov.uv_shape.vals) == (1, 1)
 
+
+# The frame IDs are those of the Cassini frame kernel, not the instrument codes of the
+# UVIS instrument kernel.
+@pytest.mark.parametrize(('write', 'frame_name', 'frame_id'), [
+    (write_qube, 'CASSINI_UVIS_FUV', -82840),
+    (write_spectrum, 'CASSINI_UVIS_EUV', -82842),
+    (write_time_series, 'CASSINI_UVIS_HSP', -82844),
+    (lambda d: write_time_series(d, 'HDAC2005_001_00_00'), 'CASSINI_UVIS_HDAC', -82845),
+], ids=['qube', 'spectrum', 'hsp', 'hdac'])
+def test_spice_frame(tmp_path: pathlib.Path,
+                     write: Callable[[pathlib.Path], pathlib.Path], frame_name: str,
+                     frame_id: int) -> None:
+    obs = CassiniUVIS.from_file(write(tmp_path))
+    assert obs.spice_frame_name == frame_name
+    assert obs.spice_frame_id == frame_id
+
 ##########################################################################################
 # Options and dispatch
 ##########################################################################################
