@@ -14,8 +14,9 @@ from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
 
-from host_cassini.oops._cassini import (_apply_select, _Cassini, _cassini_obs_id_code,
-                                        _fix_cassini_ring_target)
+from host_cassini.oops._cassini import (_Cassini, _cassini_obs_id_code,
+                                        _fix_cassini_ring_target,
+                                        _pds3_options_with_defaults)
 
 ##########################################################################################
 # Mission constants
@@ -457,42 +458,25 @@ def test_no_kernels_reach_cspyce() -> None:
         cspyce.furnsh('x.bsp')
 
 ##########################################################################################
-# _apply_select()
+# _pds3_options_with_defaults()
 ##########################################################################################
 
-_ITEMS = ('a', 'b', 'c')
-_NAMES = {'FIRST': 0, 'LAST': 2}
+
+@pytest.mark.parametrize(('options', 'expected'), [
+    (None, {'method': 'fast', 'sources': False}),
+    ({}, {'method': 'fast', 'sources': False}),
+    ({'method': 'strict', 'sources': True}, {'method': 'strict', 'sources': True}),
+    ({'other': 1}, {'other': 1, 'method': 'fast', 'sources': False}),
+], ids=['none', 'empty', 'given', 'other-option'])
+def test_pds3_options_with_defaults(options: dict[str, Any] | None,
+                                    expected: dict[str, Any]) -> None:
+    assert _pds3_options_with_defaults(options) == expected
 
 
-@pytest.mark.parametrize(('select', 'expected'), [
-    (None, _ITEMS),
-    (1, 'b'),
-    (np.int64(-1), 'c'),
-    ('first', 'a'),
-    (slice(1, None), ('b', 'c')),
-    (('LAST', 0), ('c', 'a')),
-    ((slice(None, 2), 'last'), ('a', 'b', 'c')),
-    ((), ()),
-], ids=['none', 'index', 'numpy-index', 'name', 'slice', 'names', 'slice-and-name',
-        'empty'])
-def test_apply_select(select: Any, expected: Any) -> None:
-    assert _apply_select(_ITEMS, select, _NAMES) == expected
-
-
-@pytest.mark.parametrize(('select', 'error', 'message'), [
-    ('middle', ValueError, "unrecognized select name: 'middle'"),
-    (3, IndexError, 'tuple index out of range'),
-    (True, TypeError, 'invalid select: True'),
-    (((0,),), TypeError, r'invalid select item: \(0,\)'),
-], ids=['name', 'index', 'bool', 'nested-tuple'])
-def test_apply_select_errors(select: Any, error: type[Exception], message: str) -> None:
-    with pytest.raises(error, match=message):
-        _apply_select(_ITEMS, select, _NAMES)
-
-
-def test_apply_select_without_names() -> None:
-    with pytest.raises(ValueError, match="unrecognized select name: 'first'"):
-        _apply_select(_ITEMS, 'first')
+def test_pds3_options_with_defaults_copies_its_input() -> None:
+    options = {'method': 'loose'}
+    assert _pds3_options_with_defaults(options) is not options
+    assert options == {'method': 'loose'}
 
 ##########################################################################################
 # _fix_cassini_ring_target()

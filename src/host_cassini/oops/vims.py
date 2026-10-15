@@ -12,7 +12,7 @@
 import re
 
 import numpy as np
-from numpy.lib import stride_tricks
+from numpy.lib.stride_tricks import as_strided
 
 import cspyce
 import julian
@@ -21,8 +21,8 @@ from filecache import FCPath
 from pdsparser import Pds3Label
 
 import oops
-from ._cassini import (_apply_select, _build_observation, _Cassini,
-                       _cassini_obs_id_code, _fix_cassini_ring_target)
+from ._cassini import (_Cassini, _cassini_obs_id_code, _fix_cassini_ring_target,
+                       _pds3_options_with_defaults, _CMATRIX_ROTATION)
 
 __all__ = ['CassiniVIMS']
 
@@ -101,12 +101,13 @@ _OBS_CODE_REPAIRS = {
 }
 
 # Names for the `select` option of from_file() -> index in the returned (vis, ir) pair
-_CHANNELS = {'VIS': 0, 'IR': 1}
+_CHANNEL_NAMES = {'VIS': 0, 'IR': 1}
 
 # The SPICE frames of the VIS channel, the IR channel, and the IR channel's solar port
-_VIS_FRAME_ID    = 'CASSINI_VIMS_V'
-_IR_FRAME_ID     = 'CASSINI_VIMS_IR'
-_IR_SOL_FRAME_ID = 'CASSINI_VIMS_IR_SOL'
+_VIS_FRAME_NAME    = 'CASSINI_VIMS_V'
+_IR_FRAME_NAME     = 'CASSINI_VIMS_IR'
+_IR_SOL_FRAME_NAME = 'CASSINI_VIMS_IR_SOL'
+_FRAME_IDS = {_VIS_FRAME_NAME: -82370, _IR_FRAME_NAME: -82371, _IR_SOL_FRAME_NAME: -82372}
 
 ##########################################################################################
 # FMT files have fixed values
@@ -238,34 +239,22 @@ class CassiniVIMS(oops.Host):
     _initialized = False
 
     @staticmethod
-    def from_file(fileinfo, *, pds3_method='fast', select=None, astrometry=False,
-                  target=None, lightsource=None, path=None, frame=None, fov=None,
-                  calibrations=None, timeshift=None, navigation=None, parallel=None,
-                  tracker=None, **kwargs):
+    def from_file(fileinfo, *, pds3_options=None, select=None, astrometry=False,
+                  target=None, lightsource=None, path=None, frame=None, cadence=None,
+                  fov=None, calibrations=None, timeshift=None, navigation=None,
+                  tracker=None, parallel=None, **kwargs):
         """A pair of Observations based on a Cassini VIMS cube or its PDS3 label.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label): The path to a VIMS cube
                 in ISIS format, the path to its detached PDS3 label, or the parsed label.
-            pds3_method (str, optional): The method of parsing a PDS3 label. One of:
-
-                * "strict" performs strict parsing, which requires that the label conform
-                  to the full PDS3 standard.
-                * "loose" is similar to the above, but tolerates some common syntax
-                  errors.
-                * "compound" is similar to "loose", but it parses a "compound" label,
-                  i.e., one that might contain more than one "END" statement. This option
-                  is not supported for attached labels.
-                * "fast": uses a different parser, which executes ~30x faster than the
-                  above and handles all the most common aspects of the PDS3 standard.
-                  However, it is not guaranteed to provide an accurate parsing under all
-                  circumstances.
-
+            pds3_options (dict[str, Any], optional): Any keyword arguments and their
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             select (int | slice | str | tuple[int | slice | str, ...], optional): An
-                index, a slice, or a tuple of indices and slices to apply to the returned
+                index, slice, or tuple of indices and slices to apply to the returned
                 (vis, ir) pair. A channel can also be chosen by name, "VIS" or "IR"
-                (without regard to case). For example, `select=1` or `select='IR'`
-                returns only the IR observation.
+                (without regard to case). For example, `select=1` or `select='IR'` returns
+                only the IR observation.
             astrometry (bool, optional): True to specify that the returned Observations
                 will only be used for timing and astrometry. In this case, no data arrays
                 are read and returned in the Observations.
@@ -277,8 +266,10 @@ class CassiniVIMS(oops.Host):
                 observations, which is otherwise the Sun.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of both channels.
-            fov (oops.FOV, optional): Not supported, because the VIS and IR channels have
-                different FOVs; must be None.
+            cadence (oops.Cadence, optional): Override for the Cadence of the observation.
+            fov (oops.FOV, optional): Override for the default FOV of the observing
+                instrument. Note that this should only be used if either the IR or VIS
+                channel has been explicitly chosen using `select`.
             calibrations (oops.Calibration | list[oops.Calibration], optional): Override
                 for the calibration or list of calibrations.
             timeshift (tuple[float, str], optional): Assign a Fittable time shift to one
@@ -293,15 +284,15 @@ class CassiniVIMS(oops.Host):
                 wraps the default frame. Specify three angles to include a rotation about
                 the optic axis or two for a pointing offset without rotation. Use (0,0) or
                 (0,0,0) as the input if you have no starting guess.
-            parallel (Observation, optional): A parallel Observation (same origin and
-                time, different frame and FOV) relative to which each Observation has a
-                fixed offset.
             tracker (str, optional): Assign a TrackerFrame to each Observation, to ensure
                 that the target body remains at a fixed position within the FOV. Use one
                 of "start", "midtime", and "end", indicating the time within the
                 Observation at which the target body's calculated position within the FOV
                 is accurate.
                 Note that no more than one of `parallel` and `tracker` can be specified.
+            parallel (Observation, optional): A parallel Observation (same origin and
+                time, different frame and FOV) relative to which each Observation has a
+                fixed offset.
             **kwargs: Additional keyword arguments; they are accepted and ignored.
 
         Returns:
@@ -317,43 +308,112 @@ class CassiniVIMS(oops.Host):
             Each observation has subfields `dict`, `host`, `instrument`, `detector`,
             `sampling`, `label_target`, `observation_id`, `filepath` and `basename`, and
             `data` unless `astrometry` is True.
-
-        Raises:
-            ValueError: If `fov` is given, or if `select` names neither channel.
-            IndexError: If an index in `select` is out of range.
-            TypeError: If `select` has an invalid type.
-            OopsValueError: If the cube has an unsupported shape.
         """
-
-        # Check for unsupported options
-        if fov is not None:
-            raise ValueError('disallowed Cassini VIMS.from_file() option fov')
 
         CassiniVIMS._initialize()  # define everything the first time through; use
                                    # defaults unless _initialize() was called explicitly.
 
-        fileinfo = CassiniVIMS._read_fileinfo(fileinfo, formats='P',
-                                              astrometry=astrometry,
-                                              pds3_method=pds3_method)
+        # Default Pds3Label options are method="fast", sources=False
+        pds3_options = _pds3_options_with_defaults(pds3_options)
+
+        # Read the label and (maybe) data
+        fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
+                                            pds3_options=pds3_options)
         filepath = FCPath(fileinfo.filepath)
         (label, data_file, header_recs) = CassiniVIMS._standard_label(fileinfo.dict,
                                                                       filepath)
 
+        # Define the object(s)
         overrides = {
             'target'      : target,
             'lightsource' : lightsource,
             'path'        : path,
             'frame'       : frame,
+            'cadence'     : cadence,
+            'fov'         : fov,
             'calibrations': calibrations,
             'timeshift'   : timeshift,
             'navigation'  : navigation,
-            'parallel'    : parallel,
             'tracker'     : tracker,
+            'parallel'    : parallel,
         }
 
         pair = CassiniVIMS._make_observations(label, filepath, data_file, header_recs,
                                               astrometry=astrometry, overrides=overrides)
-        return _apply_select(pair, select, _CHANNELS)
+        return oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
+
+    @staticmethod
+    def from_index(filepath, *, supplement=None, label=None, row_dicts=None,
+                   pds3_options=None, filter=None, select=None, target=None,
+                   lightsource=None, path=None, frame=None, fov=None, calibrations=None,
+                   timeshift=None, navigation=None, tracker=None, parallel=None,
+                   **kwargs):
+        """A list of Observations, one for each row of a data file index.
+
+        Parameters:
+            filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
+                data file index.
+            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
+                of a supplemental index file. If provided, this file must have the same
+                records in the same order as the table described by `filepath`.
+            label (Pds3Label, optional): The PDS label of `filepath` if it has already
+                been read.
+            row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
+                row of the index, if `filepath` and `supplement` have already been read.
+            pds3_options (dict[str, Any], optional): Any keyword arguments and their
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
+            filter (dict[str, Any], optional): A dictionary of index column names and
+                their values or a set or tuple of values. If provided, only rows of the
+                index in which each named column equals the value, falls in the set of
+                values, or falls in a range defined by a tuple of two values, will be
+                included in the returned list.
+            select (int | slice | str | tuple[int | slice | str, ...]): An index, slice,
+                or tuple of indices and slices to apply to the returned array of
+                Observation objects. For example, if the file contains two Observations
+                but `select=1`, only the second Observation will be returned.
+                Alternatively, specify one or more host-specific names of the data arrays.
+            target (str | oops.Body, optional): Override for the default target Body of
+                every observation. Use "NONE" for inertial pointing, indicating that no
+                Solar System body was tracked.
+            lightsource (oops.LightSource, optional): Override for the default LightSource
+                of every observation.
+            path (str | oops.Path, optional): Override for the Path of the observer.
+            frame (str | oops.Frame, optional): Override for the Frame of the observing
+                instrument.
+            cadence (oops.Cadence, optional): Override for the Cadence of the observation.
+            fov (oops.FOV, optional): Override for the default FOV of the observing
+                instrument. Note that this should only be used if either the IR or VIS
+                channel has been explicitly chosen using `select`.
+            calibrations (oops.Calibration | list[oops.Calibration], optional): Override
+                for the calibration or list of calibrations.
+            timeshift (tuple[float, str], optional): Assign a Fittable time shift to one
+                or more attributes of the Observation. The first item is the initial time
+                shift in seconds. The second item is a string indicating which attributes
+                are to be time-shifted: "T" for the start/stop time, "P" for the path,
+                and/or "F" for the frame. If multiple letters are given, the time shifts
+                are coupled to whichever attribute is listed first.
+            navigation (tuple[float, ...], optional): Two or three rotation angles in
+                radians to apply to the frame in order to align the calculated geometry
+                with the observed geometry. In this case, a fittable Navigation frame
+                wraps the default frame. Specify three angles to include a rotation about
+                the optic axis or two for a pointing offset without rotation. Use (0,0) or
+                (0,0,0) as the input if you have no starting guess.
+            tracker (str, optional): Assign a TrackerFrame to the Observation, to ensure
+                that the target body remains at a fixed position within the FOV. Use one
+                of "start", "midtime", and "end", indicating the time within the
+                Observation at which the target body's calculated position within the FOV
+                is accurate.
+            parallel (Observation, optional): A parallel Observation (same origin and
+                time, different frame and FOV) relative to which this Observation has a
+                fixed offset.
+            **kwargs: Additional keyword arguments, ignored here except as noted below.
+
+        Returns:
+            list[Observation | ObsArray]: The list of Observations or arrays of
+            Observations, one for each filtered row of the index file.
+        """
+
+        raise NotImplementedError('CassiniVIMS.from_index() is not implemented')
 
     @staticmethod
     def _standard_label(dict_, filepath):
@@ -431,7 +491,8 @@ class CassiniVIMS(oops.Host):
         # Load any needed SPICE kernels
         tstart = julian.tdb_from_iso(label['START_TIME'])
         _Cassini.load_spks(tstart, tstart + 3600.)
-        if overrides['frame'] is None:
+        using_cks =  overrides['frame'] is None
+        if using_cks:
             _Cassini.load_cks(tstart, tstart + 3600.)
             CassiniVIMS._define_frames()
 
@@ -446,11 +507,10 @@ class CassiniVIMS(oops.Host):
         (samples, bands, lines) = qube_dict['CORE_ITEMS']
         assert bands in (352, 256, 96)
 
-        vis_data = None
-        ir_data = None
-        times = None
-
-        if not astrometry:
+        if astrometry:
+            arrays = (None, None)
+            times = None
+        else:
             (array, times) = CassiniVIMS._load_data_and_times(data_file, header_recs,
                                                               label)
             assert array.shape == (lines, samples, bands), 'incorrect array shape'
@@ -464,6 +524,7 @@ class CassiniVIMS(oops.Host):
             else:
                 vis_data = array
                 ir_data = None
+            arrays = (vis_data, ir_data)
 
         ##################################################################################
         # Define the FOVs
@@ -491,6 +552,7 @@ class CassiniVIMS(oops.Host):
 
         vis_sampling = label['SAMPLING_MODE_ID'][1].strip()  # handle ' NORMAL'
         ir_sampling  = label['SAMPLING_MODE_ID'][0].strip()
+        sampling = (vis_sampling, ir_sampling)
 
         # VIS FOV
         if vis_sampling == 'HI-RES':
@@ -542,7 +604,6 @@ class CassiniVIMS(oops.Host):
         # Define cadences based on header parameters
         ir_texp  = label['EXPOSURE_DURATION'][0] * 0.001 * _TIME_FACTOR
         vis_texp = label['EXPOSURE_DURATION'][1] * 0.001 * _TIME_FACTOR
-        vis_texp_nonzero = max(vis_texp, 1.e-8) # avoids divide-by-zero in cadences
 
         interframe_delay = label['INTERFRAME_DELAY_DURATION'] * 0.001 * _TIME_FACTOR
         interline_delay  = label['INTERLINE_DELAY_DURATION']  * 0.001 * _TIME_FACTOR
@@ -577,7 +638,7 @@ class CassiniVIMS(oops.Host):
             tstart = times[0]
 
         vis_header_cadence = oops.cadence.Metronome(tstart, length_stride,
-                                                    vis_texp_nonzero, swath_length)
+                                                    vis_texp, swath_length)
         ir_fast_cadence = oops.cadence.Metronome(tstart, ir_texp, ir_texp, swath_width)
 
         # At this point...
@@ -589,41 +650,17 @@ class CassiniVIMS(oops.Host):
         # Define the coordinate frames
         ##################################################################################
 
-        vis_frame_id = _VIS_FRAME_ID
-        ir_frame_id  = _IR_FRAME_ID
-
+        ir_frame_name = _IR_FRAME_NAME
         if (label['TARGET_NAME'] == 'SUN' or '_SOL' in label['OBSERVATION_ID']):
-            ir_frame_id = _IR_SOL_FRAME_ID
+            ir_frame_name = _IR_SOL_FRAME_NAME
+        frame_names = (_VIS_FRAME_NAME, ir_frame_name)
 
         ##################################################################################
-        # Construct the Observation objects
+        # Define the Observation objects
         ##################################################################################
 
-        # Determine target and light source
-        label_target = _TARGET_NAME_REPAIRS.get(label['TARGET_NAME'],
-                                                label['TARGET_NAME'])
-        if label_target in _TARGET_STARS:
-            label_lightsource = oops.lightsource.star_lookup(label_target)
-            label_target = 'NONE'
-        else:
-            obs_id = label['OBSERVATION_ID']
-            label_lightsource = CassiniVIMS._star_from_obs_id(obs_id) or 'SUN'
-            label_target = _fix_cassini_ring_target(label_target, label, tstart)
-
-        def build(obs_class, axes, cadence, fov, frame_id):
-            params = {
-                'cadence'     : cadence,
-                'fov'         : fov,
-                'path'        : 'CASSINI',
-                'frame'       : frame_id,
-                'target'      : label_target,
-                'lightsource' : label_lightsource,
-                'calibrations': [],         # TBD
-            }
-            return _build_observation(obs_class, axes, params, filepath, overrides)
-
-        vis_obs = None
-        ir_obs  = None
+        vis_info = None
+        ir_info  = None
 
         # POINT/OCCULTATION case
         if swath_width == 1 and swath_length == 1:
@@ -643,8 +680,8 @@ class CassiniVIMS(oops.Host):
             if ir_data is not None:
                 ir_data = ir_data.reshape((frames, 256))
 
-            ir_obs = build(oops.observation.Pixel, ('t','b'), ir_cadence, ir_fov,
-                           ir_frame_id)
+            ir_info = (oops.observation.Pixel, ('t','b'), ir_cadence, ir_fov,
+                       ir_frame_name)
 
         # Single LINE case
         elif swath_length == 1:
@@ -652,9 +689,9 @@ class CassiniVIMS(oops.Host):
                 if vis_data is not None:
                     vis_data = vis_data.reshape((samples, 96))
 
-                vis_obs = build(oops.observation.Slit1D, ('u','b'),
-                                oops.cadence.SnapCadence(tstart, vis_texp_nonzero),
-                                vis_fov, vis_frame_id)
+                vis_info = (oops.observation.Slit1D, ('u','b'),
+                            oops.cadence.SnapCadence(tstart, vis_texp),
+                            vis_fov, _VIS_FRAME_NAME)
 
             if not ir_is_off:
                 if ir_data is not None:
@@ -663,14 +700,14 @@ class CassiniVIMS(oops.Host):
                 if backplane_cadence is not None:
                     ir_fast_cadence = backplane_cadence
 
-                ir_obs = build(oops.observation.RasterSlit1D, ('ut','b'), ir_fast_cadence,
-                               ir_fov, ir_frame_id)
+                ir_info = (oops.observation.RasterSlit1D, ('ut','b'), ir_fast_cadence,
+                           ir_fov, ir_frame_name)
 
         # Single 2-D IMAGE case
         elif samples == swath_width and lines == swath_length:
             if not vis_is_off:
-                vis_obs = build(oops.observation.TimedImage, ('vt','u','b'),
-                                vis_header_cadence, vis_fov, vis_frame_id)
+                vis_info = (oops.observation.TimedImage, ('vt','u','b'),
+                            vis_header_cadence, vis_fov, _VIS_FRAME_NAME)
 
             if not ir_is_off:
                 if backplane_cadence is None:
@@ -680,14 +717,14 @@ class CassiniVIMS(oops.Host):
                     ir_cadence = oops.cadence.ReshapedCadence(backplane_cadence,
                                                               (lines,samples))
 
-                ir_obs = build(oops.observation.TimedImage, ('vslow','ufast','b'),
-                               ir_cadence, ir_fov, ir_frame_id)
+                ir_info = (oops.observation.TimedImage, ('vslow','ufast','b'),
+                           ir_cadence, ir_fov, ir_frame_name)
 
         # Multiple LINE case
         elif swath_length == 1 and swath_length == lines:
             if not vis_is_off:
-                vis_obs = build(oops.observation.TimedImage, ('vt','u','b'),
-                                frame_cadence, vis_fov, vis_frame_id)
+                vis_info = (oops.observation.TimedImage, ('vt','u','b'),
+                            frame_cadence, vis_fov, _VIS_FRAME_NAME)
 
             if not ir_is_off:
                 if backplane_cadence is None:
@@ -696,29 +733,67 @@ class CassiniVIMS(oops.Host):
                     ir_cadence = oops.cadence.ReshapedCadence(backplane_cadence,
                                                               (lines,samples))
 
-                ir_obs = build(oops.observation.TimedImage, ('vslow','ufast','b'),
-                               ir_cadence, ir_fov, ir_frame_id)
+                ir_info = (oops.observation.TimedImage, ('vslow','ufast','b'),
+                           ir_cadence, ir_fov, ir_frame_name)
 
         else:
             raise oops.OopsValueError(f'unsupported VIMS format in file {filepath}')
 
-        # Insert the subfields and data arrays
-        for (obs, detector, sampling, data) in ((vis_obs, 'VIS', vis_sampling, vis_data),
-                                                (ir_obs,  'IR',  ir_sampling,  ir_data)):
-            if obs is None:
-                continue
+        ##################################################################################
+        # Define Observation attributes
+        ##################################################################################
 
-            obs.insert_subfield('dict', label)
-            obs.insert_subfield('host', 'Cassini')
-            obs.insert_subfield('instrument', 'VIMS')
-            obs.insert_subfield('detector', detector)
-            obs.insert_subfield('sampling', sampling)
-            obs.insert_subfield('label_target', label['TARGET_NAME'])
-            obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
-            if data is not None:
-                obs.insert_subfield('data', data)
+        # Determine target and light source
+        label_target = _TARGET_NAME_REPAIRS.get(label['TARGET_NAME'],
+                                                label['TARGET_NAME'])
+        if label_target in _TARGET_STARS:
+            label_lightsource = oops.lightsource.star_lookup(label_target)
+            label_target = 'NONE'
+        else:
+            obs_id = label['OBSERVATION_ID']
+            label_lightsource = CassiniVIMS._star_from_obs_id(obs_id) or 'SUN'
+            label_target = _fix_cassini_ring_target(label_target, label, tstart)
 
-        return (vis_obs, ir_obs)
+        # Create the parameter dictionaries and apply the overrides
+        obs_pair = [None, None]
+        detectors = ('VIS', 'IR')
+        for k, info in enumerate((vis_info, ir_info)):
+            if info is not None:
+                (obs_subclass, axes, cadence, fov, frame) = info
+                params = {
+                    'target'      : label_target,
+                    'lightsource' : label_lightsource,
+                    'path'        : 'CASSINI',
+                    'frame'       : frame,
+                    'cadence'     : cadence,
+                    'fov'         : fov,
+                    'calibrations': [],
+                }
+
+                # Apply standard overrides
+                oops.Host._apply_overrides(params, filepath, **overrides)
+
+                # Construct
+                obs = obs_subclass(axes, **params)
+                if arrays[k] is not None:
+                    obs.insert_subfield('data', arrays[k])
+
+                obs.insert_subfield('dict', label)
+                obs.insert_subfield('host', 'Cassini')
+                obs.insert_subfield('instrument', 'VIMS')
+                obs.insert_subfield('detector', detectors[k])
+                obs.insert_subfield('sampling', sampling[k])
+                obs.insert_subfield('label_target', label['TARGET_NAME'])
+                obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
+
+                kernels = _Cassini.used_kernels(obs.time, 'vims', ck=using_cks,
+                                                return_all_planets=False)
+                obs.insert_subfield('spice_kernels', kernels)
+                obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
+                obs.insert_subfield('spice_frame_name', frame_names[k])
+                obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_names[k]])
+
+        return tuple(obs_pair)
 
     @staticmethod
     def _load_data_and_times(data_file, header_recs, label):
@@ -776,7 +851,7 @@ class CassiniVIMS(oops.Host):
         assert (core_samples * core_item_bytes) % suffix_item_bytes == 0, \
             'misaligned items'
 
-        ##################################################################################
+        ####
 
         # Determine the dtype and strides for the core item array
         band_stride = (core_samples * core_item_bytes +
@@ -796,7 +871,7 @@ class CassiniVIMS(oops.Host):
         # Determine the dtype for the file core
         if 'SUN_' in core_item_type or 'MSB_' in core_item_type:
             core_dtype = '>'
-        elif 'PC_' in core_item_type or  'LSB_' in core_item_type:
+        elif 'PC_' in core_item_type or 'LSB_' in core_item_type:
             core_dtype = '<'
         else:
             raise oops.OopsTypeError('Unrecognized byte order: ' + core_item_type)
@@ -823,11 +898,8 @@ class CassiniVIMS(oops.Host):
         array = array[offset:offset+size]
 
         # Create a data array using new strides in (line, sample, band) order
-        data = stride_tricks.as_strided(array,
-                                        strides = (line_stride, core_item_bytes,
-                                                   band_stride),
-                                        shape   = (core_lines,  core_samples,
-                                                   core_bands))
+        data = as_strided(array, strides=(line_stride, core_item_bytes, band_stride),
+                          shape=(core_lines, core_samples, core_bands))
 
         # Convert core to a native 3-D array
         data = data.astype(native_dtype)
@@ -837,12 +909,12 @@ class CassiniVIMS(oops.Host):
         if 'SLICE_TIME_SECONDS' not in band_suffix_name:
             return (data, None)
 
-        ##################################################################################
+        ####
 
         # Determine the dtype for the file core
         if 'SUN_' in core_item_type or 'MSB_' in suffix_item_type:
             suffix_item_dtype = '>'
-        elif 'PC_' in core_item_type or  'LSB_' in suffix_item_type:
+        elif 'PC_' in core_item_type or 'LSB_' in suffix_item_type:
             suffix_item_dtype = '<'
         else:
             raise oops.OopsTypeError('Unrecognized byte order: ' + suffix_item_type)
@@ -868,11 +940,9 @@ class CassiniVIMS(oops.Host):
         # Extract the band suffix array using new strides in (backplane, line, sample)
         # order
         backplane_stride = suffix_item_bytes * (core_samples + sample_suffix_items)
-        backplane = stride_tricks.as_strided(offset_array,
-                                             strides = (backplane_stride, line_stride,
-                                                        suffix_item_bytes),
-                                             shape   = (band_suffix_items, core_lines,
-                                                        core_samples))
+        backplane = as_strided(offset_array,
+                               strides=(backplane_stride, line_stride, suffix_item_bytes),
+                               shape=(band_suffix_items, core_lines, core_samples))
 
         # Convert to spacecraft clock
         seconds = backplane[band_suffix_name.index('SLICE_TIME_SECONDS')]
@@ -1061,7 +1131,7 @@ class CassiniVIMS(oops.Host):
 
         # Each frame is tested against the Frame registry, because registering a second
         # frame under an existing ID renames it rather than failing.
-        for frame_id in (_VIS_FRAME_ID, _IR_FRAME_ID, _IR_SOL_FRAME_ID):
+        for frame_id in (_VIS_FRAME_NAME, _IR_FRAME_NAME, _IR_SOL_FRAME_NAME):
             if not oops.Frame.frame_id_exists(frame_id):
                 oops.frame.SpiceFrame(frame_id, frame_id=frame_id)
 

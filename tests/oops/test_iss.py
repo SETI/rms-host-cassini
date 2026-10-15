@@ -482,6 +482,14 @@ def test_snapshot_overrides() -> None:
     assert obs.calibrations is calibrations
 
 
+@uses_iss
+def test_snapshot_cadence_override() -> None:
+    cadence = oops.cadence.SnapCadence(100., 2.)
+    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, cadence=cadence)
+    assert obs.cadence is cadence
+    assert obs.time == (100., 102.)
+
+
 @pytest.fixture
 def custom_frame(initialized_iss: FakeSpiceDB) -> oops.Frame:
     return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id='TEST_CMATRIX')
@@ -728,11 +736,18 @@ def test_from_index_defines_camera_frames(
     assert oops.Frame.frame_id_exists('CASSINI_ISS_WAC')
 
 
-@pytest.mark.parametrize('option', ['fov', 'parallel'])
-def test_from_index_rejects_per_row_options(tmp_path: pathlib.Path, option: str) -> None:
-    with pytest.raises(ValueError, match=f'disallowed Cassini ISS.from_index.. option '
-                                         f'{option}'):
-        CassiniISS.from_index(write_index(tmp_path), **{option: 'anything'})
+def test_from_index_fov_applies_to_every_row(tmp_path: pathlib.Path) -> None:
+    fov = oops.fov.FlatFOV(1.e-5, (PIXELS, PIXELS))
+    snapshots = CassiniISS.from_index(write_index(tmp_path), fov=fov)
+    assert [obs.fov for obs in snapshots] == [fov, fov]
+
+
+def test_from_index_parallel_applies_to_every_row(
+        tmp_path: pathlib.Path, index_snapshots: list[oops.observation.Snapshot]) -> None:
+    parallel = index_snapshots[0]
+    snapshots = CassiniISS.from_index(write_index(tmp_path), parallel=parallel)
+    assert [obs.frame.reference.frame_id for obs in snapshots] == [
+        parallel.frame.frame_id, parallel.frame.frame_id]
 
 
 def test_host_from_index_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
@@ -747,10 +762,12 @@ def test_host_from_index_dispatches_by_coiss_path(tmp_path: pathlib.Path) -> Non
     assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
 
 
-def test_host_from_index_passes_parallel(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match=r'disallowed Cassini ISS.from_index\(\) option '
-                                         'parallel'):
-        oops.Host.from_index(write_index(tmp_path), parallel='anything')
+def test_host_from_index_passes_parallel(
+        tmp_path: pathlib.Path, index_snapshots: list[oops.observation.Snapshot]) -> None:
+    parallel = index_snapshots[0]
+    snapshots = oops.Host.from_index(write_index(tmp_path), parallel=parallel)
+    assert [obs.frame.reference.frame_id for obs in snapshots] == [
+        parallel.frame.frame_id, parallel.frame.frame_id]
 
 
 def test_from_index_filter(tmp_path: pathlib.Path) -> None:

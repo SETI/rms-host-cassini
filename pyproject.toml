@@ -158,6 +158,11 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "A", "N", "PT", "RUF"]
 # RUF005 - Collection literal concatenation. `[a] + list_` is the preferred style here.
 extend-ignore = ["PT011", "SIM105", "SIM108", "I001", "RUF005"]
 
+[tool.ruff.lint.flake8-builtins]
+# A002 and the other A rules still apply to every other builtin. oops.Host sets the
+# `filter` keyword of from_index(), so every host must accept that name.
+ignorelist = ["filter"]
+
 [tool.ruff.lint.per-file-ignores]
 # E501: test files are exempt from the line length limit so that expected-value
 #   tables can stay aligned and readable.
