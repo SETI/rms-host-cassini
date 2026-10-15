@@ -198,7 +198,8 @@ class CassiniUVIS(oops.Host):
         tstart = julian.tdb_from_iso(label['START_TIME'])
         tstop  = julian.tdb_from_iso(label['STOP_TIME'])
         _Cassini.load_spks(tstart, tstop)
-        if frame is None:
+        using_cks = frame is None
+        if using_cks:
             _Cassini.load_cks(tstart, tstop)
             CassiniUVIS._define_frames()
 
@@ -220,14 +221,21 @@ class CassiniUVIS(oops.Host):
         data = not astrometry
         if 'QUBE' in label:
             result = CassiniUVIS._get_qube(filepath, tstart, label, data, enclose,
-                                           fov=fov, overrides=overrides)
+                                           fov=fov, overrides=overrides,
+                                           using_cks=using_cks)
         elif 'TIME_SERIES' in label:
             result = CassiniUVIS._get_time_series(filepath, tstart, label, data,
-                                                  fov=fov, overrides=overrides)
+                                                  fov=fov, overrides=overrides,
+                                                  using_cks=using_cks)
         else:
             result = CassiniUVIS._get_spectrum(filepath, tstart, label, data,
-                                               fov=fov, overrides=overrides)
+                                               fov=fov, overrides=overrides,
+                                               using_cks=using_cks)
 
+        if select is None:
+            return result
+        if not isinstance(result, tuple):
+            result = (result,)
         return oops.Host._apply_select(result, select)
 
     @staticmethod
@@ -303,7 +311,7 @@ class CassiniUVIS(oops.Host):
         raise NotImplementedError('CassiniUVIS.from_index() is not implemented')
 
     @staticmethod
-    def _get_qube(filepath, tstart, label, data, enclose, *, fov, overrides):
+    def _get_qube(filepath, tstart, label, data, enclose, *, fov, overrides, using_cks):
         """The observation object given that it is a QUBE.
 
         Parameters:
@@ -316,6 +324,7 @@ class CassiniUVIS(oops.Host):
                 observation per window.
             fov (FOV | None): The full FOV of the detector; None for the default.
             overrides (dict): The standard override options of :meth:`from_file`.
+            using_cks (bool): True if a C kernel is being used.
 
         Returns:
             Observation | tuple[Observation, ...]: A :class:`~oops.observation.Pixel` for
@@ -390,7 +399,8 @@ class CassiniUVIS(oops.Host):
         common = {'label': label, 'detector': detector, 'resolution': resolution,
                   'fov': fov, 'cadence': cadence, 'frame_name': frame_name,
                   'shape': shape, 'array': array, 'samples': samples, 'lines': lines,
-                  'bands': bands, 'filepath': filepath, 'overrides': overrides}
+                  'bands': bands, 'filepath': filepath, 'using_cks': using_cks,
+                  'overrides': overrides}
 
         # One window
         if isinstance(line0, numbers.Integral):
@@ -515,7 +525,7 @@ class CassiniUVIS(oops.Host):
                                       sampling=resolution, line_window=(line0,line1),
                                       line_bin=line_bin, band_window=(band0,band1),
                                       band_bin=band_bin, samples=samples, array=array,
-                                      using_cks=using_cks)
+                                      frame_name=frame_name, using_cks=using_cks)
 
         # Update the observation shape
         obs.shape = shape
@@ -580,7 +590,8 @@ class CassiniUVIS(oops.Host):
         CassiniUVIS._insert_subfields(obs, label, detector, product_type='TIME_SERIES',
                                       sampling=None, line_window=None, line_bin=None,
                                       band_window=None, band_bin=None, samples=samples,
-                                      array=array, using_cks=using_cks)
+                                      array=array, frame_name=_FRAME_NAMES[detector],
+                                      using_cks=using_cks)
 
         # Update the observation shape
         obs.shape = (samples,)
@@ -649,7 +660,8 @@ class CassiniUVIS(oops.Host):
                                       band_window=(info['UL_CORNER_SPECTRAL'],
                                                    info['LR_CORNER_SPECTRAL']+1),
                                       band_bin=info['BIN_SPECTRAL'], samples=1,
-                                      array=array, using_cks=using_cks)
+                                      array=array, frame_name=_FRAME_NAMES[detector],
+                                      using_cks=using_cks)
 
         # Update the observation shape
         obs.shape = (bands,)

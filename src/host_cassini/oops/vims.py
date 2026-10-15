@@ -508,7 +508,8 @@ class CassiniVIMS(oops.Host):
         assert bands in (352, 256, 96)
 
         if astrometry:
-            arrays = (None, None)
+            vis_data = None
+            ir_data = None
             times = None
         else:
             (array, times) = CassiniVIMS._load_data_and_times(data_file, header_recs,
@@ -524,7 +525,6 @@ class CassiniVIMS(oops.Host):
             else:
                 vis_data = array
                 ir_data = None
-            arrays = (vis_data, ir_data)
 
         ##################################################################################
         # Define the FOVs
@@ -757,6 +757,7 @@ class CassiniVIMS(oops.Host):
         # Create the parameter dictionaries and apply the overrides
         obs_pair = [None, None]
         detectors = ('VIS', 'IR')
+        arrays = (vis_data, ir_data)
         for k, info in enumerate((vis_info, ir_info)):
             if info is not None:
                 (obs_subclass, axes, cadence, fov, frame) = info
@@ -792,6 +793,7 @@ class CassiniVIMS(oops.Host):
                 obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
                 obs.insert_subfield('spice_frame_name', frame_names[k])
                 obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_names[k]])
+                obs_pair[k] = obs
 
         return tuple(obs_pair)
 

@@ -248,6 +248,7 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     monkeypatch.setattr(oops.Path, '_PATH_CACHE', dict(oops.Path._PATH_CACHE))
     monkeypatch.setattr(oops.Frame, '_FRAME_REGISTRY', dict(oops.Frame._FRAME_REGISTRY))
     monkeypatch.setattr(oops.Frame, '_FRAME_CACHE', dict(oops.Frame._FRAME_CACHE))
+    monkeypatch.setattr(Body, 'BODY_REGISTRY', dict(Body.BODY_REGISTRY))
     return fake
 
 
@@ -265,10 +266,12 @@ def reset_host() -> Any:
 
 @pytest.fixture
 def saturn_path() -> oops.Path:
-    """A fixed path registered as SATURN, which a TrackerFrame can track."""
+    """A fixed path and a body registered as SATURN, which a TrackerFrame can track."""
 
-    return oops.path.FixedPath((1.e9, 0., 0.), oops.Path.SSB, oops.Frame.J2000,
+    path = oops.path.FixedPath((1.e9, 0., 0.), oops.Path.SSB, oops.Frame.J2000,
                                path_id='SATURN')
+    Body('SATURN', path, oops.Frame.J2000)  # type: ignore[no-untyped-call]  # unannotated
+    return path
 
 
 @pytest.fixture

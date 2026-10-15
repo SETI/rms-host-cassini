@@ -309,10 +309,10 @@ def test_unsupported_shape(tmp_path: pathlib.Path) -> None:
         CassiniVIMS.from_file(path, astrometry=True)
 
 
-def test_fov_is_disallowed(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match=r'disallowed Cassini VIMS.from_file\(\) option '
-                                         'fov'):
-        CassiniVIMS.from_file(write_pds3_cube(tmp_path), fov='anything')
+def test_fov_override(tmp_path: pathlib.Path) -> None:
+    fov = oops.fov.FlatFOV((1.e-3, 1.e-3), (4, 2))
+    pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path), fov=fov)
+    assert [obs.fov for obs in pair] == [fov, fov]
 
 
 @pytest.mark.parametrize(('target_name', 'target'), [('SATURN', 'SATURN'),

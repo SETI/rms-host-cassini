@@ -209,7 +209,7 @@ def test_reset_clears_state() -> None:
 def test_define_frames_only_once(fake_spice: FakeSpice) -> None:
     CassiniUVIS._define_frames()
     CassiniUVIS._define_frames()
-    assert fake_spice.spice_frames == list(uvis._FRAME_IDS.values())
+    assert fake_spice.spice_frames == list(uvis._FRAME_NAMES.values())
 
 ##########################################################################################
 # QUBE
