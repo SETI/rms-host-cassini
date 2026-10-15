@@ -310,8 +310,8 @@ class CassiniVIMS(oops.Host):
             `data` unless `astrometry` is True.
         """
 
-        CassiniVIMS._initialize()  # define everything the first time through; use
-                                   # defaults unless _initialize() was called explicitly.
+        CassiniVIMS.initialize()  # define everything the first time through; use
+                                  # defaults unless initialize() was called explicitly.
 
         # Default Pds3Label options are method="fast", sources=False
         pds3_options = _pds3_options_with_defaults(pds3_options)
@@ -1084,12 +1084,13 @@ class CassiniVIMS(oops.Host):
     ######################################################################################
 
     @staticmethod
-    def _initialize(*, ck='reconstructed', planets=None, asof=None, spk='reconstructed',
-                    gapfill=True, mst_pck=True, irregulars=True):
+    def initialize(*, ck='reconstructed', planets=None, asof=None, spk='reconstructed',
+                   gapfill=True, mst_pck=True, irregulars=True):
         """Initialize key information about the VIMS instrument.
 
-        Must be called first. After the first call, later calls to this function are
-        ignored.
+        Optional. Call it before the first :meth:`~from_file` or :meth:`~from_index` to
+        override the kernel defaults. Once it has run, explicitly or implicitly, later
+        calls are ignored.
 
         Parameters:
             ck (str, optional): The set of C kernels to load, 'reconstructed' or

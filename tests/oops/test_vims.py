@@ -160,25 +160,25 @@ def test_detection(label: dict[str, Any], expected: bool) -> None:
     assert CassiniVIMS._detect_in_pds3(label) is expected
 
 ##########################################################################################
-# _initialize() and _define_frames()
+# initialize() and _define_frames()
 ##########################################################################################
 
 
 def test_initialize_reads_instrument_kernel(fake_spicedb: FakeSpiceDB) -> None:
-    CassiniVIMS._initialize()
+    CassiniVIMS.initialize()
     assert CassiniVIMS._INSTRUMENT_KERNEL is fake_spicedb.kernel_dict
     assert fake_spicedb.named('select_inst')[-1][1]['inst'] == 'VIMS'
 
 
 def test_initialize_ignores_later_calls(fake_spicedb: FakeSpiceDB) -> None:
-    CassiniVIMS._initialize()
+    CassiniVIMS.initialize()
     count = len(fake_spicedb.calls)
-    CassiniVIMS._initialize(spk='predicted')
+    CassiniVIMS.initialize(spk='predicted')
     assert len(fake_spicedb.calls) == count
 
 
 def test_reset_clears_state() -> None:
-    CassiniVIMS._initialize()
+    CassiniVIMS.initialize()
     CassiniVIMS._reset()
     assert not CassiniVIMS._initialized
     assert CassiniVIMS._INSTRUMENT_KERNEL is None

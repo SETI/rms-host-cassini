@@ -158,12 +158,12 @@ def test_detection(label: dict[str, str], expected: bool) -> None:
     assert CassiniUVIS._detect_in_pds3(label) is expected
 
 ##########################################################################################
-# _initialize() and _define_frames()
+# initialize() and _define_frames()
 ##########################################################################################
 
 
 def test_initialize_builds_every_fov() -> None:
-    CassiniUVIS._initialize()
+    CassiniUVIS.initialize()
     expected = {(detector, resolution, lines)
                 for (detector, resolution) in uvis._ABBREVS.values()
                 for lines in (1, 64)}
@@ -172,7 +172,7 @@ def test_initialize_builds_every_fov() -> None:
 
 @pytest.mark.parametrize('lines', [1, 64])
 def test_slit_fov(lines: int) -> None:
-    CassiniUVIS._initialize()
+    CassiniUVIS.initialize()
     fov = CassiniUVIS._FOVS['FUV', 'HIGH_RESOLUTION', lines]
     assert tuple(fov.uv_shape.vals) == (1, lines)
     assert tuple(fov.uv_scale.vals) == pytest.approx(
@@ -180,7 +180,7 @@ def test_slit_fov(lines: int) -> None:
 
 
 def test_circular_fov() -> None:
-    CassiniUVIS._initialize()
+    CassiniUVIS.initialize()
     scale = 2. * np.radians(CIRCLE_REF_DEG)
     assert tuple(CassiniUVIS._FOVS['HSP', '', 1].uv_scale.vals) == pytest.approx(
         (scale, scale))
@@ -189,16 +189,16 @@ def test_circular_fov() -> None:
 def test_initialize_rejects_unknown_fov_shape(uvis_kernel: FakeSpiceDB) -> None:
     uvis_kernel.kernel_dict = uvis_ik_dict(shape='POLYGON')
     with pytest.raises(oops.OopsValueError, match='Unrecognized FOV_SHAPE: POLYGON'):
-        CassiniUVIS._initialize()
+        CassiniUVIS.initialize()
 
 
 def test_initialize_leaves_kernel_unchanged(uvis_kernel: FakeSpiceDB) -> None:
-    CassiniUVIS._initialize()
+    CassiniUVIS.initialize()
     assert set(uvis_kernel.kernel_dict['INS']) == set(SPECTRAL_IDS) | set(CIRCULAR_IDS)
 
 
 def test_reset_clears_state() -> None:
-    CassiniUVIS._initialize()
+    CassiniUVIS.initialize()
     CassiniUVIS._reset()
     assert not CassiniUVIS._initialized
     assert CassiniUVIS._FOVS == {}

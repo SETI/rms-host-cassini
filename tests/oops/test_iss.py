@@ -193,7 +193,7 @@ def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
     assert CassiniISS._detect_in_row(row) is expected
 
 ##########################################################################################
-# _initialize()
+# initialize()
 ##########################################################################################
 
 
@@ -258,8 +258,8 @@ def test_initialize_loads_default_instruments(initialized_iss: FakeSpiceDB) -> N
 
 def test_initialize_passes_options_to_mission(fake_spicedb: FakeSpiceDB,
                                               fake_spice: FakeSpice) -> None:
-    CassiniISS._initialize(ck='predicted', spk='predicted', planets=[6],
-                           asof='2010-02-03', mst_pck=False, irregulars=False)
+    CassiniISS.initialize(ck='predicted', spk='predicted', planets=[6],
+                          asof='2010-02-03', mst_pck=False, irregulars=False)
     assert fake_spicedb.named('select_spk')[0][1]['name'] == 'CAS-SPK-PREDICTED'
     assert fake_spicedb.named('select_ck')[0][1]['name'] == 'CAS-CK-PREDICTED'
     assert fake_spice.solar_system[0][1] == {'asof': '2010-02-03', 'planets': [6],
@@ -269,7 +269,7 @@ def test_initialize_passes_options_to_mission(fake_spicedb: FakeSpiceDB,
 def test_initialize_ignores_later_calls(initialized_iss: FakeSpiceDB) -> None:
     fovs = CassiniISS._FOVS
     count = len(initialized_iss.calls)
-    CassiniISS._initialize(spk='predicted')
+    CassiniISS.initialize(spk='predicted')
     assert len(initialized_iss.calls) == count
     assert CassiniISS._FOVS is fovs
 

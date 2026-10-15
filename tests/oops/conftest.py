@@ -275,7 +275,7 @@ def saturn_path() -> oops.Path:
 def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
     """CassiniISS initialized with default options against the fake spicedb."""
 
-    CassiniISS._initialize()
+    CassiniISS.initialize()
     return fake_spicedb
 
 ##########################################################################################
