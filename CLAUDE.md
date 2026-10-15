@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `rms-host-cassini` is the Cassini host plug-in for `oops` (rms-oops). It is a port of
 `rms-oops/src/hosts/cassini/` to the newer `oops.Host` / `oops.host` API, part of splitting
 the mission hosts out of rms-oops (see the sibling `rms-host-galileo`). ISS, VIMS and UVIS are
-ported.
+ported; `from_index()` is implemented for ISS only, and VIMS and UVIS raise
+`NotImplementedError`.
 
 ## Standards
 
@@ -32,16 +33,19 @@ those until this repo has the equivalent.
 - The `oops.Host` API is unreleased. CI, `.readthedocs.yaml` and `scripts/setup-venv.sh`
   install rms-oops from its `mrs_260925_host_reorg` branch, and `docs/conf.py` ignores the
   unresolvable `oops.host.host_.Host`, `oops.host.PdsHostError` and
-  `oops.host.VicarHostError` references. Drop all four once a release has them.
+  `oops.host.VicarHostError` references. Drop all four once a release has them. The
+  `ObsArray` entry in `nitpick_ignore_regex` stays: oops never documents that type alias.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
 - Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project and
-  patch targets in `codecov.yml`); it is at 87%, held down by `vims.py` at 70%. The ubuntu /
+  patch targets in `codecov.yml`); it is at 87%, held down by `vims.py` at 71%. The ubuntu /
   Python 3.13 CI job uploads to Codecov and fails if the upload fails. The upload
   authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
-  fakes for every test, so new tests get this automatically.
+  fakes for every test, and gives each test its own copy of the oops path, frame and body
+  registries, so new tests get this automatically. A test that tracks a target with
+  `tracker` needs a registered body; the `saturn_path` fixture provides SATURN.
 
 ## Architecture gotchas
 
@@ -49,12 +53,21 @@ those until this repo has the equivalent.
   (`iss.py`, `vims.py`, `uvis.py`). Each host class calls `_register()` at import
   time, and `oops/__init__.py` imports every instrument module. `Host.from_file()`
   dispatches through the registered hosts' `_detect_in_*` methods, so a host is invisible
-  until `host_cassini.oops` (or its module) is imported. VIMS and UVIS build their
-  observations through `_build_observation()` in `oops/_cassini.py`, which applies the
-  standard `oops.Host` overrides, and apply `select` through `_apply_select()` there.
-  The OBSERVATION_ID helpers shared by the instruments, `_cassini_obs_id_code()` and
-  `_fix_cassini_ring_target()`, live there too. Keep them out of `oops/__init__.py`,
-  which the instrument modules can't import from without a circular import.
+  until `host_cassini.oops` (or its module) is imported.
+- The hosts apply the standard overrides through `oops.Host._apply_overrides()` and `select`
+  through `oops.Host._apply_select()`. `_apply_select()` needs a tuple, so UVIS wraps a
+  single observation in one first. What the instruments share lives in `oops/_cassini.py`:
+  `_CMATRIX_ROTATION`, `_pds3_options_with_defaults()`, and the OBSERVATION_ID helpers
+  `_cassini_obs_id_code()` and `_fix_cassini_ring_target()`. Keep them out of
+  `oops/__init__.py`, which the instrument modules can't import from without a circular
+  import.
+- Each host's public `initialize()` chooses the kernels. It is optional: `from_file()` (and
+  ISS `from_index()`) call it with the defaults, and after the first call later calls are
+  ignored until `_reset()`.
+- The `spice_frame_id` subfield is the frame ID from the Cassini frame kernel, not the
+  instrument code from the instrument kernel; the two differ for UVIS HSP, HDAC and the
+  solar ports. UVIS keeps them apart: `_FRAME_IDS` (frame kernel) for `spice_frame_id`,
+  `_INSTRUMENT_IDS` (instrument kernel) for the FOV lookup in `initialize()`.
 - TARGET_NAME repairs are per instrument: each module keeps its own
   `_TARGET_NAME_REPAIRS`. Don't merge them into `_cassini.py`.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
