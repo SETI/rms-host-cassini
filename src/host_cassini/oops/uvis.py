@@ -202,7 +202,7 @@ class CassiniUVIS(oops.Host):
         fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
                                             pds3_options=pds3_options)
         filepath = FCPath(fileinfo.filepath)
-        label = fileinfo.dict
+        label = fileinfo.as_dict()
 
         # Load any needed SPICE kernels
         tstart = julian.tdb_from_iso(label['START_TIME'])

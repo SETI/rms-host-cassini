@@ -320,7 +320,7 @@ class CassiniVIMS(oops.Host):
         fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
                                             pds3_options=pds3_options)
         filepath = FCPath(fileinfo.filepath)
-        (label, data_file, header_recs) = CassiniVIMS._standard_label(fileinfo.dict,
+        (label, data_file, header_recs) = CassiniVIMS._standard_label(fileinfo.as_dict(),
                                                                       filepath)
 
         # Define the object(s)
