@@ -605,6 +605,12 @@ def test_from_file_vicar_image_astrometry(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.usefixtures('initialized_iss')
+def test_from_file_vicar_label_reads_data(tmp_path: pathlib.Path) -> None:
+    obs = CassiniISS.from_file(vicar.VicarLabel(write_vicar_image(tmp_path)))
+    assert obs.data[1, 2] == 258 % 256
+
+
+@pytest.mark.usefixtures('initialized_iss')
 def test_from_file_sets_local_paths(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path)
     obs = CassiniISS.from_file(path, astrometry=True)

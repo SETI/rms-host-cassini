@@ -235,13 +235,14 @@ class CassiniISS(oops.Host):
         if isinstance(fileinfo, Pds3Label):
             if not astrometry:
                 data = oops.host.read_pds3_image_array(fileinfo)
-            dict_ = fileinfo.dict
-        elif isinstance(fileinfo, VicarImage):
+            dict_ = fileinfo.as_dict()
+        else:
             if not astrometry:
+                if not isinstance(fileinfo, VicarImage):
+                    # A VicarImage built from a VicarLabel has no array; re-read the file
+                    fileinfo = VicarImage(fileinfo.filepath, strict=False)
                 data = fileinfo.data_2d
-            dict_ = fileinfo.label
-        else:   # VicarLabel, with astrometry == True
-            dict_ = fileinfo
+            dict_ = fileinfo.as_dict(unique=False)
 
         filepath = FCPath(fileinfo.filepath)
 
