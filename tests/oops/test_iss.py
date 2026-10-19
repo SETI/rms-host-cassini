@@ -16,7 +16,7 @@ from pdsparser import Pds3Label
 import pytest
 import vicar
 from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
-                      FakeSpiceDB, pds3_lines, tdb_in_month)
+                      FakeSpiceDB, ik_dict, pds3_lines, tdb_in_month)
 
 import host_cassini
 import host_cassini.oops
@@ -49,12 +49,25 @@ def label_dict(**changes: Any) -> dict[str, Any]:
     return label
 
 
+OVERRIDE_NAMES = ('target', 'lightsource', 'path', 'frame', 'cadence', 'fov',
+                  'calibrations', 'timeshift', 'navigation', 'tracker', 'parallel')
+
+
+def make_snapshot(dict_: dict[str, Any], *, data: Any = None,
+                  fast_distortion: bool | None = True,
+                  **overrides: Any) -> oops.observation.Snapshot:
+    """A Snapshot from `_make_snapshot`, with every override not given set to None."""
+
+    obs: oops.observation.Snapshot = CassiniISS._make_snapshot(
+        dict_, filepath=INDEX_PATH, data=data, fast_distortion=fast_distortion,
+        return_all_planets=False, overrides={name: overrides.get(name) for name in OVERRIDE_NAMES})
+    return obs
+
+
 def snapshot(**changes: Any) -> oops.observation.Snapshot:
     """A Snapshot made from `label_dict(**changes)` with default options."""
 
-    obs: oops.observation.Snapshot = CassiniISS._make_snapshot(label_dict(**changes),
-                                                               filepath=INDEX_PATH)
-    return obs
+    return make_snapshot(label_dict(**changes))
 
 ##########################################################################################
 # Distortion polynomials
@@ -252,6 +265,14 @@ def test_initialize_reads_instrument_kernel(initialized_iss: FakeSpiceDB) -> Non
     assert CassiniISS._INSTRUMENT_KERNEL is initialized_iss.kernel_dict
 
 
+def test_initialize_rejects_fov_units_other_than_degrees(
+        fake_spicedb: FakeSpiceDB) -> None:
+    fake_spicedb.kernel_dict = ik_dict(units='RADIANS')
+    with pytest.raises(oops.host.HostError,
+                       match="FOV_ANGLE_UNITS 'RADIANS' for CASSINI_ISS_NAC"):
+        CassiniISS.initialize()
+
+
 def test_initialize_loads_default_instruments(initialized_iss: FakeSpiceDB) -> None:
     assert _Cassini.loaded_instruments == ['ISS', 'VIMS', 'CIRS', 'UVIS']
 
@@ -350,8 +371,7 @@ def test_snapshot_spice_frame_id(name: str, frame_id: int) -> None:
 @pytest.mark.parametrize('fast', [True, False, None])
 @pytest.mark.parametrize('mode', ['FULL', 'SUM2', 'SUM4'])
 def test_snapshot_fov(mode: str, fast: bool | None) -> None:
-    obs = CassiniISS._make_snapshot(label_dict(INSTRUMENT_MODE_ID=mode),
-                                    filepath=INDEX_PATH, fast_distortion=fast)
+    obs = make_snapshot(label_dict(INSTRUMENT_MODE_ID=mode), fast_distortion=fast)
     assert obs.fov is CassiniISS._FOVS['NAC', mode, fast]
     assert obs.sampling == mode
 
@@ -380,7 +400,7 @@ def test_snapshot_filter(filters: list[str], expected: str) -> None:
 def test_snapshot_filter_from_separate_keywords() -> None:
     dict_ = label_dict(FILTER1_NAME='RED', FILTER2_NAME='CL2')
     del dict_['FILTER_NAME']
-    assert CassiniISS._make_snapshot(dict_, filepath=INDEX_PATH).filter == 'RED'
+    assert make_snapshot(dict_).filter == 'RED'
 
 
 @uses_iss
@@ -428,7 +448,7 @@ def test_snapshot_star_target(star: str) -> None:
 @uses_iss
 def test_snapshot_subfields() -> None:
     dict_ = label_dict()
-    obs = CassiniISS._make_snapshot(dict_, filepath=INDEX_PATH)
+    obs = make_snapshot(dict_)
     assert obs.host == 'Cassini'
     assert obs.instrument == 'ISS'
     assert obs.texp == 1.
@@ -442,7 +462,7 @@ def test_snapshot_subfields() -> None:
 @uses_iss
 def test_snapshot_data() -> None:
     data = np.zeros((PIXELS, PIXELS), dtype='uint8')
-    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, data=data)
+    obs = make_snapshot(label_dict(), data=data)
     assert obs.data is data
 
 
@@ -476,8 +496,7 @@ def test_snapshot_loads_kernels_for_its_month() -> None:
 def test_snapshot_overrides() -> None:
     target = 'TITAN'
     calibrations = ['calibration']
-    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, target=target,
-                                    calibrations=calibrations)
+    obs = make_snapshot(label_dict(), target=target, calibrations=calibrations)
     assert obs.target == target
     assert obs.calibrations is calibrations
 
@@ -485,7 +504,7 @@ def test_snapshot_overrides() -> None:
 @uses_iss
 def test_snapshot_cadence_override() -> None:
     cadence = oops.cadence.SnapCadence(100., 2.)
-    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, cadence=cadence)
+    obs = make_snapshot(label_dict(), cadence=cadence)
     assert obs.cadence is cadence
     assert obs.time == (100., 102.)
 
@@ -496,24 +515,24 @@ def custom_frame(initialized_iss: FakeSpiceDB) -> oops.Frame:
 
 
 def test_custom_frame_is_used(custom_frame: oops.Frame) -> None:
-    obs = CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    obs = make_snapshot(label_dict(), frame=custom_frame)
     assert obs.frame == custom_frame.wayframe
 
 
 def test_custom_frame_loads_no_cks(custom_frame: oops.Frame) -> None:
-    CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    make_snapshot(label_dict(), frame=custom_frame)
     assert not _Cassini.CK_LOADED.any()
     assert _Cassini.SPK_LOADED.any()
 
 
 def test_custom_frame_defines_no_camera_frames(custom_frame: oops.Frame) -> None:
-    CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    make_snapshot(label_dict(), frame=custom_frame)
     assert not oops.Frame.frame_id_exists('CASSINI_ISS_NAC')
 
 
 def test_custom_frame_reports_no_cks(custom_frame: oops.Frame,
                                      initialized_iss: FakeSpiceDB) -> None:
-    CassiniISS._make_snapshot(label_dict(), filepath=INDEX_PATH, frame=custom_frame)
+    make_snapshot(label_dict(), frame=custom_frame)
     assert 'CK' not in initialized_iss.named('used_basenames')[0][1]['types']
 
 ##########################################################################################

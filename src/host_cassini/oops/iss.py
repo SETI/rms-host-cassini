@@ -207,7 +207,8 @@ class CassiniISS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments; they are accepted and ignored.
+            **kwargs: Additional keyword arguments; they are accepted and ignored. This
+                includes `select`.
 
         Returns:
             Snapshot: The observation, with subfields `dict`, `host`, `instrument`,
@@ -246,32 +247,39 @@ class CassiniISS(oops.Host):
 
         filepath = FCPath(fileinfo.filepath)
 
+        overrides = {
+            'target'      : target,
+            'lightsource' : lightsource,
+            'path'        : path,
+            'frame'       : frame,
+            'cadence'     : cadence,
+            'fov'         : fov,
+            'calibrations': calibrations,
+            'timeshift'   : timeshift,
+            'navigation'  : navigation,
+            'tracker'     : tracker,
+            'parallel'    : parallel,
+        }
+
         snapshot = CassiniISS._make_snapshot(dict_, filepath=filepath, data=data,
                                              fast_distortion=fast_distortion,
                                              return_all_planets=return_all_planets,
-                                             target=target, lightsource=lightsource,
-                                             path=path, frame=frame, cadence=cadence,
-                                             fov=fov, calibrations=calibrations,
-                                             timeshift=timeshift, navigation=navigation,
-                                             tracker=tracker, parallel=parallel)
+                                             overrides=overrides)
         return snapshot
 
     @staticmethod
-    def from_index(filepath, *, supplement=None, row_dicts=None, pds3_options=None,
-                   filter=None, fast_distortion=True, return_all_planets=False,
-                   select=None, target=None, lightsource=None, path=None, frame=None,
-                   cadence=None, fov=None, calibrations=None, timeshift=None,
-                   navigation=None, tracker=None, parallel=None, **kwargs):
+    def from_index(filepath, *, row_dicts=None, pds3_options=None, filter=None,
+                   fast_distortion=True, return_all_planets=False, target=None,
+                   lightsource=None, path=None, frame=None, cadence=None, fov=None,
+                   calibrations=None, timeshift=None, navigation=None, tracker=None,
+                   parallel=None, **kwargs):
         """A list of Snapshot objects, one for each row of a Cassini ISS index file.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
-            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file, whose columns are merged into each row.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
-                row of the index. Include if `filepath` and `supplement` have already been
-                read.
+                row of the index. Include if `filepath` has already been read.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -279,11 +287,6 @@ class CassiniISS(oops.Host):
                 index in which each named column equals the value, falls in the set of
                 values, or falls in a range defined by a tuple of two values, will be
                 included in the returned list.
-            select (int | slice | str | tuple[int | slice | str, ...]): An index, slice,
-                or tuple of indices and slices to apply to the returned array of
-                Observation objects. For example, if the file contains two Observations
-                but `select=1`, only the second Observation will be returned.
-                Alternatively, specify one or more host-specific names of the data arrays.
             fast_distortion (bool | None, optional): True to use a pre-inverted
                 polynomial; False to use a dynamically solved polynomial; None to use a
                 :class:`~oops.fov.FlatFOV`.
@@ -323,27 +326,37 @@ class CassiniISS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments; they are accepted and ignored.
+            **kwargs: Additional keyword arguments; they are accepted and ignored. This
+                includes `select` and `supplement`.
 
         Returns:
-            list[Snapshot]: One observation per row of the index, each with subfields
-            `dict`, `host`, `instrument`, `detector`, `sampling`, `filter`, `filter1`,
-            `filter2`, `gain_mode`, `texp`, `label_target`, `observation_id`,
+            list[Snapshot]: One observation per filtered row of the index, each with
+            subfields `dict`, `host`, `instrument`, `detector`, `sampling`, `filter`,
+            `filter1`, `filter2`, `gain_mode`, `texp`, `label_target`, `observation_id`,
             `spice_kernels`, `filepath`, `basename`, `spice_to_frame`, `spice_frame_name`
             and `spice_frame_id` inserted.
-
-        Raises:
-            ValueError: If `supplement` does not have the same records in the same order
-                as the table described by `filepath`.
         """
 
         CassiniISS.initialize()
 
         # Read and filter the index table
         if row_dicts is None:
-            row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
-                                                   pds3_options=pds3_options)
+            row_dicts = oops.Host._read_index_rows(filepath, pds3_options=pds3_options)
         row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
+
+        overrides = {
+            'target'      : target,
+            'lightsource' : lightsource,
+            'path'        : path,
+            'frame'       : frame,
+            'cadence'     : cadence,
+            'fov'         : fov,
+            'calibrations': calibrations,
+            'timeshift'   : timeshift,
+            'navigation'  : navigation,
+            'tracker'     : tracker,
+            'parallel'    : parallel,
+        }
 
         # Create the list of Snapshot objects
         snapshots = []
@@ -352,20 +365,40 @@ class CassiniISS(oops.Host):
             obs = CassiniISS._make_snapshot(row_dict, filepath=fpath, data=None,
                                             fast_distortion=fast_distortion,
                                             return_all_planets=return_all_planets,
-                                            target=target, lightsource=lightsource,
-                                            path=path, frame=frame, cadence=cadence,
-                                            fov=fov, calibrations=calibrations,
-                                            timeshift=timeshift, navigation=navigation,
-                                            tracker=tracker, parallel=parallel)
+                                            overrides=overrides)
             snapshots.append(obs)
 
         return snapshots
 
     @staticmethod
-    def _make_snapshot(dict_, filepath, data=None, *, fast_distortion=True,
-                       return_all_planets=False, target=None, lightsource=None, path=None,
-                       frame=None, cadence=None, fov=None, calibrations=None,
-                       timeshift=None, navigation=None, tracker=None, parallel=None):
+    def _make_snapshot(dict_, filepath, data, *, fast_distortion, return_all_planets,
+                       overrides):
+        """A Snapshot built from the label of an ISS image or one row of an ISS index.
+
+        Loads the SPK kernels covering the exposure. Unless `overrides` supplies a frame,
+        it also loads the CK kernels and registers the camera frames.
+
+        Parameters:
+            dict_ (dict[str, Any]): The PDS3 label, VICAR label or index row. It must
+                contain START_TIME, EXPOSURE_DURATION, INSTRUMENT_MODE_ID,
+                INSTRUMENT_NAME, TARGET_NAME, OBSERVATION_ID and GAIN_MODE_ID, and either
+                FILTER_NAME or both FILTER1_NAME and FILTER2_NAME.
+            filepath (str | FCPath): The path to the image file; used for the `filepath`
+                and `basename` subfields.
+            data (np.ndarray | None): The image array, inserted as the `data` subfield;
+                None to insert no `data`.
+            fast_distortion (bool | None): True to use a pre-inverted polynomial; False to
+                use a dynamically solved polynomial; None to use a FlatFOV.
+            return_all_planets (bool): Report the kernels for all planets, not just
+                Jupiter or Saturn, in the `spice_kernels` subfield.
+            overrides (dict[str, Any]): The values of the standard overrides, `target`,
+                `lightsource`, `path`, `frame`, `cadence`, `fov`, `calibrations`,
+                `timeshift`, `navigation`, `tracker` and `parallel`, keyed by name, each
+                None to keep the default.
+
+        Returns:
+            Snapshot: The observation, with the subfields listed in :meth:`from_file`.
+        """
 
         # Note that VICAR and PDS3 dictionaries use the same names.
         tstart = julian.tdb_from_iso(dict_['START_TIME'])
@@ -385,7 +418,7 @@ class CassiniISS(oops.Host):
 
         # Make sure the SPICE kernels are loaded; construct the frame
         _Cassini.load_spks(tstart, tstart + texp)
-        using_cks = frame is None
+        using_cks = overrides['frame'] is None
         if using_cks:
             _Cassini.load_cks(tstart, tstart + texp)
             CassiniISS._define_camera_frames()
@@ -402,11 +435,7 @@ class CassiniISS(oops.Host):
         }
 
         # Apply standard overrides
-        oops.Host._apply_overrides(params, filepath, target=target,
-                                   lightsource=lightsource, path=path, frame=frame,
-                                   cadence=cadence, fov=fov, calibrations=calibrations,
-                                   timeshift=timeshift, navigation=navigation,
-                                   tracker=tracker, parallel=parallel)
+        oops.Host._apply_overrides(params, filepath, **overrides)
 
         obs = oops.observation.Snapshot(('v','u'), **params)
         if data is not None:
@@ -561,6 +590,10 @@ class CassiniISS(oops.Host):
                 models for some of the small moons.
             irregulars (bool, optional): True to include the irregular satellites; False
                 otherwise.
+
+        Raises:
+            oops.host.HostError: If the instrument kernel gives a camera's field of view
+                in units other than degrees.
         """
 
         # Quick exit after first call
@@ -585,7 +618,10 @@ class CassiniISS(oops.Host):
 
             xfov = info['FOV_REF_ANGLE']
             yfov = info['FOV_CROSS_ANGLE']
-            assert info['FOV_ANGLE_UNITS'] == 'DEGREES'
+            units = info['FOV_ANGLE_UNITS']
+            if units != 'DEGREES':
+                raise oops.host.HostError(f'unsupported FOV_ANGLE_UNITS {units!r} for '
+                                          f'CASSINI_ISS_{detector} in the ISS kernel')
 
             uscale = np.arctan(np.tan(xfov * oops.RPD) / (samples/2.))
             vscale = np.arctan(np.tan(yfov * oops.RPD) / (lines/2.))

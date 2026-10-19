@@ -32,9 +32,10 @@ those until this repo has the equivalent.
   set `VENV` to use another.
 - The `oops.Host` API is unreleased. CI, `.readthedocs.yaml` and `scripts/setup-venv.sh`
   install rms-oops from its `mrs_260925_host_reorg` branch, and `docs/conf.py` ignores the
-  unresolvable `oops.host.host_.Host`, `oops.host.PdsHostError` and
-  `oops.host.VicarHostError` references. Drop all four once a release has them. The
-  `ObsArray` entry in `nitpick_ignore_regex` stays: oops never documents that type alias.
+  unresolvable `oops.host.host_.Host`, `oops.Host.from_index`, `oops.host.HostError`,
+  `oops.host.PdsHostError` and `oops.host.VicarHostError` references. Drop those entries
+  once a release has them. The `ObsArray` entry in `nitpick_ignore_regex` stays: oops
+  never documents that type alias.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.

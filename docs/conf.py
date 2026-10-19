@@ -125,9 +125,10 @@ nitpick_ignore_regex = [
     # oops.Host is not yet in a released oops, so the published oops inventory has no
     # entry for it. Remove this entry once a release that has it is on ReadTheDocs.
     (r'py:class', r'oops\.host\.host_\.Host'),
+    (r'py:meth', r'oops\.Host\.from_index'),
     # The oops.host exceptions are not yet in a released oops either. Remove this entry
     # with the one above.
-    (r'py:exc', r'oops\.host\.(Pds|Vicar)HostError'),
+    (r'py:exc', r'oops\.host\.(Pds|Vicar)?HostError'),
     # ObsArray is a type alias in oops.host.host_ for an object array of Observations.
     # oops does not document it, so no inventory has an entry to link to.
     (r'py:class', r'ObsArray'),
