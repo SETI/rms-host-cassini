@@ -237,7 +237,11 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     def furnsh(*args: Any, **kwargs: Any) -> None:
         raise AssertionError(f'a test tried to furnish a SPICE kernel: {args}')
 
+    def scs2e(code: int, sclk: str) -> float:
+        return float(sclk)
+
     monkeypatch.setattr(cspyce, 'str2et', julian.tdb_from_iso)
+    monkeypatch.setattr(cspyce, 'scs2e', scs2e)
     monkeypatch.setattr(cspyce, 'furnsh', furnsh)
     monkeypatch.setattr(oops.spice, 'load_leap_seconds', load_leap_seconds)
     monkeypatch.setattr(Body, 'define_solar_system', staticmethod(define_solar_system))

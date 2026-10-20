@@ -401,6 +401,35 @@ def test_label_from_index_row_full_buffer(mode: str,
     assert CassiniVIMS._label_from_index_row(row)['QUBE']['CORE_ITEMS'] == core_items
 
 
+def test_label_from_index_row_uses_core_columns() -> None:
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    CORE_SAMPLES=1, CORE_BANDS=352, CORE_LINES=24)
+    assert CassiniVIMS._label_from_index_row(row)['QUBE']['CORE_ITEMS'] == (1, 352, 24)
+
+
+def test_label_from_index_row_uses_exposure_columns() -> None:
+    row = index_row(IR_EXPOSURE=-999., IR_EXPOSURE_DURATION=160.,
+                    VIS_EXPOSURE_DURATION=1000.)
+    label = CassiniVIMS._label_from_index_row(row)
+    assert label['EXPOSURE_DURATION'] == (160., 1000.)
+    assert label['POWER_STATE_FLAG'] == ('ON', 'ON')
+
+
+def test_from_index_uses_backplane_sclk() -> None:
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    VIS_POWER_STATE_FLAG='OFF', CORE_SAMPLES=1, CORE_BANDS=256,
+                    CORE_LINES=24, BACKPLANE_SCLK_START_COUNT='1294638282.666')
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert ir.cadence.shape == (24,)
+    assert ir.time[0] == pytest.approx(1294638282.666)
+
+
+def test_from_index_blank_backplane_sclk_uses_start_time() -> None:
+    row = index_row(BACKPLANE_SCLK_START_COUNT='              ')
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+
+
 def test_label_from_index_row_leaves_row_unchanged() -> None:
     row = index_row()
     CassiniVIMS._label_from_index_row(row)

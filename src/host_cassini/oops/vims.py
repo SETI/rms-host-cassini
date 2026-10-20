@@ -363,14 +363,23 @@ class CassiniVIMS(oops.Host):
                    parallel=None, **kwargs):
         """A list of Observations, one for each row of a data file index.
 
-        The observations are for astrometry only and have no `data`. A row records the
-        swath but not the cube's band count, so each label's CORE_ITEMS lists a nominal
-        352 bands. A row does not record the pixel count of a POINT or OCCULTATION cube
-        either; nearly every such cube fills the full 64-line buffer, so its observations
-        assume 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with nominal timing, as
-        :meth:`from_file` assumes with `astrometry` for the same cube. A channel whose
-        recorded exposure is a placeholder (zero or negative) is treated as off, because
-        only the cube's label holds its real exposure.
+        The observations are for astrometry only and have no `data`.
+
+        A supplemental index that records them supplies the cube's actual shape
+        (CORE_SAMPLES, CORE_BANDS, CORE_LINES), the label's exposures
+        (IR_EXPOSURE_DURATION, VIS_EXPOSURE_DURATION) and, for a cube with time
+        backplanes, the spacecraft clock count of the first sample
+        (BACKPLANE_SCLK_START_COUNT), which then replaces START_TIME as each
+        observation's start.
+
+        Without those columns, the shape and the exposures are the index's best guess: a
+        row records the swath but not the cube's band count, so each label's CORE_ITEMS
+        lists a nominal 352 bands. A row does not record the pixel count of a POINT or
+        OCCULTATION cube either; nearly every such cube fills the full 64-line buffer,
+        so its observations assume 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with
+        nominal timing, as :meth:`from_file` assumes with `astrometry` for the same
+        cube. A channel whose recorded exposure is a placeholder (zero or negative) is
+        treated as off, because only the cube's label holds its real exposure.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
@@ -555,19 +564,26 @@ class CassiniVIMS(oops.Host):
 
         Returns:
             dict[str, Any]: A copy of `row_dict`, plus a "SPECTRAL_QUBE" (also "QUBE")
-            whose CORE_ITEMS are (SWATH_WIDTH, 352, SWATH_LENGTH), or the nominal full
-            buffer in POINT and OCCULTATION modes, and the (IR, VIS) pairs
-            POWER_STATE_FLAG, EXPOSURE_DURATION and SAMPLING_MODE_ID, which the index
-            records as separate IR_ and VIS_ columns. A channel whose recorded exposure
-            is zero or negative is marked off.
+            whose CORE_ITEMS are the row's CORE_SAMPLES, CORE_BANDS and CORE_LINES when
+            the supplemental index records them, and otherwise (SWATH_WIDTH, 352,
+            SWATH_LENGTH), or the nominal full buffer in POINT and OCCULTATION modes.
+            The (IR, VIS) pairs POWER_STATE_FLAG, EXPOSURE_DURATION and SAMPLING_MODE_ID
+            are built from the index's separate IR_ and VIS_ columns, with the
+            EXPOSURE_DURATION columns of the supplemental index preferred when present;
+            a channel whose recorded exposure is zero or negative is marked off. A
+            nonblank BACKPLANE_SCLK_START_COUNT replaces START_TIME.
         """
 
         label = dict(row_dict)
 
-        # Except in POINT and OCCULTATION modes, the cube's samples and lines are the
+        # A supplemental index that records the cube's shape is definitive. Otherwise,
+        # except in POINT and OCCULTATION modes, the cube's samples and lines are the
         # swath's width and length
         mode = row_dict['INSTRUMENT_MODE_ID']
-        if mode in _CORE_ITEMS_FROM_MODE:
+        if 'CORE_SAMPLES' in row_dict:
+            core_items = (row_dict['CORE_SAMPLES'], row_dict['CORE_BANDS'],
+                          row_dict['CORE_LINES'])
+        elif mode in _CORE_ITEMS_FROM_MODE:
             core_items = _CORE_ITEMS_FROM_MODE[mode]
         else:
             core_items = (row_dict['SWATH_WIDTH'], _INDEX_BANDS, row_dict['SWATH_LENGTH'])
@@ -576,9 +592,25 @@ class CassiniVIMS(oops.Host):
 
         label['POWER_STATE_FLAG'] = (row_dict['IR_POWER_STATE_FLAG'],
                                      row_dict['VIS_POWER_STATE_FLAG'])
-        label['EXPOSURE_DURATION'] = (row_dict['IR_EXPOSURE'], row_dict['VIS_EXPOSURE'])
+
+        # The IR_EXPOSURE and VIS_EXPOSURE columns sometimes hold a -999 placeholder for
+        # a cube whose label records the exposure; the EXPOSURE_DURATION columns of a
+        # supplemental index that has them repeat the label
+        if 'IR_EXPOSURE_DURATION' in row_dict:
+            label['EXPOSURE_DURATION'] = (row_dict['IR_EXPOSURE_DURATION'],
+                                          row_dict['VIS_EXPOSURE_DURATION'])
+        else:
+            label['EXPOSURE_DURATION'] = (row_dict['IR_EXPOSURE'],
+                                          row_dict['VIS_EXPOSURE'])
         label['SAMPLING_MODE_ID'] = (row_dict['IR_SAMPLING_MODE_ID'],
                                      row_dict['VIS_SAMPLING_MODE_ID'])
+
+        # A cube with time backplanes records its first spacecraft clock count in a
+        # supplemental index that has this column; it is more accurate than START_TIME
+        sclk = row_dict.get('BACKPLANE_SCLK_START_COUNT', '').strip()
+        if sclk:
+            tdb = cspyce.scs2e(-82, sclk)
+            label['START_TIME'] = julian.iso_from_tai(julian.tai_from_tdb(tdb), digits=3)
 
         # The index sometimes records a -999 placeholder for the exposure of a channel
         # that is on; only the cube's label holds the real value. Without an exposure the
