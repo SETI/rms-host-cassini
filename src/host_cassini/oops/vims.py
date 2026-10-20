@@ -366,8 +366,8 @@ class CassiniVIMS(oops.Host):
         The observations are for astrometry only and have no `data`. A row records the
         swath but not the cube's band count, so each label's CORE_ITEMS lists a nominal
         352 bands. A row does not record the pixel count of a POINT or OCCULTATION cube
-        either; nearly every such cube fills the full 64-line buffer, so its observation
-        assumes 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with nominal timing, as
+        either; nearly every such cube fills the full 64-line buffer, so its observations
+        assume 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with nominal timing, as
         :meth:`from_file` assumes with `astrometry` for the same cube.
 
         Parameters:
@@ -436,8 +436,8 @@ class CassiniVIMS(oops.Host):
             Observations, one for each filtered row of the index file.
 
         Raises:
-            HostIndexError: If no supplemental index was found or merged into `row_dicts`,
-                or if the supplement does not match the index row for row.
+            oops.host.HostIndexError: If no supplemental index was found or merged into
+                `row_dicts`, or if the supplement does not match the index row for row.
         """
 
         CassiniVIMS.initialize()
@@ -594,7 +594,7 @@ class CassiniVIMS(oops.Host):
             and IR.
 
         Raises:
-            oops.HostError: If some aspect of the label or file is not valid.
+            oops.host.HostFormatError: If some aspect of the label or file is not valid.
         """
 
         qube_dict = label['SPECTRAL_QUBE']
@@ -753,22 +753,24 @@ class CassiniVIMS(oops.Host):
                                       f'{filepath}')
             backplane_cadence = oops.cadence.Sequence(times, ir_texp)
 
-        elif label['PACKING_FLAG'] == 'ON':
-            times = times.ravel()
-            tstart = times[0]
-            frame_cadence = oops.cadence.Sequence(times[::frame_size], texp=0.)
-
-        else:       # No packing plus no embedded timing just means a better tstart
+        else:
+            # Otherwise the embedded times just provide a better tstart. For a packed
+            # cube, this approximates the per-frame times by the uniform header cadence.
             times = times.ravel()
             tstart = times[0]
 
-        vis_header_cadence = oops.cadence.Metronome(tstart, length_stride,
-                                                    vis_texp, swath_length)
-        ir_fast_cadence = oops.cadence.Metronome(tstart, ir_texp, ir_texp, swath_width)
+        # The header cadence of each active channel. An unused channel's exposure can be
+        # zero or a -999 placeholder, so no cadence is built for a channel that is off.
+        if not vis_is_off:
+            vis_header_cadence = oops.cadence.Metronome(tstart, length_stride,
+                                                        vis_texp, swath_length)
+        if not ir_is_off:
+            ir_fast_cadence = oops.cadence.Metronome(tstart, ir_texp, ir_texp,
+                                                     swath_width)
 
         # At this point...
-        #   vis_header_cadence  always defined, always 1-D.
-        #   ir_fast_cadence     always defined, always 1-D.
+        #   vis_header_cadence  defined if the VIS channel is on, always 1-D.
+        #   ir_fast_cadence     defined if the IR channel is on, always 1-D.
         #   backplane_cadence   defined if timing was recorded, always 1-D.
 
         ##################################################################################
@@ -789,9 +791,6 @@ class CassiniVIMS(oops.Host):
 
         # POINT/OCCULTATION case
         if swath_width == 1 and swath_length == 1:
-            if not vis_is_off:
-                raise HostFormatError(f'OCCULTATION mode with VIS channel ON in '
-                                      f'{filepath}')
             if backplane_cadence is None:
                 fast_stride = ir_texp   # + EXTRA_INTERSAMPLE_DELAY
                 fastcad = oops.cadence.Metronome(tstart, fast_stride, ir_texp, samples)
@@ -803,6 +802,20 @@ class CassiniVIMS(oops.Host):
 
             else:
                 ir_cadence = backplane_cadence
+
+            # A cruise POINT cube usually keeps the VIS channel on: its pixels share the
+            # IR raster's timing with the VIS exposure. A cube with embedded timing never
+            # has VIS on, so the IR raster's cadences are always defined here.
+            if not vis_is_off:
+                viscad = oops.cadence.Metronome(tstart, fast_stride, vis_texp, samples)
+                viscad = oops.cadence.DualCadence(slowcad, viscad)
+                vis_cadence = oops.cadence.ReshapedCadence(viscad, (samples*lines,))
+
+                if vis_data is not None:
+                    vis_data = vis_data.reshape((frames, 96))
+
+                vis_info = (oops.observation.Pixel, ('t','b'), vis_cadence, vis_fov,
+                            _VIS_FRAME_NAME)
 
             if ir_data is not None:
                 ir_data = ir_data.reshape((frames, 256))
@@ -838,29 +851,16 @@ class CassiniVIMS(oops.Host):
 
             if not ir_is_off:
                 if backplane_cadence is None:
-                    ir_cadence = oops.cadence.DualCadence(vis_header_cadence,
-                                                          ir_fast_cadence)
+                    # The IR lines follow the same stride as the VIS cadence, whether or
+                    # not the VIS channel is on
+                    line_cadence = oops.cadence.Metronome(tstart, length_stride,
+                                                          length_stride, swath_length)
+                    ir_cadence = oops.cadence.DualCadence(line_cadence, ir_fast_cadence)
                 else:
                     ir_cadence = oops.cadence.ReshapedCadence(backplane_cadence,
                                                               (lines,samples))
 
                 ir_info = (oops.observation.TimedImage, ('vslow','ufast','b'),
-                           ir_cadence, ir_fov, ir_frame_name)
-
-        # Multiple LINE case
-        elif swath_length == 1 and swath_length == lines:
-            if not vis_is_off:
-                vis_info = (oops.observation.TimedImage, ('vt','u','b'),
-                            frame_cadence, vis_fov, _VIS_FRAME_NAME)
-
-            if not ir_is_off:
-                if backplane_cadence is None:
-                    ir_cadence = oops.cadence.DualCadence(frame_cadence, ir_fast_cadence)
-                else:
-                    ir_cadence = oops.cadence.ReshapedCadence(backplane_cadence,
-                                                              (lines, samples))
-
-                ir_info = (oops.observation.TimedImage, ('vslow', 'ufast', 'b'),
                            ir_cadence, ir_fov, ir_frame_name)
 
         else:
@@ -931,9 +931,6 @@ class CassiniVIMS(oops.Host):
         If time backplanes are present, also return an array of times in seconds TDB as
         derived from these backplanes.
 
-        This procedure is absurdly complicated but it has been rather carefully debugged.
-        --MRS 7/4/12.
-
         Parameters:
             data_file (FCPath): The path to the cube.
             header_recs (int): The number of records that precede the cube's data.
@@ -947,10 +944,13 @@ class CassiniVIMS(oops.Host):
               no time backplane is found in the file.
 
         Raises:
-            HostError: If the byte order or data type of the core or the suffix is not
-                not recognized or if a line of core samples does not fill a whole number
-                of suffix items.
+            oops.host.HostFormatError: If the byte order or data type of the core or the
+                suffix is not recognized or if a line of core samples does not fill a
+                whole number of suffix items.
         """
+
+        # This procedure is absurdly complicated, but it has been carefully debugged
+        # against real cubes; change it only with real cubes at hand.
 
         qube_dict = label['SPECTRAL_QUBE']
 
@@ -979,7 +979,7 @@ class CassiniVIMS(oops.Host):
 
         # Make sure we have byte-aligned values
         if (core_samples * core_item_bytes) % suffix_item_bytes != 0:
-            raise HostError(f'misaligned array elements in {data_file}')
+            raise HostFormatError(f'misaligned array elements in {data_file}')
 
         # Determine the dtype and strides for the core item array
         band_stride = (core_samples * core_item_bytes +
@@ -1002,8 +1002,8 @@ class CassiniVIMS(oops.Host):
         elif 'PC_' in core_item_type or 'LSB_' in core_item_type:
             core_dtype = '<'
         else:
-            raise HostError(f'unrecognized CORE_ITEM_TYPE {core_item_type} in '
-                            f'{data_file}')
+            raise HostFormatError(f'unrecognized CORE_ITEM_TYPE {core_item_type} in '
+                                  f'{data_file}')
 
         if 'UNSIGNED' in core_item_type:
             core_dtype += 'u'
@@ -1015,8 +1015,8 @@ class CassiniVIMS(oops.Host):
             core_dtype += 'f'
             native_dtype = 'float'
         else:
-            raise HostError(f'unrecognized CORE_ITEM_TYPE {core_item_type} in '
-                            f'{data_file}')
+            raise HostFormatError(f'unrecognized CORE_ITEM_TYPE {core_item_type} in '
+                                  f'{data_file}')
 
         core_dtype += str(core_item_bytes)
 
@@ -1039,13 +1039,14 @@ class CassiniVIMS(oops.Host):
         if 'SLICE_TIME_SECONDS' not in band_suffix_name:
             return (data, None)
 
-        # Determine the dtype for the file core
-        if 'SUN_' in core_item_type or 'MSB_' in suffix_item_type:
+        # Determine the dtype for the file suffix
+        if 'SUN_' in suffix_item_type or 'MSB_' in suffix_item_type:
             suffix_item_dtype = '>'
-        elif 'PC_' in core_item_type or 'LSB_' in suffix_item_type:
+        elif 'PC_' in suffix_item_type or 'LSB_' in suffix_item_type:
             suffix_item_dtype = '<'
         else:
-            raise oops.HostError('Unrecognized byte order: ' + suffix_item_type)
+            raise HostFormatError(f'unrecognized suffix item type {suffix_item_type} in '
+                                  f'{data_file}')
 
         if 'UNSIGNED' in suffix_item_type:
             suffix_item_dtype += 'u'
@@ -1054,7 +1055,8 @@ class CassiniVIMS(oops.Host):
         elif 'REAL'    in suffix_item_type:
             suffix_item_dtype += 'f'
         else:
-            raise oops.OopsTypeError('Unrecognized suffix data type: ' + suffix_item_type)
+            raise HostFormatError(f'unrecognized suffix item type {suffix_item_type} in '
+                                  f'{data_file}')
 
         suffix_item_dtype += str(suffix_item_bytes)
 
@@ -1122,11 +1124,11 @@ class CassiniVIMS(oops.Host):
             * `time`: The time in seconds TDB at each point of the meshgrid.
 
         Raises:
-            IncorrectHostError: If `obs` is not a VIMS observation.
+            oops.host.WrongHostError: If `obs` is not a VIMS observation.
         """
 
         if obs.instrument != 'VIMS':
-            raise IncorrectHostError(f'not a VIMS observation: {obs.instrument}')
+            raise WrongHostError(f'not a VIMS observation: {obs.instrument}')
 
         (ushrink,vshrink) = _SHRINKAGE[(obs.detector, obs.sampling)]
 

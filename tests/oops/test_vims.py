@@ -12,7 +12,7 @@ import numpy as np
 import oops
 import pytest
 from conftest import FakeSpice, FakeSpiceDB, pds3_lines
-from oops.host import PdsHostError
+from oops.host import HostFormatError, HostIndexError, WrongHostError
 from pdsparser import Pds3Label
 
 import host_cassini.oops.vims as vims
@@ -327,9 +327,27 @@ def test_point(tmp_path: pathlib.Path) -> None:
     assert ir.data.shape == (2, 256)
 
 
+def test_point_with_vis_on(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, samples=2, lines=1, SWATH_WIDTH=1, SWATH_LENGTH=1)
+    (vis, ir) = CassiniVIMS.from_file(path)
+    assert type(vis) is oops.observation.Pixel
+    assert vis.data.shape == (2, 96)
+    assert vis.cadence.shape == (2,)
+    assert vis.time[0] == pytest.approx(ir.time[0])
+    assert vis.cadence.texp == pytest.approx(1. * vims._TIME_FACTOR)
+
+
+def test_vis_off_tolerates_placeholder_exposure(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, POWER_STATE_FLAG=['ON', 'OFF'],
+                           EXPOSURE_DURATION=[100., -999.])
+    (vis, ir) = CassiniVIMS.from_file(path)
+    assert vis is None
+    assert type(ir) is oops.observation.TimedImage
+
+
 def test_unsupported_shape(tmp_path: pathlib.Path) -> None:
     path = write_pds3_cube(tmp_path, lines=1, SWATH_WIDTH=2, SWATH_LENGTH=2)
-    with pytest.raises(PdsHostError, match='unsupported VIMS format'):
+    with pytest.raises(HostFormatError, match='unsupported VIMS format'):
         CassiniVIMS.from_file(path, astrometry=True)
 
 
@@ -337,21 +355,22 @@ def test_misaligned_suffix(tmp_path: pathlib.Path) -> None:
     label = {'SPECTRAL_QUBE': {'CORE_ITEMS': (1, 256, 1), 'SUFFIX_ITEMS': (0, 1)},
              'RECORD_BYTES': 512}
     path = tmp_path / 'cube.qub'
-    with pytest.raises(PdsHostError, match=re.escape(f'misaligned array elements in {path}')):
+    with pytest.raises(HostFormatError,
+                       match=re.escape(f'misaligned array elements in {path}')):
         CassiniVIMS._load_data_and_times(path, 0, label)
 
 
 def test_validate_index_file_names() -> None:
     index_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
     supp_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_SPECIFICATION_NAME': 'data/v2.LBL'}
-    with pytest.raises(ValueError,
+    with pytest.raises(HostIndexError,
                        match=re.escape('file names do not match: "v1.QUB", "v2.LBL"')):
         CassiniVIMS._validate_index(index_row, supp_row)
 
 
 def test_from_index_requires_supplement() -> None:
     row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
-    with pytest.raises(ValueError,
+    with pytest.raises(HostIndexError,
                        match=re.escape('Cassini VIMS needs a supplemental index: '
                                        'INDEX.LBL')):
         CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
@@ -411,6 +430,21 @@ def test_from_index_point_assumes_full_buffer(mode: str, steps: int) -> None:
     assert type(ir) is oops.observation.Pixel
     assert ir.cadence.shape == (steps,)
     assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+
+
+def test_from_index_point_with_vis_on() -> None:
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1)
+    [(vis, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert type(vis) is oops.observation.Pixel
+    assert vis.cadence.shape == (64,)
+    assert vis.time[0] == pytest.approx(ir.time[0])
+
+
+def test_from_index_vis_off_tolerates_placeholder_exposure() -> None:
+    row = index_row(VIS_POWER_STATE_FLAG='OFF', VIS_EXPOSURE=-999.)
+    [(vis, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert vis is None
+    assert type(ir) is oops.observation.TimedImage
 
 
 def test_from_index_select() -> None:
@@ -495,9 +529,9 @@ def test_host_from_file_dispatches_to_vims(tmp_path: pathlib.Path) -> None:
     (0, 'VIS'),
     (-1, 'IR'),
     (slice(1, None), ['IR']),
-    (('IR', 'VIS'), ['IR', 'VIS']),
-    ((slice(None), 'IR'), ['VIS', 'IR', 'IR']),
-], ids=['VIS', 'ir', 'index', 'negative', 'slice', 'names', 'slice-and-name'])
+    (('IR',), 'IR'),
+    ((slice(1, None),), ['IR']),
+], ids=['VIS', 'ir', 'index', 'negative', 'slice', 'tuple-name', 'tuple-slice'])
 def test_select(tmp_path: pathlib.Path, select: Any, detectors: str | list[str]) -> None:
     result = CassiniVIMS.from_file(write_pds3_cube(tmp_path), select=select)
     if isinstance(result, tuple):
@@ -518,12 +552,13 @@ def test_select_inactive_channel(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.parametrize(('select', 'error', 'message'), [
     ('UV', ValueError, "unrecognized select name: 'UV'"),
-    (2, IndexError, 'tuple index out of range'),
+    (2, IndexError, 'select index out of range: 2'),
+    (('IR', 'VIS'), IndexError, "invalid select ('IR', 'VIS')"),
     (1.5, TypeError, 'invalid select: 1.5'),
-], ids=['name', 'index', 'type'])
+], ids=['name', 'index', 'tuple', 'type'])
 def test_select_errors(tmp_path: pathlib.Path, select: Any, error: type[Exception],
                        message: str) -> None:
-    with pytest.raises(error, match=message):
+    with pytest.raises(error, match=re.escape(message)):
         CassiniVIMS.from_file(write_pds3_cube(tmp_path), select=select)
 
 ##########################################################################################
@@ -542,7 +577,7 @@ def test_meshgrid_and_times(image_pair: Observations) -> None:
 def test_meshgrid_and_times_rejects_other_instruments(image_pair: Observations) -> None:
     obs = image_pair[1]
     obs.insert_subfield('instrument', 'ISS')
-    with pytest.raises(ValueError, match='not a VIMS observation: ISS'):
+    with pytest.raises(WrongHostError, match='not a VIMS observation: ISS'):
         CassiniVIMS.meshgrid_and_times(obs)
 
 ##########################################################################################
