@@ -4,6 +4,7 @@
 """Tests for the Cassini VIMS host, host_cassini.oops.vims."""
 
 import pathlib
+import re
 from typing import Any
 
 import julian
@@ -11,6 +12,7 @@ import numpy as np
 import oops
 import pytest
 from conftest import FakeSpice, FakeSpiceDB, pds3_lines
+from oops.host import PdsHostError
 from pdsparser import Pds3Label
 
 import host_cassini.oops.vims as vims
@@ -18,6 +20,7 @@ from host_cassini.oops._cassini import _Cassini
 from host_cassini.oops.vims     import CassiniVIMS
 
 START_TIME = '2005-01-01T00:00:00.000'
+STOP_TIME = '2005-01-01T00:00:10.000'
 RECORD_BYTES = 512
 BAND_SUFFIX_NAME = ['X_SCAN_DRIVE_CURRENT', 'Z_SCAN_DRIVE_CURRENT',
                     'X_SCAN_MIRROR_POSITION', 'Z_SCAN_MIRROR_POSITION']
@@ -123,6 +126,27 @@ def write_isis_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 3
 
 
 Observations = tuple[oops.Observation, oops.Observation]
+
+
+def index_row(**changes: Any) -> dict[str, Any]:
+    """A merged index and supplemental index row for the cube of `vims_keywords()`."""
+
+    keywords = vims_keywords()
+    row = {name: keywords[name]
+           for name in ('TARGET_NAME', 'OBSERVATION_ID', 'START_TIME', 'INSTRUMENT_MODE_ID',
+                        'SWATH_WIDTH', 'SWATH_LENGTH', 'OVERWRITTEN_CHANNEL_FLAG',
+                        'PACKING_FLAG', 'INTERFRAME_DELAY_DURATION',
+                        'INTERLINE_DELAY_DURATION', 'X_OFFSET', 'Z_OFFSET')}
+    (row['IR_POWER_STATE_FLAG'], row['VIS_POWER_STATE_FLAG']) = (
+        keywords['POWER_STATE_FLAG'])
+    (row['IR_EXPOSURE'], row['VIS_EXPOSURE']) = keywords['EXPOSURE_DURATION']
+    (row['IR_SAMPLING_MODE_ID'], row['VIS_SAMPLING_MODE_ID']) = (
+        keywords['SAMPLING_MODE_ID'])
+    row.update({'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v0000000001_1.qub',
+                'FILE_SPECIFICATION_NAME': 'data/2005001T000000/v0000000001_1.lbl',
+                'STOP_TIME': STOP_TIME})
+    row.update(changes)
+    return row
 
 
 @pytest.fixture
@@ -305,8 +329,99 @@ def test_point(tmp_path: pathlib.Path) -> None:
 
 def test_unsupported_shape(tmp_path: pathlib.Path) -> None:
     path = write_pds3_cube(tmp_path, lines=1, SWATH_WIDTH=2, SWATH_LENGTH=2)
-    with pytest.raises(oops.OopsValueError, match='unsupported VIMS format'):
+    with pytest.raises(PdsHostError, match='unsupported VIMS format'):
         CassiniVIMS.from_file(path, astrometry=True)
+
+
+def test_misaligned_suffix(tmp_path: pathlib.Path) -> None:
+    label = {'SPECTRAL_QUBE': {'CORE_ITEMS': (1, 256, 1), 'SUFFIX_ITEMS': (0, 1)},
+             'RECORD_BYTES': 512}
+    path = tmp_path / 'cube.qub'
+    with pytest.raises(PdsHostError, match=re.escape(f'misaligned array elements in {path}')):
+        CassiniVIMS._load_data_and_times(path, 0, label)
+
+
+def test_validate_index_file_names() -> None:
+    index_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
+    supp_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_SPECIFICATION_NAME': 'data/v2.LBL'}
+    with pytest.raises(ValueError,
+                       match=re.escape('file names do not match: "v1.QUB", "v2.LBL"')):
+        CassiniVIMS._validate_index(index_row, supp_row)
+
+
+def test_from_index_requires_supplement() -> None:
+    row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
+    with pytest.raises(ValueError,
+                       match=re.escape('Cassini VIMS needs a supplemental index: '
+                                       'INDEX.LBL')):
+        CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+
+
+@pytest.mark.parametrize(('key', 'expected'), [
+    ('POWER_STATE_FLAG', ('ON', 'ON')),
+    ('EXPOSURE_DURATION', (100., 1000.)),
+    ('SAMPLING_MODE_ID', ('NORMAL', 'NORMAL')),
+])
+def test_label_from_index_row_pairs_channels(key: str, expected: tuple[Any, Any]) -> None:
+    assert CassiniVIMS._label_from_index_row(index_row())[key] == expected
+
+
+def test_label_from_index_row_core_items() -> None:
+    label = CassiniVIMS._label_from_index_row(index_row())
+    assert label['SPECTRAL_QUBE']['CORE_ITEMS'] == (4, 352, 2)
+    assert label['QUBE'] is label['SPECTRAL_QUBE']
+
+
+@pytest.mark.parametrize(('mode', 'core_items'), [
+    ('POINT', (1, 352, 64)),
+    ('OCCULTATION', (64, 352, 64)),
+])
+def test_label_from_index_row_full_buffer(mode: str,
+                                          core_items: tuple[int, int, int]) -> None:
+    row = index_row(INSTRUMENT_MODE_ID=mode, SWATH_WIDTH=1, SWATH_LENGTH=1)
+    assert CassiniVIMS._label_from_index_row(row)['QUBE']['CORE_ITEMS'] == core_items
+
+
+def test_label_from_index_row_leaves_row_unchanged() -> None:
+    row = index_row()
+    CassiniVIMS._label_from_index_row(row)
+    assert row == index_row()
+
+
+def test_from_index_image_matches_from_file(image_pair: Observations) -> None:
+    [pair] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()])
+    for (from_index, from_file) in zip(pair, image_pair, strict=True):
+        assert type(from_index) is type(from_file)
+        assert from_index.time == pytest.approx(from_file.time)
+        assert tuple(from_index.fov.uv_shape.vals) == tuple(from_file.fov.uv_shape.vals)
+
+
+def test_from_index_filepath_and_no_data() -> None:
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()])
+    assert ir.filepath == 'COVIMS_0001/data/2005001T000000/v0000000001_1.lbl'
+    assert not hasattr(ir, 'data')
+
+
+@pytest.mark.parametrize(('mode', 'steps'), [('POINT', 64), ('OCCULTATION', 4096)])
+def test_from_index_point_assumes_full_buffer(mode: str, steps: int) -> None:
+    row = index_row(INSTRUMENT_MODE_ID=mode, SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    VIS_POWER_STATE_FLAG='OFF')
+    [(vis, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert vis is None
+    assert type(ir) is oops.observation.Pixel
+    assert ir.cadence.shape == (steps,)
+    assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+
+
+def test_from_index_select() -> None:
+    [ir] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()], select='IR')
+    assert ir.detector == 'IR'
+
+
+def test_from_index_leaves_rows_unchanged() -> None:
+    rows = [index_row()]
+    CassiniVIMS.from_index('INDEX.LBL', row_dicts=rows)
+    assert rows == [index_row()]
 
 
 def test_fov_override(tmp_path: pathlib.Path) -> None:

@@ -188,6 +188,8 @@ dictionary = ".codespell-dictionary.txt,-"
 # `optical-centre` is one unknown token, and -- because this project quotes
 # strings with single quotes -- so is every string literal, `'colour'` included.
 regex = "[a-zA-Z]+"
+# `indx` is the deliberate spelling for index-row variables throughout the hosts.
+ignore-words-list = "indx"
 # *.egg-info holds the build metadata, whose commit hashes can read as misspellings.
 skip = "*.egg-info,*/.git/*,*/_build/*,*/venv/*,*/.venv/*,*.lock,*.png,*.jpg,*.svg"
 

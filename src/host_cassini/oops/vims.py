@@ -21,6 +21,7 @@ from filecache import FCPath
 from pdsparser import Pds3Label
 
 import oops
+from oops.host import HostFormatError, HostIndexError, WrongHostError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _fix_cassini_ring_target,
                        _pds3_options_with_defaults, _CMATRIX_ROTATION)
 
@@ -102,6 +103,19 @@ _OBS_CODE_REPAIRS = {
 
 # Names for the `select` option of from_file() -> index in the returned (vis, ir) pair
 _CHANNEL_NAMES = {'VIS': 0, 'IR': 1}
+
+# The index does not record a cube's band count, which varies with the mission phase
+# rather than with any index column. Observations from an index use this value, which
+# only matters for reading data, never for geometry.
+_INDEX_BANDS = 352
+
+# A POINT or OCCULTATION row records SWATH_WIDTH = SWATH_LENGTH = 1, which is not the
+# cube's shape, and the row's timing does not constrain the shape either: tour cubes are
+# 64 x 64 even when STOP_TIME implies fewer lines. Nearly every such cube fills the
+# 64-line buffer: every cruise POINT cube is 1 sample wide and 97% are 64 lines, and at
+# least 97% of OCCULTATION cubes are 64 x 64.
+_CORE_ITEMS_FROM_MODE = {'POINT'      : (1, _INDEX_BANDS, 64),
+                         'OCCULTATION': (64, _INDEX_BANDS, 64)}
 
 # The SPICE frames of the VIS channel, the IR channel, and the IR channel's solar port
 _VIS_FRAME_NAME    = 'CASSINI_VIMS_V'
@@ -316,14 +330,11 @@ class CassiniVIMS(oops.Host):
         # Default Pds3Label options are method="fast", sources=False
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
-        # Read the label and (maybe) data
+        # Read the label
         fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
                                             pds3_options=pds3_options)
-        filepath = FCPath(fileinfo.filepath)
-        (label, data_file, header_recs) = CassiniVIMS._standard_label(fileinfo.as_dict(),
-                                                                      filepath)
 
-        # Define the object(s)
+        # Define the overrides
         overrides = {
             'target'      : target,
             'lightsource' : lightsource,
@@ -338,24 +349,36 @@ class CassiniVIMS(oops.Host):
             'parallel'    : parallel,
         }
 
-        pair = CassiniVIMS._make_observations(label, filepath, data_file, header_recs,
+        # Define and select the object(s)
+        label = CassiniVIMS._standard_label(fileinfo.as_dict())
+        pair = CassiniVIMS._make_observations(label, fileinfo.filepath,
                                               astrometry=astrometry, overrides=overrides)
         return oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
 
     @staticmethod
     def from_index(filepath, *, supplement=None, label=None, row_dicts=None,
                    pds3_options=None, filter=None, select=None, target=None,
-                   lightsource=None, path=None, frame=None, fov=None, calibrations=None,
-                   timeshift=None, navigation=None, tracker=None, parallel=None,
-                   **kwargs):
+                   lightsource=None, path=None, frame=None, cadence=None, fov=None,
+                   calibrations=None, timeshift=None, navigation=None, tracker=None,
+                   parallel=None, **kwargs):
         """A list of Observations, one for each row of a data file index.
+
+        The observations are for astrometry only and have no `data`. A row records the
+        swath but not the cube's band count, so each label's CORE_ITEMS lists a nominal
+        352 bands. A row does not record the pixel count of a POINT or OCCULTATION cube
+        either; nearly every such cube fills the full 64-line buffer, so its observation
+        assumes 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with nominal timing, as
+        :meth:`from_file` assumes with `astrometry` for the same cube.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
                 data file index.
             supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file. If provided, this file must have the same
-                records in the same order as the table described by `filepath`.
+                of a supplemental index file. This file must have the same records in the
+                same order as the table described by `filepath`. If not specified, the
+                directory of `filepath` will be searched for a file whose name matches
+                except that "_index" is replaced by "_supplemental_index" in upper or
+                lower case.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
@@ -411,29 +434,86 @@ class CassiniVIMS(oops.Host):
         Returns:
             list[Observation | ObsArray]: The list of Observations or arrays of
             Observations, one for each filtered row of the index file.
+
+        Raises:
+            HostIndexError: If no supplemental index was found or merged into `row_dicts`,
+                or if the supplement does not match the index row for row.
         """
 
-        raise NotImplementedError('CassiniVIMS.from_index() is not implemented')
+        CassiniVIMS.initialize()
+
+        # Read and filter the index table
+        if row_dicts is None:
+            supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
+            row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
+                                                   validate=CassiniVIMS._validate_index,
+                                                   pds3_options=pds3_options)
+
+        # The file path and most of the observation's parameters come from the supplement
+        if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
+            raise HostIndexError(f'Cassini VIMS needs a supplemental index: {filepath}')
+
+        row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
+
+        overrides = {
+            'target'      : target,
+            'lightsource' : lightsource,
+            'path'        : path,
+            'frame'       : frame,
+            'cadence'     : cadence,
+            'fov'         : fov,
+            'calibrations': calibrations,
+            'timeshift'   : timeshift,
+            'navigation'  : navigation,
+            'tracker'     : tracker,
+            'parallel'    : parallel,
+        }
+
+        # Create the list of Observations
+        obslist = []
+        for row_dict in row_dicts:
+            fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
+            label = CassiniVIMS._label_from_index_row(row_dict)
+            pair = CassiniVIMS._make_observations(label, fpath, astrometry=True,
+                                                  overrides=overrides)
+            item = oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
+            obslist.append(item)
+
+        return obslist
 
     @staticmethod
-    def _standard_label(dict_, filepath):
+    def _validate_index(indx_dict, supp_dict):
+        """Raise an exception if the index row and supplement row do not match."""
+
+        if 'VOLUME_ID' not in supp_dict:
+            raise HostIndexError('missing VOLUME_ID in supplemental index')
+        if indx_dict['VOLUME_ID'] != supp_dict['VOLUME_ID']:
+            indx_val = indx_dict['VOLUME_ID']
+            supp_val = supp_dict['VOLUME_ID']
+            raise HostIndexError(f'VOLUME_IDs do not match: "{indx_val}", "{supp_val}"')
+
+        if 'FILE_SPECIFICATION_NAME' not in supp_dict:
+            raise HostIndexError('missing FILE_SPECIFICATION_NAME in supplemental index')
+        indx_name = indx_dict['FILE_NAME']
+        supp_name = supp_dict['FILE_SPECIFICATION_NAME'].rpartition('/')[-1]
+        if indx_name[:-3] != supp_name[:-3]:
+            raise HostIndexError(f'file names do not match: "{indx_name}", "{supp_name}"')
+
+        return True
+
+    @staticmethod
+    def _standard_label(label):
         """A VIMS label dictionary in a standard form, whether from ISIS or PDS3.
 
         Parameters:
-            dict_ (dict): The parsed label of an ISIS cube or of a detached PDS3 label.
-            filepath (FCPath): The path to the cube or to its detached PDS3 label.
+            label (dict[str, Any]): The dictionary from an ISIS header or a detached PDS3
+                label. It is modified in place.
 
         Returns:
-            tuple[dict, FCPath, int]: (label, data_file, header_recs), where:
-
-            * `label`: A copy of `dict_` that has the cube's description in both "QUBE"
-              and "SPECTRAL_QUBE" and its non-structural keywords at the top level, so
-              that ISIS and PDS3 labels can be read the same way.
-            * `data_file`: The path to the cube.
-            * `header_recs`: The number of records that precede the cube's data.
+            dict[str, Any]: The label with standardized keywords. The cube's description
+            is under both "QUBE" and "SPECTRAL_QUBE" and the non-structural keywords are
+            at the top level.
         """
-
-        label = dict(dict_)
 
         # Convert ISIS .qub info to a standard PDS3 label dictionary
         if 'QUBE' in label:
@@ -451,8 +531,7 @@ class CassiniVIMS(oops.Host):
 
             # Rename "PACKING" to "PACKING_FLAG"
             label['PACKING_FLAG'] = label['PACKING']
-
-            return (label, filepath, label['^QUBE'] - 1)
+            return label
 
         # Otherwise, convert PDS3 label info to a standard ISIS dictionary, inserting the
         # info from the .FMT files
@@ -462,28 +541,60 @@ class CassiniVIMS(oops.Host):
 
         # ISIS labels use "QUBE" in place of "SPECTRAL_QUBE"
         label['QUBE'] = label['SPECTRAL_QUBE']
-
-        return (label, filepath.with_name(label['^QUBE']), label['^QUBE_offset'] - 1)
+        return label
 
     @staticmethod
-    def _make_observations(label, filepath, data_file, header_recs, *, astrometry,
-                           overrides):
+    def _label_from_index_row(row_dict):
+        """A VIMS label dictionary in the standard form of :meth:`_standard_label`, built
+        from one row of an index merged with its supplemental index.
+
+        Parameters:
+            row_dict (dict[str, Any]): The merged row. It is not modified.
+
+        Returns:
+            dict[str, Any]: A copy of `row_dict`, plus a "SPECTRAL_QUBE" (also "QUBE")
+            whose CORE_ITEMS are (SWATH_WIDTH, 352, SWATH_LENGTH), or the nominal full
+            buffer in POINT and OCCULTATION modes, and the (IR, VIS) pairs
+            POWER_STATE_FLAG, EXPOSURE_DURATION and SAMPLING_MODE_ID, which the index
+            records as separate IR_ and VIS_ columns.
+        """
+
+        label = dict(row_dict)
+
+        # Except in POINT and OCCULTATION modes, the cube's samples and lines are the
+        # swath's width and length
+        mode = row_dict['INSTRUMENT_MODE_ID']
+        if mode in _CORE_ITEMS_FROM_MODE:
+            core_items = _CORE_ITEMS_FROM_MODE[mode]
+        else:
+            core_items = (row_dict['SWATH_WIDTH'], _INDEX_BANDS, row_dict['SWATH_LENGTH'])
+        label['SPECTRAL_QUBE'] = {'CORE_ITEMS': core_items}
+        label['QUBE'] = label['SPECTRAL_QUBE']
+
+        label['POWER_STATE_FLAG'] = (row_dict['IR_POWER_STATE_FLAG'],
+                                     row_dict['VIS_POWER_STATE_FLAG'])
+        label['EXPOSURE_DURATION'] = (row_dict['IR_EXPOSURE'], row_dict['VIS_EXPOSURE'])
+        label['SAMPLING_MODE_ID'] = (row_dict['IR_SAMPLING_MODE_ID'],
+                                     row_dict['VIS_SAMPLING_MODE_ID'])
+        return label
+
+    @staticmethod
+    def _make_observations(label, filepath, *, astrometry, overrides):
         """The VIS and IR observations described by a standardized VIMS label.
 
         Parameters:
-            label (dict): The label, as returned by :meth:`_standard_label`.
-            filepath (FCPath): The path to the cube or to its detached PDS3 label.
-            data_file (FCPath): The path to the cube.
-            header_recs (int): The number of records that precede the cube's data.
+            label (dict): The label, as returned by :meth:`_standard_label` or
+                :meth:`_label_from_index_row`.
+            filepath (str | FCPath): The path to the cube or to its detached PDS3 label.
             astrometry (bool): True to omit the data arrays.
             overrides (dict): The standard override options of :meth:`from_file`.
 
         Returns:
-            tuple[Observation | None, Observation | None]: (vis, ir), as described for
-            :meth:`from_file`.
+            tuple[Observation | None, Observation | None]: Observation, if any, for VIS
+            and IR.
 
         Raises:
-            OopsValueError: If the cube has an unsupported shape.
+            oops.HostError: If some aspect of the label or file is not valid.
         """
 
         qube_dict = label['SPECTRAL_QUBE']
@@ -505,16 +616,26 @@ class CassiniVIMS(oops.Host):
         ##################################################################################
 
         (samples, bands, lines) = qube_dict['CORE_ITEMS']
-        assert bands in (352, 256, 96)
+        if bands not in (352, 256, 96):
+            raise HostFormatError(f'unrecognized band axis size {bands} in {filepath}')
 
-        if astrometry:
+        if astrometry:  # always True for from_index()
             vis_data = None
             ir_data = None
             times = None
         else:
+            filepath = FCPath(filepath)
+            if filepath.suffix.lower() == '.lbl':
+                data_file = filepath.parent / label['^QUBE']
+                header_recs = label['^QUBE_offset'] - 1
+            else:
+                data_file = filepath
+                header_recs = label['^QUBE'] - 1
+
             (array, times) = CassiniVIMS._load_data_and_times(data_file, header_recs,
                                                               label)
-            assert array.shape == (lines, samples, bands), 'incorrect array shape'
+            if array.shape != (lines, samples, bands):
+                raise HostFormatError(f'invalid array shape {array.shape} in {filepath}')
 
             if bands == 352:
                 vis_data = array[:,:,:96]   # index order is [line, sample, band]
@@ -535,11 +656,14 @@ class CassiniVIMS(oops.Host):
 
         frame_size = swath_width * swath_length
         frames = (samples * lines) // frame_size
-        assert samples * lines == frames * frame_size
+        if samples * lines != frames * frame_size:
+            raise HostFormatError(f'mismatched array shape and size in {filepath}')
 
         # Replace multiple one-line frames by one frame, multiple lines
         if frames > 1 and frame_size != 1:
-            assert swath_length == 1
+            if swath_length != 1:
+                raise HostFormatError(f'invalid SWATH_LENGTH {swath_length} '
+                                      f'in {filepath}')
             swath_length = frames
             lines = frames
             frame_size = swath_width * swath_length
@@ -587,7 +711,7 @@ class CassiniVIMS(oops.Host):
             ir_fov = oops.fov.FlatFOV(_IR_NORMAL_SCALE, uv_shape, uv_los=uv_los)
 
         # Nyquist sampling
-        ### TBD: VIMS IR sampling mode UNDER is untested!!
+        # TBD: VIMS IR sampling mode UNDER is untested!!
         # In UNDER sampling the IR detector is twice the size of the sample spacing, so
         # the pixels overlap. An FOV cannot represent overlapping pixels, so the boundary
         # is slightly off, as noted at the top of this file. GapFOV models the opposite
@@ -622,19 +746,20 @@ class CassiniVIMS(oops.Host):
 
         elif label['OVERWRITTEN_CHANNEL_FLAG'] == 'ON':
             times = times.ravel()
-            assert times[0] < times[1]
-            assert vis_is_off
+            if times[0] >= times[1]:
+                raise HostFormatError(f'invalid embedded times in {filepath}')
+            if not vis_is_off:
+                raise HostFormatError(f'OCCULTATION mode with VIS channel ON in '
+                                      f'{filepath}')
             backplane_cadence = oops.cadence.Sequence(times, ir_texp)
 
         elif label['PACKING_FLAG'] == 'ON':
             times = times.ravel()
-            assert times[0] == times[1]
             tstart = times[0]
             frame_cadence = oops.cadence.Sequence(times[::frame_size], texp=0.)
 
         else:       # No packing plus no embedded timing just means a better tstart
             times = times.ravel()
-            assert times[0] == times[1]
             tstart = times[0]
 
         vis_header_cadence = oops.cadence.Metronome(tstart, length_stride,
@@ -664,7 +789,9 @@ class CassiniVIMS(oops.Host):
 
         # POINT/OCCULTATION case
         if swath_width == 1 and swath_length == 1:
-            assert vis_is_off
+            if not vis_is_off:
+                raise HostFormatError(f'OCCULTATION mode with VIS channel ON in '
+                                      f'{filepath}')
             if backplane_cadence is None:
                 fast_stride = ir_texp   # + EXTRA_INTERSAMPLE_DELAY
                 fastcad = oops.cadence.Metronome(tstart, fast_stride, ir_texp, samples)
@@ -731,13 +858,13 @@ class CassiniVIMS(oops.Host):
                     ir_cadence = oops.cadence.DualCadence(frame_cadence, ir_fast_cadence)
                 else:
                     ir_cadence = oops.cadence.ReshapedCadence(backplane_cadence,
-                                                              (lines,samples))
+                                                              (lines, samples))
 
-                ir_info = (oops.observation.TimedImage, ('vslow','ufast','b'),
+                ir_info = (oops.observation.TimedImage, ('vslow', 'ufast', 'b'),
                            ir_cadence, ir_fov, ir_frame_name)
 
         else:
-            raise oops.OopsValueError(f'unsupported VIMS format in file {filepath}')
+            raise HostFormatError(f'unsupported VIMS format in file {filepath}')
 
         ##################################################################################
         # Define Observation attributes
@@ -820,8 +947,9 @@ class CassiniVIMS(oops.Host):
               no time backplane is found in the file.
 
         Raises:
-            OopsTypeError: If the byte order or data type of the core or the suffix is
-                not recognized.
+            HostError: If the byte order or data type of the core or the suffix is not
+                not recognized or if a line of core samples does not fill a whole number
+                of suffix items.
         """
 
         qube_dict = label['SPECTRAL_QUBE']
@@ -850,10 +978,8 @@ class CassiniVIMS(oops.Host):
         header_bytes = record_bytes * header_recs
 
         # Make sure we have byte-aligned values
-        assert (core_samples * core_item_bytes) % suffix_item_bytes == 0, \
-            'misaligned items'
-
-        ####
+        if (core_samples * core_item_bytes) % suffix_item_bytes != 0:
+            raise HostError(f'misaligned array elements in {data_file}')
 
         # Determine the dtype and strides for the core item array
         band_stride = (core_samples * core_item_bytes +
@@ -876,7 +1002,8 @@ class CassiniVIMS(oops.Host):
         elif 'PC_' in core_item_type or 'LSB_' in core_item_type:
             core_dtype = '<'
         else:
-            raise oops.OopsTypeError('Unrecognized byte order: ' + core_item_type)
+            raise HostError(f'unrecognized CORE_ITEM_TYPE {core_item_type} in '
+                            f'{data_file}')
 
         if 'UNSIGNED' in core_item_type:
             core_dtype += 'u'
@@ -884,11 +1011,12 @@ class CassiniVIMS(oops.Host):
         elif 'INTEGER' in core_item_type:
             core_dtype += 'i'
             native_dtype = 'int'
-        elif 'REAL'    in core_item_type:
+        elif 'REAL' in core_item_type:
             core_dtype += 'f'
             native_dtype = 'float'
         else:
-            raise oops.OopsTypeError('Unrecognized core data type: ' + core_item_type)
+            raise HostError(f'unrecognized CORE_ITEM_TYPE {core_item_type} in '
+                            f'{data_file}')
 
         core_dtype += str(core_item_bytes)
 
@@ -911,15 +1039,13 @@ class CassiniVIMS(oops.Host):
         if 'SLICE_TIME_SECONDS' not in band_suffix_name:
             return (data, None)
 
-        ####
-
         # Determine the dtype for the file core
         if 'SUN_' in core_item_type or 'MSB_' in suffix_item_type:
             suffix_item_dtype = '>'
         elif 'PC_' in core_item_type or 'LSB_' in suffix_item_type:
             suffix_item_dtype = '<'
         else:
-            raise oops.OopsTypeError('Unrecognized byte order: ' + suffix_item_type)
+            raise oops.HostError('Unrecognized byte order: ' + suffix_item_type)
 
         if 'UNSIGNED' in suffix_item_type:
             suffix_item_dtype += 'u'
@@ -954,7 +1080,8 @@ class CassiniVIMS(oops.Host):
         # Convert to TDB
         mask = (seconds == -8192)       # Sometimes all are -8192 except first
         if np.any(mask):
-            assert np.all(mask.ravel()[1:])
+            if not np.all(mask.ravel()[1:]):
+                raise HostFormatError(f'invalid embedded times in {data_file}')
             formatted = f'{sclock[0,0]:16.3f}'
             times = np.empty(sclock.shape)
             times[...] = cspyce.scs2e(-82, formatted)
@@ -995,11 +1122,11 @@ class CassiniVIMS(oops.Host):
             * `time`: The time in seconds TDB at each point of the meshgrid.
 
         Raises:
-            ValueError: If `obs` is not a VIMS observation.
+            IncorrectHostError: If `obs` is not a VIMS observation.
         """
 
         if obs.instrument != 'VIMS':
-            raise ValueError(f'not a VIMS observation: {obs.instrument}')
+            raise IncorrectHostError(f'not a VIMS observation: {obs.instrument}')
 
         (ushrink,vshrink) = _SHRINKAGE[(obs.detector, obs.sampling)]
 

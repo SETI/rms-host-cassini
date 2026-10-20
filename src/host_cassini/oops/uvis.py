@@ -198,21 +198,13 @@ class CassiniUVIS(oops.Host):
         # Default Pds3Label options are method="fast", sources=False
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
-        # Read the label and (maybe) data
+        # Read the label
         fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
                                             pds3_options=pds3_options)
         filepath = FCPath(fileinfo.filepath)
         label = fileinfo.as_dict()
 
-        # Load any needed SPICE kernels
-        tstart = julian.tdb_from_iso(label['START_TIME'])
-        tstop  = julian.tdb_from_iso(label['STOP_TIME'])
-        _Cassini.load_spks(tstart, tstop)
-        using_cks = frame is None
-        if using_cks:
-            _Cassini.load_cks(tstart, tstop)
-            CassiniUVIS._define_frames()
-
+        # Construct and return the Observation(s)
         overrides = {
             'target'      : target,
             'lightsource' : lightsource,
@@ -227,41 +219,33 @@ class CassiniUVIS(oops.Host):
             'parallel'    : parallel,
         }
 
-        # Figure out the PDS object class and get the observation(s)
-        data = not astrometry
-        if 'QUBE' in label:
-            result = CassiniUVIS._get_qube(filepath, tstart, label, data, enclose,
-                                           fov=fov, overrides=overrides,
-                                           using_cks=using_cks)
-        elif 'TIME_SERIES' in label:
-            result = CassiniUVIS._get_time_series(filepath, tstart, label, data,
-                                                  fov=fov, overrides=overrides,
-                                                  using_cks=using_cks)
-        else:
-            result = CassiniUVIS._get_spectrum(filepath, tstart, label, data,
-                                               fov=fov, overrides=overrides,
-                                               using_cks=using_cks)
-
-        if select is None:
-            return result
-        if not isinstance(result, tuple):
-            result = (result,)
-        return oops.Host._apply_select(result, select)
+        return CassiniUVIS._make_observations(label, filepath, *, astrometry=astrometry,
+                                              enclose=enclose, overrides=overrides,
+                                              select=select)
 
     @staticmethod
-    def from_index(filepath, *, supplement=None, label=None, row_dicts=None,
-                   pds3_options=None, filter=None, select=None, target=None,
-                   lightsource=None, path=None, frame=None, cadence=None, fov=None,
-                   calibrations=None, timeshift=None, navigation=None, tracker=None,
-                   parallel=None, **kwargs):
+    def from_index(filepath, *, enclose=False, supplement=None, label=None,
+                   row_dicts=None, pds3_options=None, filter=None, select=None,
+                   target=None, lightsource=None, path=None, frame=None, cadence=None,
+                   fov=None, calibrations=None, timeshift=None, navigation=None,
+                   tracker=None, parallel=None, **kwargs):
         """A list of Observations, one for each row of a data file index.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
                 data file index.
+            enclose (bool, optional): True to return a single observation for each row,
+                regardless of how many windows are defined. If multiple windows are used,
+                then the observation (and the optional data array) are defined by the
+                enclosing limits in line and band, and the binning is assumed to be 1. If
+                False and multiple windows are used, the function returns a tuple of
+                observations rather than a single observation.
             supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file. If provided, this file must have the same
-                records in the same order as the table described by `filepath`.
+                of a supplemental index file. This file must have the same records in the
+                same order as the table described by `filepath`. If not specified, the
+                directory of `filepath` will be searched for a file whose name matches
+                except that "_index" is replaced by "_supplemental_index" in upper or
+                lower case.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
@@ -318,23 +302,127 @@ class CassiniUVIS(oops.Host):
             Observations, one for each filtered row of the index file.
         """
 
-        raise NotImplementedError('CassiniUVIS.from_index() is not implemented')
+        CassiniUVIS.initialize()
+
+        # Read and filter the index table
+        if row_dicts is None:
+            supplement = supplement or oops.Host._SUPPLEMENT    # supplement is required
+            row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
+                                                   validate=CassiniUVIS._validate_index,
+                                                   pds3_options=pds3_options)
+        row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
+
+        overrides = {
+            'target'      : target,
+            'lightsource' : lightsource,
+            'path'        : path,
+            'frame'       : frame,
+            'cadence'     : cadence,
+            'fov'         : fov,
+            'calibrations': calibrations,
+            'timeshift'   : timeshift,
+            'navigation'  : navigation,
+            'tracker'     : tracker,
+            'parallel'    : parallel,
+        }
+
+        # Create the list of Observations
+        obslist = []
+        for row_dict in row_dicts:
+            fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
+            item = CassiniUVIS._make_observations(row_dict, fpath, astrometry=True,
+                                                  enclose=enclose, overrides=overrides,
+                                                  select=select)
+            obslist.append(item)
+
+        return obslist
 
     @staticmethod
-    def _get_qube(filepath, tstart, label, data, enclose, *, fov, overrides, using_cks):
+    def _validate_index(indx_dict, supp_dict):
+        """Raise an exception if the index row and supplement row do not match."""
+
+        full_path = indx_dict['FILE_NAME']
+
+        if 'VOLUME_ID' not in supp_dict:
+            raise ValueError('missing VOLUME_ID in supplemental index')
+        volume_id = indx_dict['VOLUME_ID']
+        if volume_id not in full_path:
+            raise ValueError(f'VOLUME_IDs do not match: "{volume_id}", "{full_path}"')
+
+        if 'FILE_SPECIFICATION_NAME' not in supp_dict:
+            raise ValueError('missing FILE_SPECIFICATION_NAME in supplemental index')
+        file_spec = indx_dict['FILE_SPECIFICATION_NAME']
+        if file_spec not in full_path:
+            raise ValueError('file paths do not match: "{file_spec}", "{full_path}"')
+
+        return True
+
+    @staticmethod
+    def _make_observations(label, filepath, *, astrometry, enclose, overrides,
+                           select=None):
+        """The observation(s) described by a UVIS label.
+
+        Parameters:
+            label (dict): The label content from a detached PDS3 label.
+            filepath (FCPath): The path to the cube or to its detached PDS3 label.
+            astrometry (bool): True to omit the data arrays.
+            enclose (bool): True to return a single observation for each row, regardless
+                of how many windows are defined. If multiple windows are used, then the
+                observation (and the optional data array) are defined by the enclosing
+                limits in line and band, and the binning is assumed to be 1. If False and
+                multiple windows are used, the function returns a tuple of observations
+                rather than a single observation.
+            overrides (dict): The standard override options of :meth:`from_file`.
+            select (int | slice | tuple[int | slice, ...], optional): An index, a slice,
+                or a tuple of indices and slices to apply to the returned observations,
+                treating a single observation as a tuple of one.
+
+        Returns:
+            Observation | tuple[Observation, ...]: Observation(s) from `filepath` after
+            `select` has been applied.
+
+        Raises:
+            PdsHostError: If some aspect of the label or file is not valid.
+        """
+
+        # Load any needed SPICE kernels
+        tstart = julian.tdb_from_iso(label['START_TIME'])
+        tstop = julian.tdb_from_iso(label['STOP_TIME'])
+        _Cassini.load_spks(tstart, tstop)
+        if overrides['frame'] is None:
+            CassiniVIMS._define_frames()
+            _Cassini.load_cks(tstart, tstop)
+
+        # Figure out the PDS object class and get the observation(s)
+        data = not astrometry
+        if 'QUBE' in label:
+            result = CassiniUVIS._get_qube(filepath, label, enclose,
+                                           astrometry=astrometry, overrides=overrides)
+        elif 'TIME_SERIES' in label:
+            result = CassiniUVIS._get_time_series(filepath, label, astrometry=astrometry,
+                                                  overrides=overrides)
+        else:
+            result = CassiniUVIS._get_spectrum(filepath, label, astrometry=astrometry,
+                                               overrides=overrides)
+
+        if select is None:
+            return result
+        if not isinstance(result, tuple):
+            result = (result,)
+        return oops.Host._apply_select(result, select)
+
+    @staticmethod
+    def _get_qube(filepath, label, enclose, *, astrometry, overrides):
         """The observation object given that it is a QUBE.
 
         Parameters:
             filepath (FCPath): The full path to the PDS label.
-            tstart (float): The start time of the observation in seconds TDB.
             label (dict): The PDS label as a dictionary.
-            data (bool): True to include the data array.
             enclose (bool): True to combine multiple windows into a single observation
                 defined by their enclosing limits in line and band; False to return one
                 observation per window.
-            fov (FOV | None): The full FOV of the detector; None for the default.
+            astrometry (bool): False to include the data array.
             overrides (dict): The standard override options of :meth:`from_file`.
-            using_cks (bool): True if a C kernel is being used.
 
         Returns:
             Observation | tuple[Observation, ...]: A :class:`~oops.observation.Pixel` for
@@ -343,50 +431,27 @@ class CassiniUVIS(oops.Host):
             `enclose` is False.
         """
 
-        # Determine the detector and mode
-        detector = label['PRODUCT_ID'][:3]
-        assert detector in ('EUV', 'FUV')
-
-        resolution = label['SLIT_STATE']
-
-        # Define the instrument frame
-        frame_name = _FRAME_NAMES[detector]
-
-        # Get array shape
         info = label['QUBE']
-        (bands,lines,samples) = info['CORE_ITEMS']
-        assert lines in (1,64), f'invalid lines = {lines}'
-
-        if lines == 1:
-            shape = (samples, bands)
-        else:
-            shape = (lines, samples, bands)
-
-        # Define the cadence
-        texp = label['INTEGRATION_DURATION']
-        cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
-
-        # Define the full FOV
-        if fov is None:
-            fov = CassiniUVIS._FOVS[(detector, label['SLIT_STATE'], lines)]
 
         # Load the data array if necessary
-        assert info['CORE_ITEM_TYPE'] == 'MSB_UNSIGNED_INTEGER'
-        assert info['CORE_ITEM_BYTES'] == 2
-        assert info['SUFFIX_ITEMS'] == [0,0,0]
+        if astrometry:
+            array = None
+        else:
+            if (info['CORE_ITEM_TYPE'] != 'MSB_UNSIGNED_INTEGER'
+                    or info['CORE_ITEM_BYTES'] != 2):
+                raise PdsHostError('unexpected QUBE data type in {filepath}')
+            if info['SUFFIX_ITEMS'] != [0, 0, 0]:
+                raise PdsHostError('unexpected QUBE SUFFIX_ITEMS in {filepath}')
 
-        if data:
-            array = CassiniUVIS._load_data(filepath, label['^QUBE'], '>u2')
+            array = CassiniUVIS._load_data(filepath, label, 'QUBE')
 
             # Re-shape into something sensible
             # Note that the axis order in the label is first-index-fastest
             if lines > 1:
-                array = array.reshape((samples,lines,bands))
-                array = array.swapaxes(0,1)
+                array = array.reshape((samples, lines, bands))
+                array = array.swapaxes(0, 1)
             else:
                 array = array.reshape(shape)
-        else:
-            array = None
 
         # Identify the window(s) used
         # Note that these are either integers or lists of integers
@@ -399,61 +464,49 @@ class CassiniUVIS(oops.Host):
         band_bin = info['BAND_BIN']
 
         # Check the outer periphery of the data array in DEBUG mode
-        if _DEBUG and data:
+        if _DEBUG and no astrometry:
             assert np.all(array[:min(line0),    ...] == _ARRAY_NULL)
             assert np.all(array[ max(line1)+1:, ...] == _ARRAY_NULL)
-
             assert np.all(array[..., :min(band0)   ] == _ARRAY_NULL)
             assert np.all(array[...,  max(band1)+1:] == _ARRAY_NULL)
 
-        common = {'label': label, 'detector': detector, 'resolution': resolution,
-                  'fov': fov, 'cadence': cadence, 'frame_name': frame_name,
-                  'shape': shape, 'array': array, 'samples': samples, 'lines': lines,
-                  'bands': bands, 'filepath': filepath, 'using_cks': using_cks,
-                  'overrides': overrides}
-
         # One window
         if isinstance(line0, numbers.Integral):
-            return CassiniUVIS._get_one_qube(line0=line0, line1=line1+1,
-                                             line_bin=line_bin, band0=band0,
-                                             band1=band1+1, band_bin=band_bin,
-                                             rebin=True, **common)
+            return CassiniUVIS._get_one_qube(filepath, label, array, line0=line0,
+                                             line1=line1+1, line_bin=line_bin,
+                                             band0=band0, band1=band1+1,
+                                             band_bin=band_bin, rebin=True,
+                                             overrides=overrides)
 
         # Multiple windows combined into one enclosure
         if enclose:
-            return CassiniUVIS._get_one_qube(line0=min(line0), line1=max(line1)+1,
-                                             line_bin=min(line_bin), band0=min(band0),
-                                             band1=max(band1)+1, band_bin=min(band_bin),
-                                             rebin=False, **common)
+            return CassiniUVIS._get_one_qube(filepath, label, array, line0=min(line0),
+                                             line1=max(line1)+1, line_bin=min(line_bin),
+                                             band0=min(band0), band1=max(band1)+1,
+                                             band_bin=min(band_bin), rebin=False,
+                                             overrides=overrides)
 
         # Separate windows
-        return tuple(CassiniUVIS._get_one_qube(line0=line0[w], line1=line1[w]+1,
-                                               line_bin=line_bin[w], band0=band0[w],
-                                               band1=band1[w]+1, band_bin=band_bin[w],
-                                               rebin=True, **common)
+        return tuple(CassiniUVIS._get_one_qube(filepath, label, array, line0=line0[w],
+                                               line1=line1[w]+1, line_bin=line_bin[w],
+                                               band0=band0[w], band1=band1[w]+1,
+                                               band_bin=band_bin[w], rebin=True,
+                                               overrides=overrides)
                      for w in range(len(line0)))
 
     @staticmethod
-    def _get_one_qube(*, label, detector, resolution, fov, cadence, frame_name, shape,
-                      array, samples, lines, line0, line1, line_bin, bands, band0, band1,
-                      band_bin, rebin, filepath, using_cks, overrides):
+    def _get_one_qube(filepath, label, array, *, line0, line1, line_bin, bands, band0,
+                      band1, band_bin, rebin, overrides):
         """A single Observation object for the identified window of the UVIS qube.
 
         The line window and binning apply only to a qube with more than one line. A
         one-line qube was binned along the slit on board, so its FOV is the full slit.
 
         Parameters:
+            filepath (FCPath): The full path to the PDS label.
             label (dict): The PDS label as a dictionary.
-            detector (str): The detector name, 'EUV' or 'FUV'.
-            resolution (str): The slit state, which defines the spatial resolution.
-            fov (FOV): The full field of view of the detector.
-            cadence (Cadence): The cadence of the samples.
-            frame_name (str): The SPICE name of the instrument frame.
-            shape (tuple[int, ...]): The shape of the full observation, (lines, samples,
-                bands) or (samples, bands) for a one-line qube.
             array (numpy.ndarray | None): The full data array, or None if the data are not
                 loaded.
-            samples (int): The number of samples along the time axis.
             lines (int): The number of lines in the full qube.
             line0 (int): The first line of the window.
             line1 (int): One past the last line of the window.
@@ -464,8 +517,6 @@ class CassiniUVIS(oops.Host):
             band_bin (int): The binning factor along the band axis.
             rebin (bool): True to apply the binning factors to the field of view, the
                 shape and the data array; False to ignore them.
-            filepath (FCPath): The full path to the PDS label.
-            using_cks (bool): True if a C kernel is being used.
             overrides (dict): The standard override options of :meth:`from_file`.
 
         Returns:
@@ -473,10 +524,39 @@ class CassiniUVIS(oops.Host):
             :class:`~oops.observation.TimedImage` otherwise.
         """
 
+        # Determine the detector and mode
+        detector = label['PRODUCT_ID'][:3]
+        if detector not in {'EUV', 'FUV'}:
+            raise PdsHostError('invalid instrument {detector} for QUBE in {filepath}')
+
+        resolution = label['SLIT_STATE']
+
+        # Get array shape
+        info = label['QUBE']
+        (bands, lines, samples) = info['CORE_ITEMS']
+        if lines not in {1, 64}:
+            raise PdsHostError(f'invalid QUBE lines {lines} in {filepath}')
+
+        if lines == 1:
+            shape = (samples, bands)
+        else:
+            shape = (lines, samples, bands)
+
+        # Define the instrument frame
+        frame_name = _FRAME_NAMES[detector]
+
+        # Define the cadence
+        tstart = julian.tdb_from_tai(julian.tai_from_iso(label['START_TIME']))
+        texp = label['INTEGRATION_DURATION']
+        cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
+
+        # Define the full FOV
+        fov = CassiniUVIS._FOVS[(detector, label['SLIT_STATE'], lines)]
+
         # Trim the lines
         dline = line1 - line0
-        if lines > 1 and (line0,line1) != (0,lines):
-            fov = oops.fov.SliceFOV(fov, (0,line0), (1,dline))
+        if lines > 1 and (line0, line1) != (0, lines):
+            fov = oops.fov.SliceFOV(fov, (0, line0), (1, dline))
             shape = (dline,) + shape[1:]
 
             if array is not None:
@@ -484,7 +564,7 @@ class CassiniUVIS(oops.Host):
 
         # Trim the bands
         dband = band1 - band0
-        if (band0,band1) != (0,bands):
+        if (band0, band1) != (0, bands):
             shape = shape[:-1] + (dband,)
 
             if array is not None:
@@ -493,14 +573,13 @@ class CassiniUVIS(oops.Host):
         # Bin the lines
         if rebin and lines > 1 and line_bin > 1:
             assert dline % line_bin == 0
-            fov = oops.fov.SubsampledFOV(fov, (1,line_bin))
+            fov = oops.fov.SubsampledFOV(fov, (1, line_bin))
             dline_binned = dline // line_bin
             shape = (dline_binned,) + shape[1:]
 
             if array is not None:
                 if _DEBUG:
                     assert np.all(array[dline_binned:, ...] == _ARRAY_NULL)
-
                 array = array[:dline_binned]
 
         # Bin the bands
@@ -514,7 +593,6 @@ class CassiniUVIS(oops.Host):
             if array is not None:
                 if _DEBUG:
                     assert np.all(array[..., dband_binned:] == _ARRAY_NULL)
-
                 array = array[..., :dband_binned]
 
         # Define the Observation parameters
@@ -523,36 +601,48 @@ class CassiniUVIS(oops.Host):
 
         # Construct the Observation
         if lines == 1:
-            obs_subclass = oops.observation.Pixel
-            axes = ('t','b')
+            obs = oops.observation.Pixel(('t', 'b'), **params)
         else:
-            obs_subclass = oops.observation.TimedImage
-            axes = ('v','ut','b')
+            obs = oops.observation.TimedImage(('v', 'ut', 'b'), **params)
 
-        obs = obs_subclass(axes, **params)
+        if array is not None:
+            obs.insert_subfield('data', array)
 
-        CassiniUVIS._insert_subfields(obs, label, detector, product_type='QUBE',
-                                      sampling=resolution, line_window=(line0,line1),
-                                      line_bin=line_bin, band_window=(band0,band1),
-                                      band_bin=band_bin, samples=samples, array=array,
-                                      frame_name=frame_name, using_cks=using_cks)
+        obs.insert_subfield('dict', label)
+        obs.insert_subfield('host', 'Cassini')
+        obs.insert_subfield('instrument', 'UVIS')
+        obs.insert_subfield('detector', detector)
+        obs.insert_subfield('sampling', resolution)
+        obs.insert_subfield('product_type', 'QUBE')
+        obs.insert_subfield('label_target', label['TARGET_NAME'])
+        obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
+
+        obs.insert_subfield('line_window', (line0, line1))
+        obs.insert_subfield('line_bin', line_bin)
+        obs.insert_subfield('band_window', (band0, band1))
+        obs.insert_subfield('band_bin', band_bin)
+        obs.insert_subfield('samples', samples)
+
+        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['fov'] is None),
+                                        return_all_planets=False)
+        obs.insert_subfield('spice_kernels', kernels)
+        obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
+        obs.insert_subfield('spice_frame_name', frame_name)
+        obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_name])
 
         # Update the observation shape
         obs.shape = shape
         return obs
 
     @staticmethod
-    def _get_time_series(filepath, tstart, label, data, *, fov, overrides, using_cks):
+    def _get_time_series(filepath, label, *, astrometry, overrides):
         """The observation object given that it is a TIME_SERIES.
 
         Parameters:
             filepath (FCPath): The full path to the PDS label.
-            tstart (float): The start time of the observation in seconds TDB.
             label (dict): The PDS label as a dictionary.
-            data (bool): True to include the data array.
-            fov (FOV | None): The FOV of the detector; None for the default.
+            astrometry (bool): False to include the data array.
             overrides (dict): The standard override options of :meth:`from_file`.
-            using_cks (bool): True if a C kernel is being used.
 
         Returns:
             Pixel: The observation.
@@ -574,51 +664,63 @@ class CassiniUVIS(oops.Host):
         info = label['TIME_SERIES']
         samples = info['ROWS']
 
+        # Define the instrument frame
+        frame_name = _FRAME_NAMES[detector]
+
         # Define the cadence
-        assert info['COLUMNS'] == 1
-        assert (info['SAMPLING_PARAMETER_UNIT'] == 'MILLISECOND' or
-                info['SAMPLING_PARAMETER_UNIT'] == 'MILLISECONDS')
+        if info['COLUMNS'] != 1:
+            raise PdsHostError(f'TIME_SERIES with COLUMNS != 1 in {filepath}')
+        if not info['SAMPLING_PARAMETER_UNIT'].startswith('MILLISECOND'):
+            raise PdsHostError(f'TIME_SERIES with unit not ms in {filepath}')
+        tstart = julian.tdb_from_tai(julian.tai_from_iso(label['START_TIME']))
         texp = info['SAMPLING_PARAMETER_INTERVAL'] * 0.001
+        cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
 
         # Define the Observation parameters
-        if fov is None:
-            fov = CassiniUVIS._FOVS[(detector, '', 1)]
-        cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
-        params = CassiniUVIS._default_params(label, cadence, fov, _FRAME_NAMES[detector])
+        fov = CassiniUVIS._FOVS[(detector, '', 1)]
+        params = CassiniUVIS._default_params(label, cadence, fov, frame_name)
         oops.Host._apply_overrides(params, filepath, **overrides)
-
-        # Load the data array if necessary
-        array = None
-        if data:
-            column = info['PHOTOMETER_COUNTS']
-            assert column['DATA_TYPE'] == 'MSB_UNSIGNED_INTEGER'
-            assert column['BYTES'] == 2
-            array = CassiniUVIS._load_data(filepath, label['^TIME_SERIES'], '>u2')
 
         # Construct the Observation
         obs = oops.observation.Pixel(('t',), **params)
-        CassiniUVIS._insert_subfields(obs, label, detector, product_type='TIME_SERIES',
-                                      sampling=None, line_window=None, line_bin=None,
-                                      band_window=None, band_bin=None, samples=samples,
-                                      array=array, frame_name=_FRAME_NAMES[detector],
-                                      using_cks=using_cks)
+
+        # Load the data array if necessary
+        if not astrometry:
+            column = info['PHOTOMETER_COUNTS']
+            if column['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or column['BYTES'] != 2:
+                raise PdsHostError('Non-standard data type in TIME_SERIES: {filepath}')
+            array = CassiniUVIS._load_data(filepath, label, 'TIME_SERIES')
+            obs.insert_subfield('data', array)
+
+        obs.insert_subfield('dict', label)
+        obs.insert_subfield('host', 'Cassini')
+        obs.insert_subfield('instrument', 'UVIS')
+        obs.insert_subfield('detector', detector)
+        obs.insert_subfield('product_type', 'TIME_SERIES')
+        obs.insert_subfield('label_target', label['TARGET_NAME'])
+        obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
+        obs.insert_subfield('samples', samples)
+
+        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['frame'] is None),
+                                        return_all_planets=False)
+        obs.insert_subfield('spice_kernels', kernels)
+        obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
+        obs.insert_subfield('spice_frame_name', frame_name)
+        obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_name])
 
         # Update the observation shape
         obs.shape = (samples,)
         return obs
 
     @staticmethod
-    def _get_spectrum(filepath, tstart, label, data, *, fov, overrides, using_cks):
+    def _get_spectrum(filepath, label, *, astrometry, overrides):
         """The observation object given that it is a SPECTRUM.
 
         Parameters:
             filepath (FCPath): The full path to the PDS label.
-            tstart (float): The start time of the observation in seconds TDB.
             label (dict): The PDS label as a dictionary.
-            data (bool): True to include the data array.
-            fov (FOV | None): The full FOV of the detector; None for the default.
+            astrometry (bool): False to include the data array.
             overrides (dict): The standard override options of :meth:`from_file`.
-            using_cks (bool): True if a C kernel is being used.
 
         Returns:
             Pixel: The observation.
@@ -632,46 +734,66 @@ class CassiniUVIS(oops.Host):
         info = label['SPECTRUM']
         bands = info['ROWS']
 
-        # Define the cadence (such as it is)
-        assert info['COLUMNS'] == 1
+        # Define the instrument frame
+        frame_name = _FRAME_NAMES[detector]
+
+        # Define the cadence
+        if info['COLUMNS'] != 1:
+            raise PdsHostError(f'SPECTRUM has multiple COLUMNS in {filepath}')
         texp = label['INTEGRATION_DURATION']
+        cadence = oops.cadence.Metronome(tstart, texp, texp, 1)
 
         # Define the FOV
         resolution = label['SLIT_STATE']
-        if fov is None:
-            fov = CassiniUVIS._FOVS[(detector, resolution, 64)]
+        fov = CassiniUVIS._FOVS[(detector, resolution, 64)]
 
+        # Define the window
         line0 = info['UL_CORNER_SPATIAL']
         line1 = info['LR_CORNER_SPATIAL'] + 1
-        if (line0,line1) != (0,64):
-            fov = oops.fov.SliceFOV(fov, (0,line0), (1,line1-line0))
+        if (line0, line1) != (0, 64):
+            fov = oops.fov.SliceFOV(fov, (0, line0), (1, line1-line0))
 
         line_bin = info['BIN_SPATIAL']
         if line_bin != 1:
-            fov = oops.fov.SubsampledFOV(fov, (1,line_bin))
+            fov = oops.fov.SubsampledFOV(fov, (1, line_bin))
+
+        band0 = info['UL_CORNER_SPECTRAL']
+        band1 = info['LR_CORNER_SPECTRAL'] + 1
+        band_bin = info['BIN_SPECTRAL']
 
         # Define the observation
-        cadence = oops.cadence.Metronome(tstart, texp, texp, 1)
-        params = CassiniUVIS._default_params(label, cadence, fov, _FRAME_NAMES[detector])
+        params = CassiniUVIS._default_params(label, cadence, fov, frame_name)
         oops.Host._apply_overrides(params, filepath, **overrides)
         obs = oops.observation.Pixel(('b',), **params)
 
         # Load the data array if necessary
-        array = None
-        if data:
+        if not astrometry:
             column = info['SPECTRUM']
-            assert column['DATA_TYPE'] == 'MSB_UNSIGNED_INTEGER'
-            assert column['BYTES'] == 2
-            array = CassiniUVIS._load_data(filepath, label['^SPECTRUM'], '>u2')
+            if column['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or column['BYTES'] != 2:
+                raise PdsHostError('Non-standard data type in TIME_SERIES: {filepath}')
+            array = CassiniUVIS._load_data(filepath, label, 'SPECTRUM')
+            obs.insert_subfield('data', array)
 
-        CassiniUVIS._insert_subfields(obs, label, detector, product_type='SPECTRUM',
-                                      sampling=resolution, line_window=(line0,line1),
-                                      line_bin=line_bin,
-                                      band_window=(info['UL_CORNER_SPECTRAL'],
-                                                   info['LR_CORNER_SPECTRAL']+1),
-                                      band_bin=info['BIN_SPECTRAL'], samples=1,
-                                      array=array, frame_name=_FRAME_NAMES[detector],
-                                      using_cks=using_cks)
+        obs.insert_subfield('dict', label)
+        obs.insert_subfield('host', 'Cassini')
+        obs.insert_subfield('instrument', 'UVIS')
+        obs.insert_subfield('detector', detector)
+        obs.insert_subfield('product_type', 'SPECTRUM')
+        obs.insert_subfield('label_target', label['TARGET_NAME'])
+        obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
+        obs.insert_subfield('sampling', resolution)
+        obs.insert_subfield('line_window', (line0, line1))
+        obs.insert_subfield('line_bin', line_bin)
+        obs.insert_subfield('band_window', (band0, band1))
+        obs.insert_subfield('band_bin', band_bin)
+        obs.insert_subfield('samples', 1)
+
+        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['fov'] is None),
+                                        return_all_planets=False)
+        obs.insert_subfield('spice_kernels', kernels)
+        obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
+        obs.insert_subfield('spice_frame_name', frame_name)
+        obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_name])
 
         # Update the observation shape
         obs.shape = (bands,)
@@ -695,6 +817,7 @@ class CassiniUVIS(oops.Host):
 
         target = _TARGET_NAME_REPAIRS.get(label['TARGET_NAME'], label['TARGET_NAME'])
         lightsource = CassiniUVIS._star_from_obs_id(label['OBSERVATION_ID']) or 'SUN'
+
         return {
             'target'      : target,
             'lightsource' : lightsource,
@@ -706,56 +829,7 @@ class CassiniUVIS(oops.Host):
         }
 
     @staticmethod
-    def _insert_subfields(obs, label, detector, *, product_type, sampling, line_window,
-                          line_bin, band_window, band_bin, samples, array, frame_name,
-                          using_cks):
-        """Insert the UVIS-specific subfields into an observation.
-
-        Parameters:
-            obs (Observation): The observation to modify.
-            label (dict): The PDS label as a dictionary.
-            detector (str): The detector name.
-            product_type (str): "QUBE", "TIME_SERIES" or "SPECTRUM".
-            sampling (str | None): The slit state; None to omit the `sampling` subfield.
-            line_window (tuple[int, int] | None): The first line and one past the last.
-            line_bin (int | None): The binning factor along the line axis.
-            band_window (tuple[int, int] | None): The first band and one past the last.
-            band_bin (int | None): The binning factor along the band axis.
-            samples (int): The number of samples along the time axis.
-            array (numpy.ndarray | None): The data array; None to omit the `data`
-                subfield.
-            frame_name (str): Name of the SPICE frame.
-            using_cks (bool): True if a C kernel is being used.
-        """
-
-        obs.insert_subfield('dict', label)
-        obs.insert_subfield('host', 'Cassini')
-        obs.insert_subfield('instrument', 'UVIS')
-        obs.insert_subfield('detector', detector)
-        if sampling is not None:
-            obs.insert_subfield('sampling', sampling)
-        obs.insert_subfield('product_type', product_type)
-        obs.insert_subfield('label_target', label['TARGET_NAME'])
-        obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
-
-        obs.insert_subfield('line_window', line_window)
-        obs.insert_subfield('line_bin', line_bin)
-        obs.insert_subfield('band_window', band_window)
-        obs.insert_subfield('band_bin', band_bin)
-        obs.insert_subfield('samples', samples)
-
-        if array is not None:
-            obs.insert_subfield('data', array)
-
-        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=using_cks,
-                                        return_all_planets=False)
-        obs.insert_subfield('spice_kernels', kernels)
-        obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
-        obs.insert_subfield('spice_frame_name', frame_name)
-        obs.insert_subfield('spice_frame_id', _FRAME_IDS[frame_name])
-
-    @staticmethod
-    def _load_data(filepath, body, dtype):
+    def _load_data(filepath, label, key):
         """The contents of a UVIS data file as a NumPy array.
 
         If the data file named in the label does not exist, the same name in lower case
@@ -763,14 +837,23 @@ class CassiniUVIS(oops.Host):
 
         Parameters:
             filepath (FCPath): Path to the label file.
-            body (str): Basename of the data file, as named in the label.
-            dtype (numpy.dtype): The data type of the values in the file.
+            label (dict[str, Any]): The PDS3 label content.
+            key (str): The label key identifying the data file name, one of "QUBE",
+                "TIME_SERIES", or "SPECTRUM".
 
         Returns:
             numpy.ndarray: The values read from the file.
+
+        Raises:
+            PdsHostError: If the data type is not MSB 2-byte unsigned ints.
         """
 
-        data_filepath = FCPath(filepath).with_name(body)
+        obj = info[key]
+        if obj['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or obj['BYTES'] != 2:
+            raise PdsHostError('Non-standard data type in TIME_SERIES: {filepath}')
+
+        basename = label['^' + key]
+        data_filepath = FCPath(filepath).with_name(basename)
 
         try:
             local_path = data_filepath.retrieve()
@@ -778,7 +861,7 @@ class CassiniUVIS(oops.Host):
             data_filepath = data_filepath.with_name(body.lower())
             local_path = data_filepath.retrieve()
 
-        return np.fromfile(local_path, sep='', dtype=dtype)
+        return np.fromfile(local_path, sep='', dtype='>u2')
 
     _OBS_CODE_CLEANUP = re.compile(r'(?:UR|)(.*?)(?:OCC|TI|V1|RDI|TK[ABC]|)$')
 
