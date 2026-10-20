@@ -447,6 +447,17 @@ def test_from_index_vis_off_tolerates_placeholder_exposure() -> None:
     assert type(ir) is oops.observation.TimedImage
 
 
+@pytest.mark.parametrize(('changes', 'on_index'), [
+    ({'VIS_EXPOSURE': -999.}, 1),
+    ({'IR_EXPOSURE': 0.}, 0),
+], ids=['VIS', 'IR'])
+def test_from_index_treats_channel_without_exposure_as_off(changes: dict[str, Any],
+                                                           on_index: int) -> None:
+    [pair] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row(**changes)])
+    assert pair[1 - on_index] is None
+    assert type(pair[on_index]) is oops.observation.TimedImage
+
+
 def test_from_index_select() -> None:
     [ir] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()], select='IR')
     assert ir.detector == 'IR'

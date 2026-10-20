@@ -368,7 +368,9 @@ class CassiniVIMS(oops.Host):
         352 bands. A row does not record the pixel count of a POINT or OCCULTATION cube
         either; nearly every such cube fills the full 64-line buffer, so its observations
         assume 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with nominal timing, as
-        :meth:`from_file` assumes with `astrometry` for the same cube.
+        :meth:`from_file` assumes with `astrometry` for the same cube. A channel whose
+        recorded exposure is a placeholder (zero or negative) is treated as off, because
+        only the cube's label holds its real exposure.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
@@ -556,7 +558,8 @@ class CassiniVIMS(oops.Host):
             whose CORE_ITEMS are (SWATH_WIDTH, 352, SWATH_LENGTH), or the nominal full
             buffer in POINT and OCCULTATION modes, and the (IR, VIS) pairs
             POWER_STATE_FLAG, EXPOSURE_DURATION and SAMPLING_MODE_ID, which the index
-            records as separate IR_ and VIS_ columns.
+            records as separate IR_ and VIS_ columns. A channel whose recorded exposure
+            is zero or negative is marked off.
         """
 
         label = dict(row_dict)
@@ -576,6 +579,14 @@ class CassiniVIMS(oops.Host):
         label['EXPOSURE_DURATION'] = (row_dict['IR_EXPOSURE'], row_dict['VIS_EXPOSURE'])
         label['SAMPLING_MODE_ID'] = (row_dict['IR_SAMPLING_MODE_ID'],
                                      row_dict['VIS_SAMPLING_MODE_ID'])
+
+        # The index sometimes records a -999 placeholder for the exposure of a channel
+        # that is on; only the cube's label holds the real value. Without an exposure the
+        # channel's cadence cannot be built, so the channel is treated as off.
+        label['POWER_STATE_FLAG'] = tuple(
+            'OFF' if texp <= 0. else flag
+            for (flag, texp) in zip(label['POWER_STATE_FLAG'],
+                                    label['EXPOSURE_DURATION'], strict=True))
         return label
 
     @staticmethod
