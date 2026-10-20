@@ -11,6 +11,7 @@ import julian
 from filecache import FCPath
 
 import oops
+from oops.host import HostFormatError, HostIndexError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _pds3_options_with_defaults)
 
@@ -190,6 +191,7 @@ class CassiniUVIS(oops.Host):
             TypeError: If `select` has an invalid type.
             ValueError: If `select` is a name; UVIS observations have none.
             OopsValueError: If a TIME_SERIES is from neither the HSP nor the HDAC.
+            oops.host.HostFormatError: If some aspect of the label or file is not valid.
         """
 
         CassiniUVIS.initialize()  # define everything the first time through; use
@@ -219,7 +221,7 @@ class CassiniUVIS(oops.Host):
             'parallel'    : parallel,
         }
 
-        return CassiniUVIS._make_observations(label, filepath, *, astrometry=astrometry,
+        return CassiniUVIS._make_observations(label, filepath, astrometry=astrometry,
                                               enclose=enclose, overrides=overrides,
                                               select=select)
 
@@ -257,11 +259,11 @@ class CassiniUVIS(oops.Host):
                 index in which each named column equals the value, falls in the set of
                 values, or falls in a range defined by a tuple of two values, will be
                 included in the returned list.
-            select (int | slice | str | tuple[int | slice | str, ...]): An index, slice,
-                or tuple of indices and slices to apply to the returned array of
-                Observation objects. For example, if the file contains two Observations
-                but `select=1`, only the second Observation will be returned.
-                Alternatively, specify one or more host-specific names of the data arrays.
+            select (int | slice | tuple[int | slice, ...], optional): An index, a slice,
+                or a tuple of indices and slices to apply to the observations of each row,
+                treating a single observation as a tuple of one. For example, if a row
+                defines two windows but `select=1`, only the second window's observation
+                is returned.
             target (str | oops.Body, optional): Override for the default target Body of
                 every observation. Use "NONE" for inertial pointing, indicating that no
                 Solar System body was tracked.
@@ -300,16 +302,25 @@ class CassiniUVIS(oops.Host):
         Returns:
             list[Observation | ObsArray]: The list of Observations or arrays of
             Observations, one for each filtered row of the index file.
+
+        Raises:
+            oops.host.HostIndexError: If no supplemental index was found or merged into
+                `row_dicts`, or if the supplement does not match the index row for row.
         """
 
         CassiniUVIS.initialize()
 
         # Read and filter the index table
         if row_dicts is None:
-            supplement = supplement or oops.Host._SUPPLEMENT    # supplement is required
+            supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
             row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
                                                    validate=CassiniUVIS._validate_index,
                                                    pds3_options=pds3_options)
+
+        # The file path and most of the observation's parameters come from the supplement
+        if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
+            raise HostIndexError(f'Cassini UVIS needs a supplemental index: {filepath}')
+
         row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
 
         overrides = {
@@ -344,16 +355,18 @@ class CassiniUVIS(oops.Host):
         full_path = indx_dict['FILE_NAME']
 
         if 'VOLUME_ID' not in supp_dict:
-            raise ValueError('missing VOLUME_ID in supplemental index')
-        volume_id = indx_dict['VOLUME_ID']
+            raise HostIndexError('missing VOLUME_ID in supplemental index')
+        volume_id = supp_dict['VOLUME_ID']
         if volume_id not in full_path:
-            raise ValueError(f'VOLUME_IDs do not match: "{volume_id}", "{full_path}"')
+            raise HostIndexError(f'VOLUME_IDs do not match: "{volume_id}", '
+                                 f'"{full_path}"')
 
         if 'FILE_SPECIFICATION_NAME' not in supp_dict:
-            raise ValueError('missing FILE_SPECIFICATION_NAME in supplemental index')
-        file_spec = indx_dict['FILE_SPECIFICATION_NAME']
+            raise HostIndexError('missing FILE_SPECIFICATION_NAME in supplemental index')
+        file_spec = supp_dict['FILE_SPECIFICATION_NAME']
         if file_spec not in full_path:
-            raise ValueError('file paths do not match: "{file_spec}", "{full_path}"')
+            raise HostIndexError(f'file paths do not match: "{file_spec}", '
+                                 f'"{full_path}"')
 
         return True
 
@@ -382,7 +395,7 @@ class CassiniUVIS(oops.Host):
             `select` has been applied.
 
         Raises:
-            PdsHostError: If some aspect of the label or file is not valid.
+            oops.host.HostFormatError: If some aspect of the label or file is not valid.
         """
 
         # Load any needed SPICE kernels
@@ -390,11 +403,10 @@ class CassiniUVIS(oops.Host):
         tstop = julian.tdb_from_iso(label['STOP_TIME'])
         _Cassini.load_spks(tstart, tstop)
         if overrides['frame'] is None:
-            CassiniVIMS._define_frames()
             _Cassini.load_cks(tstart, tstop)
+            CassiniUVIS._define_frames()
 
         # Figure out the PDS object class and get the observation(s)
-        data = not astrometry
         if 'QUBE' in label:
             result = CassiniUVIS._get_qube(filepath, label, enclose,
                                            astrometry=astrometry, overrides=overrides)
@@ -432,6 +444,7 @@ class CassiniUVIS(oops.Host):
         """
 
         info = label['QUBE']
+        (bands, lines, samples) = info['CORE_ITEMS']
 
         # Load the data array if necessary
         if astrometry:
@@ -439,9 +452,9 @@ class CassiniUVIS(oops.Host):
         else:
             if (info['CORE_ITEM_TYPE'] != 'MSB_UNSIGNED_INTEGER'
                     or info['CORE_ITEM_BYTES'] != 2):
-                raise PdsHostError('unexpected QUBE data type in {filepath}')
+                raise HostFormatError(f'unexpected QUBE data type in {filepath}')
             if info['SUFFIX_ITEMS'] != [0, 0, 0]:
-                raise PdsHostError('unexpected QUBE SUFFIX_ITEMS in {filepath}')
+                raise HostFormatError(f'unexpected QUBE SUFFIX_ITEMS in {filepath}')
 
             array = CassiniUVIS._load_data(filepath, label, 'QUBE')
 
@@ -451,7 +464,7 @@ class CassiniUVIS(oops.Host):
                 array = array.reshape((samples, lines, bands))
                 array = array.swapaxes(0, 1)
             else:
-                array = array.reshape(shape)
+                array = array.reshape((samples, bands))
 
         # Identify the window(s) used
         # Note that these are either integers or lists of integers
@@ -464,7 +477,7 @@ class CassiniUVIS(oops.Host):
         band_bin = info['BAND_BIN']
 
         # Check the outer periphery of the data array in DEBUG mode
-        if _DEBUG and no astrometry:
+        if _DEBUG and array is not None:
             assert np.all(array[:min(line0),    ...] == _ARRAY_NULL)
             assert np.all(array[ max(line1)+1:, ...] == _ARRAY_NULL)
             assert np.all(array[..., :min(band0)   ] == _ARRAY_NULL)
@@ -495,7 +508,7 @@ class CassiniUVIS(oops.Host):
                      for w in range(len(line0)))
 
     @staticmethod
-    def _get_one_qube(filepath, label, array, *, line0, line1, line_bin, bands, band0,
+    def _get_one_qube(filepath, label, array, *, line0, line1, line_bin, band0,
                       band1, band_bin, rebin, overrides):
         """A single Observation object for the identified window of the UVIS qube.
 
@@ -507,11 +520,9 @@ class CassiniUVIS(oops.Host):
             label (dict): The PDS label as a dictionary.
             array (numpy.ndarray | None): The full data array, or None if the data are not
                 loaded.
-            lines (int): The number of lines in the full qube.
             line0 (int): The first line of the window.
             line1 (int): One past the last line of the window.
             line_bin (int): The binning factor along the line axis.
-            bands (int): The number of bands in the full qube.
             band0 (int): The first band of the window.
             band1 (int): One past the last band of the window.
             band_bin (int): The binning factor along the band axis.
@@ -527,7 +538,8 @@ class CassiniUVIS(oops.Host):
         # Determine the detector and mode
         detector = label['PRODUCT_ID'][:3]
         if detector not in {'EUV', 'FUV'}:
-            raise PdsHostError('invalid instrument {detector} for QUBE in {filepath}')
+            raise HostFormatError(f'invalid instrument {detector} for QUBE in '
+                                  f'{filepath}')
 
         resolution = label['SLIT_STATE']
 
@@ -535,7 +547,7 @@ class CassiniUVIS(oops.Host):
         info = label['QUBE']
         (bands, lines, samples) = info['CORE_ITEMS']
         if lines not in {1, 64}:
-            raise PdsHostError(f'invalid QUBE lines {lines} in {filepath}')
+            raise HostFormatError(f'invalid QUBE lines {lines} in {filepath}')
 
         if lines == 1:
             shape = (samples, bands)
@@ -546,12 +558,12 @@ class CassiniUVIS(oops.Host):
         frame_name = _FRAME_NAMES[detector]
 
         # Define the cadence
-        tstart = julian.tdb_from_tai(julian.tai_from_iso(label['START_TIME']))
+        tstart = julian.tdb_from_iso(label['START_TIME'])
         texp = label['INTEGRATION_DURATION']
         cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
 
         # Define the full FOV
-        fov = CassiniUVIS._FOVS[(detector, label['SLIT_STATE'], lines)]
+        fov = CassiniUVIS._FOVS[(detector, resolution, lines)]
 
         # Trim the lines
         dline = line1 - line0
@@ -623,7 +635,7 @@ class CassiniUVIS(oops.Host):
         obs.insert_subfield('band_bin', band_bin)
         obs.insert_subfield('samples', samples)
 
-        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['fov'] is None),
+        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['frame'] is None),
                                         return_all_planets=False)
         obs.insert_subfield('spice_kernels', kernels)
         obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
@@ -669,10 +681,10 @@ class CassiniUVIS(oops.Host):
 
         # Define the cadence
         if info['COLUMNS'] != 1:
-            raise PdsHostError(f'TIME_SERIES with COLUMNS != 1 in {filepath}')
+            raise HostFormatError(f'TIME_SERIES with COLUMNS != 1 in {filepath}')
         if not info['SAMPLING_PARAMETER_UNIT'].startswith('MILLISECOND'):
-            raise PdsHostError(f'TIME_SERIES with unit not ms in {filepath}')
-        tstart = julian.tdb_from_tai(julian.tai_from_iso(label['START_TIME']))
+            raise HostFormatError(f'TIME_SERIES with unit not ms in {filepath}')
+        tstart = julian.tdb_from_iso(label['START_TIME'])
         texp = info['SAMPLING_PARAMETER_INTERVAL'] * 0.001
         cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
 
@@ -688,7 +700,8 @@ class CassiniUVIS(oops.Host):
         if not astrometry:
             column = info['PHOTOMETER_COUNTS']
             if column['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or column['BYTES'] != 2:
-                raise PdsHostError('Non-standard data type in TIME_SERIES: {filepath}')
+                raise HostFormatError(f'non-standard data type in TIME_SERIES: '
+                                      f'{filepath}')
             array = CassiniUVIS._load_data(filepath, label, 'TIME_SERIES')
             obs.insert_subfield('data', array)
 
@@ -699,6 +712,11 @@ class CassiniUVIS(oops.Host):
         obs.insert_subfield('product_type', 'TIME_SERIES')
         obs.insert_subfield('label_target', label['TARGET_NAME'])
         obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
+
+        obs.insert_subfield('line_window', None)
+        obs.insert_subfield('line_bin', None)
+        obs.insert_subfield('band_window', None)
+        obs.insert_subfield('band_bin', None)
         obs.insert_subfield('samples', samples)
 
         kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['frame'] is None),
@@ -728,7 +746,9 @@ class CassiniUVIS(oops.Host):
 
         # Determine the detector
         detector = label['PRODUCT_ID'][:3]
-        assert detector in ('EUV', 'FUV')
+        if detector not in {'EUV', 'FUV'}:
+            raise HostFormatError(f'invalid instrument {detector} for SPECTRUM in '
+                                  f'{filepath}')
 
         # Get array shape
         info = label['SPECTRUM']
@@ -739,7 +759,8 @@ class CassiniUVIS(oops.Host):
 
         # Define the cadence
         if info['COLUMNS'] != 1:
-            raise PdsHostError(f'SPECTRUM has multiple COLUMNS in {filepath}')
+            raise HostFormatError(f'SPECTRUM has multiple COLUMNS in {filepath}')
+        tstart = julian.tdb_from_iso(label['START_TIME'])
         texp = label['INTEGRATION_DURATION']
         cadence = oops.cadence.Metronome(tstart, texp, texp, 1)
 
@@ -770,7 +791,7 @@ class CassiniUVIS(oops.Host):
         if not astrometry:
             column = info['SPECTRUM']
             if column['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or column['BYTES'] != 2:
-                raise PdsHostError('Non-standard data type in TIME_SERIES: {filepath}')
+                raise HostFormatError(f'non-standard data type in SPECTRUM: {filepath}')
             array = CassiniUVIS._load_data(filepath, label, 'SPECTRUM')
             obs.insert_subfield('data', array)
 
@@ -788,7 +809,7 @@ class CassiniUVIS(oops.Host):
         obs.insert_subfield('band_bin', band_bin)
         obs.insert_subfield('samples', 1)
 
-        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['fov'] is None),
+        kernels = _Cassini.used_kernels(obs.time, 'uvis', ck=(overrides['frame'] is None),
                                         return_all_planets=False)
         obs.insert_subfield('spice_kernels', kernels)
         obs.insert_subfield('spice_to_frame', _CMATRIX_ROTATION)
@@ -842,15 +863,9 @@ class CassiniUVIS(oops.Host):
                 "TIME_SERIES", or "SPECTRUM".
 
         Returns:
-            numpy.ndarray: The values read from the file.
-
-        Raises:
-            PdsHostError: If the data type is not MSB 2-byte unsigned ints.
+            numpy.ndarray: The values read from the file, as MSB 2-byte unsigned
+            integers; the caller checks that the label describes the data that way.
         """
-
-        obj = info[key]
-        if obj['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or obj['BYTES'] != 2:
-            raise PdsHostError('Non-standard data type in TIME_SERIES: {filepath}')
 
         basename = label['^' + key]
         data_filepath = FCPath(filepath).with_name(basename)
@@ -858,7 +873,7 @@ class CassiniUVIS(oops.Host):
         try:
             local_path = data_filepath.retrieve()
         except FileNotFoundError:
-            data_filepath = data_filepath.with_name(body.lower())
+            data_filepath = data_filepath.with_name(basename.lower())
             local_path = data_filepath.retrieve()
 
         return np.fromfile(local_path, sep='', dtype='>u2')

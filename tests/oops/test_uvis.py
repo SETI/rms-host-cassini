@@ -404,8 +404,9 @@ _TWO_WINDOWS = {'UL_CORNER_LINE': [0, 32], 'LR_CORNER_LINE': [15, 63],
 @pytest.mark.parametrize(('select', 'windows'), [
     (1, (32, 64)),
     (slice(None, 1), [(0, 16)]),
-    ((1, 0), [(32, 64), (0, 16)]),
-], ids=['index', 'slice', 'tuple'])
+    ((1,), (32, 64)),
+    ((slice(None, 1),), [(0, 16)]),
+], ids=['index', 'slice', 'tuple-index', 'tuple-slice'])
 def test_select_windows(tmp_path: pathlib.Path, select: Any,
                         windows: tuple[int, int] | list[tuple[int, int]]) -> None:
     path = write_qube(tmp_path, lines=64, window=_TWO_WINDOWS)

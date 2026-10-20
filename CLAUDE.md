@@ -4,9 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `rms-host-cassini` is the Cassini host plug-in for `oops` (rms-oops). It is a port of
 `rms-oops/src/hosts/cassini/` to the newer `oops.Host` / `oops.host` API, part of splitting
-the mission hosts out of rms-oops (see the sibling `rms-host-galileo`). ISS, VIMS and UVIS are
-ported; `from_index()` is implemented for ISS only, and VIMS and UVIS raise
-`NotImplementedError`.
+the mission hosts out of rms-oops (see the sibling `rms-host-galileo`). ISS, VIMS and UVIS
+are ported, each with both `from_file()` and `from_index()`.
 
 ## Standards
 
@@ -61,8 +60,8 @@ those until this repo has the equivalent.
   `_cassini_obs_id_code()` and `_fix_cassini_ring_target()`. Keep them out of
   `oops/__init__.py`, which the instrument modules can't import from without a circular
   import.
-- Each host's public `initialize()` chooses the kernels. It is optional: `from_file()` (and
-  ISS `from_index()`) call it with the defaults, and after the first call later calls are
+- Each host's public `initialize()` chooses the kernels. It is optional: `from_file()` and
+  `from_index()` call it with the defaults, and after the first call later calls are
   ignored until `_reset()`.
 - The `spice_frame_id` subfield is the frame ID from the Cassini frame kernel, not the
   instrument code from the instrument kernel; the two differ for UVIS HSP, HDAC and the
