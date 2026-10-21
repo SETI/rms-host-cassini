@@ -311,12 +311,8 @@ class CassiniVIMS(oops.Host):
 
         Returns:
             tuple[Observation | None, Observation | None] | Observation | None: Without
-            `select`, the pair (vis, ir), where:
-
-            * `vis`: The VIS observation, or None if the VIS channel was inactive.
-            * `ir`: The IR observation, or None if the IR channel was inactive.
-
-            With `select`, the observation chosen by an index or name, or a tuple of the
+            `select`, the pair (vis, ir), in which a channel that is off is None. With
+            `select`, the observation chosen by an index or name, or a tuple of the
             observations chosen by a slice or a tuple.
 
             Each observation has subfields `dict`, `host`, `instrument`, `detector`,
@@ -452,8 +448,10 @@ class CassiniVIMS(oops.Host):
             **kwargs: Additional keyword arguments, ignored here except as noted below.
 
         Returns:
-            list[Observation | ObsArray]: The list of Observations or arrays of
-            Observations, one for each filtered row of the index file.
+            list[tuple[Observation | None, Observation | None] | Observation | None]:
+            One entry per filtered row of the index: the (vis, ir) pair, in which a
+            channel that is off is None, or the observation or tuple of observations
+            chosen by `select`.
 
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
