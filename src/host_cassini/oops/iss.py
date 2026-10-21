@@ -218,9 +218,10 @@ class CassiniISS(oops.Host):
             `image_url` inserted, and `data` unless `astrometry` is True.
 
         Raises:
-            oops.host.PdsHostError: If the PDS3 label cannot be parsed.
-            oops.host.VicarHostError: If the VICAR header cannot be parsed.
+            PdsHostError: If the PDS3 label cannot be parsed.
+            VicarHostError: If the VICAR header cannot be parsed.
             OSError: If the file cannot be read.
+            WrongHostError: If the file is not a Cassini ISS file.
         """
 
         CassiniISS.initialize()  # define everything the first time through; use defaults
@@ -229,8 +230,9 @@ class CassiniISS(oops.Host):
         # Default Pds3Label options are method="fast", sources=False
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
-        fileinfo = oops.Host._read_fileinfo(fileinfo, formats='PV', astrometry=astrometry,
-                                            pds3_options=pds3_options)
+        fileinfo = CassiniISS._read_fileinfo(fileinfo, formats='PV',
+                                             astrometry=astrometry,
+                                             pds3_options=pds3_options)
 
         data = None
         if isinstance(fileinfo, Pds3Label):
@@ -335,13 +337,18 @@ class CassiniISS(oops.Host):
             `filter1`, `filter2`, `gain_mode`, `texp`, `label_target`, `observation_id`,
             `spice_kernels`, `filepath`, `basename`, `spice_to_frame`, `spice_frame_name`
             and `spice_frame_id` inserted.
+
+        Raises:
+            PdsHostError: If the PDS3 label cannot be parsed.
+            OSError: If `filepath` cannot be read.
+            WrongHostError: If `filepath` is not a Cassini ISS index file.
         """
 
         CassiniISS.initialize()
 
         # Read and filter the index table
         if row_dicts is None:
-            row_dicts = oops.Host._read_index_rows(filepath, pds3_options=pds3_options)
+            row_dicts = CassiniISS._read_index_rows(filepath, pds3_options=pds3_options)
         row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
 
         overrides = {
@@ -592,7 +599,7 @@ class CassiniISS(oops.Host):
                 otherwise.
 
         Raises:
-            oops.host.HostError: If the instrument kernel gives a camera's field of view
+            HostError: If the instrument kernel gives a camera's field of view
                 in units other than degrees.
         """
 

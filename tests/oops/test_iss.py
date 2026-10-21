@@ -650,7 +650,7 @@ def test_host_from_file_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, INSTRUMENT_HOST_NAME='GALILEO ORBITER')
-    with pytest.raises(oops.host.HostError, match='unrecognized host'):
+    with pytest.raises(oops.host.WrongHostError, match='not a Cassini ISS PDS3 label'):
         CassiniISS.from_file(path, astrometry=True)
 
 ##########################################################################################

@@ -187,11 +187,12 @@ class CassiniUVIS(oops.Host):
             `sampling` unless it is a TIME_SERIES; and `data` unless `astrometry` is True.
 
         Raises:
-            IndexError: If an index in `select` is out of range.
-            TypeError: If `select` has an invalid type.
-            ValueError: If `select` is a name; UVIS observations have none.
-            OopsValueError: If a TIME_SERIES is from neither the HSP nor the HDAC.
-            oops.host.HostFormatError: If some aspect of the label or file is not valid.
+            HostFormatError: If some aspect of the label or file is not valid or describes
+                an unsupported option.
+            OopsIndexError: If an index in `select` is out of range.
+            OopsTypeError: If `select` has an invalid type.
+            OopsValueError: If `select` is a string.
+            OSError: If `filepath` cannot be read.
         """
 
         CassiniUVIS.initialize()  # define everything the first time through; use
@@ -201,8 +202,9 @@ class CassiniUVIS(oops.Host):
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
         # Read the label
-        fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
-                                            pds3_options=pds3_options)
+        fileinfo = CassiniUVIS._read_fileinfo(fileinfo, formats='P',
+                                              astrometry=astrometry,
+                                              pds3_options=pds3_options)
         filepath = FCPath(fileinfo.filepath)
         label = fileinfo.as_dict()
 
@@ -252,6 +254,7 @@ class CassiniUVIS(oops.Host):
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
                 row of the index, if `filepath` and `supplement` have already been read.
+                If provided, `supplement` is ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -304,8 +307,13 @@ class CassiniUVIS(oops.Host):
             Observations, one for each filtered row of the index file.
 
         Raises:
-            oops.host.HostIndexError: If no supplemental index was found or merged into
-                `row_dicts`, or if the supplement does not match the index row for row.
+            HostFormatError: If some aspect of an index row is not valid or describes an
+                unsupported option.
+            HostIndexError: If the supplement does not match the index row for row, or
+                if `row_dicts` has no supplemental index merged in.
+            PdsHostError: If the PDS3 label cannot be parsed.
+            OSError: If `filepath` or `supplement` cannot be read.
+            WrongHostError: If `filepath` is not a Cassini UVIS index file.
         """
 
         CassiniUVIS.initialize()
@@ -313,9 +321,9 @@ class CassiniUVIS(oops.Host):
         # Read and filter the index table
         if row_dicts is None:
             supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
-            row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
-                                                   validate=CassiniUVIS._validate_index,
-                                                   pds3_options=pds3_options)
+            row_dicts = CassiniUVIS._read_index_rows(filepath, supplement=supplement,
+                                                     validate=CassiniUVIS._validate_index,
+                                                     pds3_options=pds3_options)
 
         # The file path and most of the observation's parameters come from the supplement
         if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
@@ -395,7 +403,7 @@ class CassiniUVIS(oops.Host):
             `select` has been applied.
 
         Raises:
-            oops.host.HostFormatError: If some aspect of the label or file is not valid.
+            HostFormatError: If some aspect of the label or file is not valid.
         """
 
         # Load any needed SPICE kernels
@@ -441,6 +449,9 @@ class CassiniUVIS(oops.Host):
             a one-line QUBE or a :class:`~oops.observation.TimedImage` otherwise; a tuple
             of observations, one per window, if multiple windows are defined and
             `enclose` is False.
+
+        Raises:
+            HostFormatError: If some aspect of the label or file is not valid.
         """
 
         info = label['QUBE']
@@ -533,6 +544,9 @@ class CassiniUVIS(oops.Host):
         Returns:
             Observation: A :class:`~oops.observation.Pixel` for a one-line qube or a
             :class:`~oops.observation.TimedImage` otherwise.
+
+        Raises:
+            HostFormatError: If some aspect of the label or file is not valid.
         """
 
         # Determine the detector and mode
@@ -660,7 +674,7 @@ class CassiniUVIS(oops.Host):
             Pixel: The observation.
 
         Raises:
-            OopsValueError: If the product is neither HSP nor HDAC.
+            HostFormatError: If some aspect of the label or file is not valid.
         """
 
         # Determine the detector
@@ -670,7 +684,7 @@ class CassiniUVIS(oops.Host):
         elif product_id.startswith('HDAC'):
             detector = 'HDAC'
         else:
-            raise oops.OopsValueError(f'Time series is neither HSP nor HDAC: {filepath}')
+            raise HostFormatError(f'Time series is neither HSP nor HDAC: {filepath}')
 
         # Get the array shape
         info = label['TIME_SERIES']
@@ -742,6 +756,9 @@ class CassiniUVIS(oops.Host):
 
         Returns:
             Pixel: The observation.
+
+        Raises:
+            HostFormatError: If some aspect of the label or file is not valid.
         """
 
         # Determine the detector

@@ -125,9 +125,10 @@ nitpick_ignore_regex = [
     # oops.Host is not yet in a released oops, so the published oops inventory has no
     # entry for it. Remove this entry once a release that has it is on ReadTheDocs.
     (r'py:class', r'oops\.host\.host_\.Host'),
-    # The oops.host exceptions are not yet in a released oops either. Remove this entry
-    # with the one above.
-    (r'py:exc', r'oops\.host\.\w+Error'),
+    # The oops.host exceptions are not yet in a released oops either. Docstrings name them
+    # either in full or by the short names in _SHORT_NAMES; Sphinx matches this pattern
+    # against the name as written. Remove this entry with the one above.
+    (r'py:exc', r'(oops\.host\.)?\w*HostError|(oops\.host\.)?Host\w+Error'),
     # ObsArray is a type alias in oops.host.host_ for an object array of Observations.
     # oops does not document it, so no inventory has an entry to link to.
     (r'py:class', r'ObsArray'),
@@ -161,7 +162,15 @@ _SHORT_NAMES = {
     'FOV'             : 'oops.FOV',
     'Meshgrid'        : 'oops.Meshgrid',
     'Scalar'          : 'polymath.Scalar',
+    'OopsIndexError'  : 'oops.OopsIndexError',
+    'OopsTypeError'   : 'oops.OopsTypeError',
     'OopsValueError'  : 'oops.OopsValueError',
+    'HostError'       : 'oops.host.HostError',
+    'HostFormatError' : 'oops.host.HostFormatError',
+    'HostIndexError'  : 'oops.host.HostIndexError',
+    'PdsHostError'    : 'oops.host.PdsHostError',
+    'VicarHostError'  : 'oops.host.VicarHostError',
+    'WrongHostError'  : 'oops.host.WrongHostError',
     'oops.LightSource': 'oops.lightsource.LightSource',
 }
 

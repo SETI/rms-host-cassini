@@ -322,6 +322,13 @@ class CassiniVIMS(oops.Host):
             Each observation has subfields `dict`, `host`, `instrument`, `detector`,
             `sampling`, `label_target`, `observation_id`, `filepath` and `basename`, and
             `data` unless `astrometry` is True.
+
+        Raises:
+            HostFormatError: If some aspect of the label or file is not valid or describes
+                an unsupported option.
+            PdsHostError: If the PDS3 or ISIS label cannot be parsed.
+            OSError: If the file cannot be read.
+            WrongHostError: If the file is not a Cassini VIMS file.
         """
 
         CassiniVIMS.initialize()  # define everything the first time through; use
@@ -331,8 +338,9 @@ class CassiniVIMS(oops.Host):
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
         # Read the label
-        fileinfo = oops.Host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
-                                            pds3_options=pds3_options)
+        fileinfo = CassiniVIMS._read_fileinfo(fileinfo, formats='P',
+                                              astrometry=astrometry,
+                                              pds3_options=pds3_options)
 
         # Define the overrides
         overrides = {
@@ -394,6 +402,7 @@ class CassiniVIMS(oops.Host):
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
                 row of the index, if `filepath` and `supplement` have already been read.
+                If provided, `supplement` is ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -447,8 +456,13 @@ class CassiniVIMS(oops.Host):
             Observations, one for each filtered row of the index file.
 
         Raises:
-            oops.host.HostIndexError: If no supplemental index was found or merged into
-                `row_dicts`, or if the supplement does not match the index row for row.
+            HostFormatError: If some aspect of an index row is not valid or describes an
+                unsupported option.
+            HostIndexError: If the supplement does not match the index row for row, or
+                if `row_dicts` has no supplemental index merged in.
+            PdsHostError: If the PDS3 label cannot be parsed.
+            OSError: If `filepath` or `supplement` cannot be read.
+            WrongHostError: If `filepath` is not a Cassini VIMS index file.
         """
 
         CassiniVIMS.initialize()
@@ -456,9 +470,9 @@ class CassiniVIMS(oops.Host):
         # Read and filter the index table
         if row_dicts is None:
             supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
-            row_dicts = oops.Host._read_index_rows(filepath, supplement=supplement,
-                                                   validate=CassiniVIMS._validate_index,
-                                                   pds3_options=pds3_options)
+            row_dicts = CassiniVIMS._read_index_rows(filepath, supplement=supplement,
+                                                     validate=CassiniVIMS._validate_index,
+                                                     pds3_options=pds3_options)
 
         # The file path and most of the observation's parameters come from the supplement
         if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
@@ -617,8 +631,8 @@ class CassiniVIMS(oops.Host):
         # channel's cadence cannot be built, so the channel is treated as off.
         label['POWER_STATE_FLAG'] = tuple(
             'OFF' if texp <= 0. else flag
-            for (flag, texp) in zip(label['POWER_STATE_FLAG'],
-                                    label['EXPOSURE_DURATION'], strict=True))
+            for (flag, texp) in zip(label['POWER_STATE_FLAG'], label['EXPOSURE_DURATION'],
+                                    strict=True))
         return label
 
     @staticmethod
@@ -637,17 +651,18 @@ class CassiniVIMS(oops.Host):
             and IR.
 
         Raises:
-            oops.host.HostFormatError: If some aspect of the label or file is not valid.
+            HostFormatError: If some aspect of the label or file is not valid.
         """
 
         qube_dict = label['SPECTRAL_QUBE']
 
         # Load any needed SPICE kernels
         tstart = julian.tdb_from_iso(label['START_TIME'])
-        _Cassini.load_spks(tstart, tstart + 3600.)
+        tstop = julian.tdb_from_iso(label['STOP_TIME'])
+        _Cassini.load_spks(tstart, tstop)
         using_cks =  overrides['frame'] is None
         if using_cks:
-            _Cassini.load_cks(tstart, tstart + 3600.)
+            _Cassini.load_cks(tstart, tstop)
             CassiniVIMS._define_frames()
 
         # Check power state of each channel: [0] is IR; [1] is VIS
@@ -987,7 +1002,7 @@ class CassiniVIMS(oops.Host):
               no time backplane is found in the file.
 
         Raises:
-            oops.host.HostFormatError: If the byte order or data type of the core or the
+            HostFormatError: If the byte order or data type of the core or the
                 suffix is not recognized or if a line of core samples does not fill a
                 whole number of suffix items.
         """
@@ -1167,7 +1182,7 @@ class CassiniVIMS(oops.Host):
             * `time`: The time in seconds TDB at each point of the meshgrid.
 
         Raises:
-            oops.host.WrongHostError: If `obs` is not a VIMS observation.
+            WrongHostError: If `obs` is not a VIMS observation.
         """
 
         if obs.instrument != 'VIMS':

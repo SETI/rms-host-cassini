@@ -314,7 +314,7 @@ def test_time_series_cadence(tmp_path: pathlib.Path) -> None:
 
 
 def test_time_series_rejects_other_detectors(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.OopsValueError, match='neither HSP nor HDAC'):
+    with pytest.raises(oops.host.HostFormatError, match='neither HSP nor HDAC'):
         CassiniUVIS.from_file(write_time_series(tmp_path, 'XYZ2005_001_00_00'))
 
 

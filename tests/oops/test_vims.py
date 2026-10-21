@@ -38,6 +38,7 @@ def vims_keywords(**changes: Any) -> dict[str, Any]:
         'TARGET_NAME'              : 'SATURN',
         'OBSERVATION_ID'           : 'VIMS_000SA_TEST001_PRIME',
         'START_TIME'               : START_TIME,
+        'STOP_TIME'                : STOP_TIME,
         'OVERWRITTEN_CHANNEL_FLAG' : 'OFF',
         'INSTRUMENT_MODE_ID'       : 'IMAGE',
         'INTERFRAME_DELAY_DURATION': 520.,
