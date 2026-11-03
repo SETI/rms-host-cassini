@@ -101,7 +101,8 @@ class _Cassini:
         Parameters:
             ck (str, optional): The set of C kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no C kernels automatically,
-                leaving their handling to the caller.
+                leaving their handling to the caller. 'reconstructed' also loads the
+                reconstructed C kernels of the Jupiter flyby.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -152,6 +153,13 @@ class _Cassini:
             kernels = spicedb.select_ck(-82, name='CAS-CK-' + ck,
                                         time=(_Cassini.START_TIME, _Cassini.STOP_TIME),
                                         asof=asof)
+
+            # The reconstructed C kernels of the Jupiter flyby are a set of their own
+            if ck == 'RECONSTRUCTED':
+                kernels = kernels + spicedb.select_ck(
+                    -82, name='CAS-CK-JUP',
+                    time=(_Cassini.START_TIME, _Cassini.STOP_TIME), asof=asof)
+
             _Cassini.initialize_kernels(kernels, _Cassini.CK_LIST)
 
         # Load extra kernels if necessary

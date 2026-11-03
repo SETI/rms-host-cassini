@@ -97,7 +97,8 @@ class FakeSpiceDB:
     Attributes:
         calls (list[tuple[str, tuple, dict]]): Each call as (name, args, kwargs).
         spk_kernels (list[FakeKernel]): Returned by `select_spk`.
-        ck_kernels (list[FakeKernel]): Returned by `select_ck`.
+        ck_kernels (dict[str, list[FakeKernel]]): Returned by `select_ck`, by kernel set
+            name; a set name that is absent gives an empty list.
         inst_kernels (list[FakeKernel]): Returned by `select_inst`.
         kernel_dict (dict): Returned by `as_dict`.
         used (list[str]): Returned by `used_basenames`.
@@ -105,7 +106,7 @@ class FakeSpiceDB:
 
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
     spk_kernels: list[FakeKernel] = field(default_factory=list)
-    ck_kernels: list[FakeKernel] = field(default_factory=list)
+    ck_kernels: dict[str, list[FakeKernel]] = field(default_factory=dict)
     inst_kernels: list[FakeKernel] = field(
         default_factory=lambda: [FakeKernel('cas_iss_v10.ti')])
     kernel_dict: dict[str, Any] = field(default_factory=ik_dict)
@@ -142,7 +143,7 @@ class FakeSpiceDB:
 
     def select_ck(self, *args: Any, **kwargs: Any) -> list[FakeKernel]:
         self._record('select_ck', *args, **kwargs)
-        return self.ck_kernels
+        return self.ck_kernels.get(kwargs['name'], [])
 
     def select_inst(self, *args: Any, **kwargs: Any) -> list[FakeKernel]:
         self._record('select_inst', *args, **kwargs)

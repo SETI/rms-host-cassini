@@ -1282,7 +1282,8 @@ class CassiniVIMS(oops.Host):
         Parameters:
             ck (str, optional): The set of C kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no C kernels automatically,
-                leaving their handling to the caller.
+                leaving their handling to the caller. 'reconstructed' also loads the
+                reconstructed C kernels of the Jupiter flyby.
             planets (list, optional): A list of planets to pass to
                 :meth:`~oops.Body.define_solar_system`. None or 0 means all.
             asof (str, optional): Only use SPICE kernels that existed before this date;

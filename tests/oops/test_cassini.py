@@ -227,24 +227,31 @@ def test_initialize_defines_the_cassini_path(fake_spice: FakeSpice) -> None:
     assert fake_spice.spice_paths == [('CASSINI', 'SATURN')]
 
 
-@pytest.mark.parametrize(('kind', 'select'), [('spk', 'select_spk'), ('ck', 'select_ck')])
-@pytest.mark.parametrize('option', ['reconstructed', 'Predicted'])
-def test_initialize_selects_kernel_set(fake_spicedb: FakeSpiceDB, kind: str, select: str,
-                                       option: str) -> None:
+@pytest.mark.parametrize(('kind', 'select', 'option', 'sets'), [
+    ('spk', 'select_spk', 'reconstructed', ['CAS-SPK-RECONSTRUCTED']),
+    ('spk', 'select_spk', 'Predicted', ['CAS-SPK-PREDICTED']),
+    ('ck', 'select_ck', 'reconstructed', ['CAS-CK-RECONSTRUCTED', 'CAS-CK-JUP']),
+    ('ck', 'select_ck', 'Predicted', ['CAS-CK-PREDICTED']),
+], ids=['spk-reconstructed', 'spk-predicted', 'ck-reconstructed', 'ck-predicted'])
+def test_initialize_selects_kernel_sets(fake_spicedb: FakeSpiceDB, kind: str, select: str,
+                                        option: str, sets: list[str]) -> None:
     _Cassini.initialize(asof='2020-01-01', **{kind: option})
     assert fake_spicedb.named(select) == [
-        ((-82,), {'name': f'CAS-{kind.upper()}-{option.upper()}',
-                  'time': ('1997-10-01', '2017-10-01'), 'asof': '2020-01-01'})]
+        ((-82,), {'name': name, 'time': ('1997-10-01', '2017-10-01'),
+                  'asof': '2020-01-01'})
+        for name in sets]
 
 
 def test_initialize_distributes_selected_kernels(fake_spicedb: FakeSpiceDB) -> None:
     spk = kernel_for_months('s.bsp', 30.2, 30.4)
     ck = kernel_for_months('c.bc', 40.2, 40.4)
+    jup_ck = kernel_for_months('jup.bc', 37.2, 37.4)
     fake_spicedb.spk_kernels = [spk]
-    fake_spicedb.ck_kernels = [ck]
+    fake_spicedb.ck_kernels = {'CAS-CK-RECONSTRUCTED': [ck], 'CAS-CK-JUP': [jup_ck]}
     _Cassini.initialize()
     assert _Cassini.SPK_LIST[30] == [spk]
     assert _Cassini.CK_LIST[40] == [ck]
+    assert _Cassini.CK_LIST[37] == [jup_ck]
 
 
 @pytest.mark.parametrize(('kind', 'select'), [('spk', 'select_spk'), ('ck', 'select_ck')])
