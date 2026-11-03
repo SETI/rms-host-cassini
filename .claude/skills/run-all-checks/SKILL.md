@@ -26,7 +26,7 @@ Execute all project checks (lint, typecheck, test, Markdown lint, docs) and fix 
 
 Run from **project root** with the project **virtual environment activated** (e.g. `source venv/bin/activate` or create a new venv and then `pip install -e ".[dev]"`).
 
-### Code (ruff, flake8, mypy, pytest, stubtest, pip-audit)
+### Code (ruff, flake8, mypy, pytest, pyroma, pip-audit)
 
 ```bash
 # Lint (ruff); `ruff format` is disabled because it would remove deliberate alignment
@@ -38,26 +38,26 @@ python -m flake8 --select=E12,E13 src tests
 # Type check (mypy on tests only; src/ is deliberately unannotated)
 MYPYPATH=src python -m mypy tests
 
-# Tests (pytest; use -n auto for parallel when tests are independent)
-python -m pytest tests -q
+# Tests (pytest, in parallel; the script's -w option sets the worker count)
+python -m pytest -q -n auto --dist loadscope tests
 
-# The two published stubs match the runtime API
-python -m mypy.stubtest polymath --mypy-config-file pyproject.toml --allowlist .stubtest-allowlist
+# Packaging metadata (pyroma)
+python -m pyroma .
 
 # Known vulnerabilities in dependencies (pip-audit)
 python -m pip_audit --skip-editable
 ```
 
-The run-all-checks script runs these in sequence; use the script’s `-c` option to run only code checks.
+The run-all-checks script runs these code checks one after another, as one group. By default that group runs in parallel with the Sphinx build and the text checks; with `--sequential` the groups run one after another. Use the script’s `-c` option to run only the code checks.
 
 ### Text (codespell, PyMarkdown)
 
 ```bash
 # Spelling: typos and British spellings
-python -m codespell_lib src tests docs scripts README.md CONTRIBUTING.md
+python -m codespell_lib src tests docs scripts README.md CONTRIBUTING.md CLAUDE.md
 
 # Markdown lint
-python -m pymarkdown scan -r docs/ .claude/ README.md CONTRIBUTING.md
+python -m pymarkdown scan -r docs/ .claude/ README.md CONTRIBUTING.md CLAUDE.md
 ```
 
 Use the script’s `-m` option to run both text checks, or `--codespell` /
@@ -81,12 +81,13 @@ From project root:
 
 Options:
 
-- **Default**: Run code checks and docs (Sphinx + PyMarkdown) in parallel.
-- `-c, --code`: Only the code checks (ruff, flake8 continuation-line indent, mypy, pytest, stubtest, pip-audit).
+- **Default**: Run the code checks, the Sphinx build, and the text checks (codespell + PyMarkdown) as three groups in parallel; within each group the checks run one after another.
+- `-c, --code`: Only the code checks (ruff, flake8 continuation-line indent, mypy, pytest, pyroma, pip-audit).
 - `-d, --docs`: Only the Sphinx build and the text checks (codespell, PyMarkdown).
 - `-m, --markdown`: Only the text checks; `--codespell` or `--pymarkdown` for one of them.
-- `-s, --sequential`: Run code and docs sequentially (easier to read output).
-- `-p, --parallel`: Run code and docs in parallel (the default).
+- `-s, --sequential`: Run the groups one after another (easier to read output).
+- `-p, --parallel`: Run the groups in parallel (the default).
+- `-w, --pytest-workers N`: Pytest workers: `auto` (the default), `1` (serial), or a number.
 - `-h, --help`: Show usage.
 
 Set `VENV` or `VENV_PATH` to point to the virtual environment if it is not at `./venv`.
@@ -99,10 +100,10 @@ Check Progress:
 - [ ] Flake8 continuation-line indent (src, tests)
 - [ ] Mypy (tests)
 - [ ] Pytest (tests)
-- [ ] Stubtest (__init__.pyi, typedefs.pyi)
+- [ ] Pyroma (packaging metadata)
 - [ ] pip-audit (installed dependencies)
-- [ ] codespell (src, tests, docs, scripts, README, CONTRIBUTING)
-- [ ] PyMarkdown scan (docs/, .claude/, README, CONTRIBUTING)
+- [ ] codespell (src, tests, docs, scripts, README, CONTRIBUTING, CLAUDE)
+- [ ] PyMarkdown scan (docs/, .claude/, README, CONTRIBUTING, CLAUDE)
 - [ ] Sphinx build (docs/) with SPHINXOPTS="-W -n"
 - [ ] All errors fixed
 - [ ] Re-verify all checks pass
@@ -181,7 +182,7 @@ All checks pass when:
 - `flake8 --select=E12,E13` → No output
 - `mypy` → Success: no issues found
 - `pytest` → All tests pass; coverage meets target if configured
-- `stubtest` → Success: no issues found
+- `pyroma` → Exits 0 (the package metadata meets pyroma's minimum rating)
 - `pip-audit` → No known vulnerabilities found
 - `codespell` → No misspellings reported
 - `pymarkdown scan` → No violations
