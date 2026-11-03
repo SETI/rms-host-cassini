@@ -39,7 +39,7 @@ Compare against project rules when present (e.g. `.claude/rules/python.md`). Che
 - Public API: clear `__all__`, `py.typed` for typed packages, separation of public vs `_private`.
 - Library hygiene: No `print()` in library code (only in explicit CLI entry points). No `sys.exit()` in library code; raise exceptions instead.
 - Error message quality: exceptions include enough context to diagnose (`ValueError("x must be positive, got -3")` not `ValueError("bad value")`). Custom base exception class (e.g. `class PolymathError(Exception)`) so callers can catch library errors specifically. Appropriate use of `warnings.warn()` with `DeprecationWarning`/`FutureWarning` for planned changes.
-- Encoding and I/O: explicit `encoding='utf-8'` on `open()` calls (platform default varies). Consistent use of `pathlib.Path` over `os.path` string manipulation. Accept `str | Path` in public API. Context managers for all files and connections.
+- Encoding and I/O: explicit `encoding='utf-8'` on `open()` calls (platform default varies). Consistent use of `pathlib.Path` over `os.path` string manipulation. Accept `str | Path` in public API. When the project has the `filecache` rule, paths are `FCPath` instead: the public API accepts `str | Path | FCPath` and normalizes with `FCPath(path)`, and converting to `Path` (or `str`) is itself a finding, because it breaks remote paths such as `gs://`, `s3://`, and `https://`. Context managers for all files and connections.
 
 **Evidence**: Rule name or quote, example file:line or pattern. Grep for `print(`, `sys.exit`, `sys.stdout`, `open(` without `encoding=`, `logging.basicConfig` in non-CLI code.
 
@@ -94,10 +94,10 @@ Compare against project rules when present (e.g. `.claude/rules/python.md`). Che
 - Declared deps: single source of truth (e.g. `pyproject.toml`); optional groups (dev, docs).
 - Version policy: minimum versions, avoidance of global pins for libraries.
 - Tooling: consistent formatter and linter; CI runs checks and tests; no obsolete or conflicting config (e.g. both `setup.py` and `pyproject.toml` without clear roles).
-- CI/CD pipeline consistency: Python version matrix in CI matches `requires-python` in `pyproject.toml`. CI runs the same checks as the local `run-all-checks.sh` (ruff, mypy, pytest, Sphinx, PyMarkdown). Publishing workflow present and correctly triggered (tag-based, Trusted Publishers or token auth).
+- CI/CD pipeline consistency: Python version matrix in CI matches `requires-python` in `pyproject.toml`. CI runs exactly the checks that `scripts/run-all-checks.sh` enables, no more and no fewer (see `environment.md`). Derive that set from the script rather than from a fixed list: a check is enabled when its `ENABLE_*` toggle defaults to true. Compare CI against every enabled check, with the same command, paths, and options (for example `-W -n` for Sphinx), and flag any enabled check that CI skips and any CI check that the script does not enable. Publishing workflow present and correctly triggered (tag-based, Trusted Publishers or token auth).
 - Configuration consistency: tool configs in `pyproject.toml` (ruff, mypy, pytest) are consistent with each other and with project rules. No stale config sections for tools no longer used (e.g. `[tool.black]` or `[tool.isort]` when ruff handles both). Line-length and target-version settings agree across tools.
 
-**Evidence**: `pyproject.toml`, `requirements*.txt`, CI config (`.github/workflows/`). Compare `requires-python` against CI matrix. Grep for stale `[tool.*]` sections.
+**Evidence**: `pyproject.toml`, `requirements*.txt`, CI config (`.github/workflows/`). Compare `requires-python` against CI matrix. List the enabled checks with `grep -n 'ENABLE_[A-Z0-9_]*:=true' scripts/run-all-checks.sh` and match each to a CI step. Grep for stale `[tool.*]` sections.
 
 ### 9. Technical debt and risk
 

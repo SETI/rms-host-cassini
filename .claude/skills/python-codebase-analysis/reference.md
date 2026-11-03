@@ -26,7 +26,8 @@ Use this when you need concrete examples for a dimension or wording guidance.
 ### Best practices – encoding and I/O
 
 - **Finding**: `open()` calls omit `encoding`; relies on platform default. **Evidence**: `src/reader.py` lines 18, 42. **Suggestion**: Add `encoding='utf-8'` (or the appropriate encoding) to all `open()` calls in library code.
-- **Finding**: Public API accepts only `str` paths; callers using `pathlib.Path` must convert. **Evidence**: `src/loader.py` `load(path: str)`. **Suggestion**: Accept `str | Path` and convert internally with `Path(path)`.
+- **Finding**: Public API accepts only `str` paths; callers using `pathlib.Path` must convert. **Evidence**: `src/loader.py` `load(path: str)`. **Suggestion**: Accept `str | Path` and convert internally with `Path(path)`. In a project with the `filecache` rule, accept `str | Path | FCPath` and normalize with `FCPath(path)` instead, so remote paths (`gs://`, `s3://`, `https://`) keep working.
+- **Finding** (project with the `filecache` rule): Public API converts its path argument to `Path`, discarding the remote source of an `FCPath`. **Evidence**: `src/loader.py` `load()` calls `Path(path)` on its first line. **Suggestion**: Normalize with `FCPath(path)` and use `FCPath` methods (`open()`, `retrieve()`) so `gs://`, `s3://`, and `https://` paths still work; see `filecache.md`.
 
 ### Types
 
