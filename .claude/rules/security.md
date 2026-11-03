@@ -22,7 +22,8 @@ description: Security best practices for Python library development — secrets,
 
 - NEVER trust external input (function arguments from callers, file contents, environment variables, data from remote URLs).
 - Validate inputs at the public API boundary of the library. Raise clear `ValueError` or `TypeError` exceptions for invalid arguments.
-- For file paths, resolve to absolute paths and verify they remain within the expected directory (prevent path traversal).
+- For local file paths, resolve to absolute paths and verify they remain within the expected directory (prevent path traversal).
+- Do NOT resolve remote URLs (`gs://`, `s3://`, `https://`) as local paths: that discards the scheme and breaks remote I/O. Keep them as `FCPath` (see `filecache`), and validate them separately by checking that the scheme and bucket or host are expected and that the path stays under the expected prefix.
 
 ## 4. Safe Defaults
 

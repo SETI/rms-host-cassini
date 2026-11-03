@@ -45,7 +45,7 @@ Every bug report MUST include:
 [Level] — [Brief justification]
 
 ## Steps to Reproduce
-1. Install: `pip install rms-host-cassini==1.0.0`
+1. Install: `pip install rms-host-cassini==[package version from Environment]`
 2. Run:
    (Example)
 3. Observe the error.

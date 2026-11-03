@@ -132,7 +132,7 @@ Apply these criteria when reviewing each test file and each test case.
 
 ### 16. Regression and documentation
 
-- **Bug reference:** Tests written to reproduce bugs should reference the issue in docstring or comment; note regression tests that lack context.
+- **Bug reference:** Tests written to reproduce bugs should explain the behavior they guard in a brief inline `#` comment, which may cite the issue as a supporting reference (`python.md` section 4). Docstrings never carry issue numbers (`python.md` section 6). Note regression tests that lack this context.
 - **Spec alignment:** Tests should map to documented behavior (docstrings, specs); note tests for undocumented behavior or missing tests for documented behavior.
 - **Deprecation warnings:** If deprecated APIs exist, tests should verify warnings are emitted using `pytest.warns(DeprecationWarning)` (or `FutureWarning`). Note deprecated APIs that lack warning-emission tests.
 - **`filterwarnings` configuration:** Check whether `filterwarnings = ["error"]` (or equivalent) is set in pytest config to surface unexpected warnings as test failures. Without it, new warnings go unnoticed. Note if missing.

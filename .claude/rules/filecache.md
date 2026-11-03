@@ -23,8 +23,10 @@ source information and breaks remote I/O.
   other API that does not understand remote URLs. Use `FCPath` methods instead
   (e.g. `fcpath.open(...)`, `fcpath.iterdir()`, `fcpath.glob(...)`). See section 4
   for the preferred pattern for existence checks.
-- When an external API requires a plain string URL/path, use `fcpath.as_posix()`
-  rather than `str(fcpath)` so the result is a stable POSIX-style URL.
+- When an external API accepts a URL as a plain string, use `fcpath.as_posix()`
+  rather than `str(fcpath)` so the result is a stable POSIX-style URL. A local-only
+  API or CLI cannot open a remote URL: pass it the local `Path` from
+  `fcpath.retrieve()` instead (Section 3b).
 
 ### Type hints at API boundaries
 
@@ -208,5 +210,6 @@ logger = PdsLogger('mytool', logfile=log_dir / 'run.log')
 | Write via library that needs a real file | `local = cast(Path, fcpath.get_local_path())`; write; `fcpath.upload()` |
 | "Does this file exist *and* I want to read it?" | `try: ...retrieve()... except FileNotFoundError:` (do NOT pre-check with `exists()`) |
 | List / glob a directory | `fcpath.iterdir()`, `fcpath.glob(...)` |
-| Pass to an external CLI / URL API | `fcpath.as_posix()` |
+| Pass to an API that accepts URLs | `fcpath.as_posix()` |
+| Pass to a local-only API or CLI | `local = cast(Path, fcpath.retrieve())`; pass `local` |
 | Make parent directories | Do nothing - `get_local_path()` handles it |
