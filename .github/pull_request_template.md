@@ -37,8 +37,8 @@ Closes #<!-- issue number -->
 
 ## Checklist
 
-- [ ] Code follows project style (`ruff check`, `ruff format`)
-- [ ] Type annotations present and `mypy` passes
+- [ ] Code follows project style (`ruff check`; `ruff format` is deliberately not used)
+- [ ] Type annotations present in the tests (`src/` is unannotated by design) and `mypy tests` passes
 - [ ] No secrets or credentials committed
 - [ ] No warnings or errors introduced (CI, linters, type checking, builds) or justified in Notes
 - [ ] Docstrings and Sphinx docs updated (if applicable)
