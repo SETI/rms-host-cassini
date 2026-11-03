@@ -9,14 +9,15 @@ description = "Cassini mission hosts (ISS, UVIS, VIMS) for the OOPS observation 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "cspyce",
+  "cspyce>=2.3.2",          # 2.3.2 is the first with Python 3.13 wheels
   "numpy>=2.0",
   "rms-filecache>=2.0.3",
-  "rms-julian",
-  # Also provides spicedb.
+  "rms-julian>=3.0.2",      # 3.0.2 drops pyparsing's deprecated camelCase API
+  # Also provides spicedb. No release has the oops.Host API yet; require the first one
+  # that does once it is published.
   "rms-oops",
   "rms-pdsparser>=2.3.0",   # 2.3.0 adds as_dict
-  "rms-pdstable",
+  "rms-pdstable>=1.0.1",    # 1.0.1 accepts an FCPath label path
   "rms-vicar>=1.4.0",       # 1.4.0 adds as_dict
 ]
 license = "Apache-2.0"
@@ -54,7 +55,7 @@ Issues = "https://github.com/SETI/rms-host-cassini/issues"
 dev = [
   "codespell>=2.4",
   "coverage>=7.0",
-  "flake8",
+  "flake8>=7.0",
   "mypy>=1.0",
   "pip-audit>=2.7",
   "pymarkdownlnt>=0.9.35",
@@ -68,10 +69,10 @@ dev = [
   "rms-host-cassini[docs]",
 ]
 docs = [
-  "myst-parser",
-  "sphinx>=7",
-  "sphinxcontrib-mermaid",
-  "sphinx-rtd-theme",
+  "myst-parser>=5.0",
+  "sphinx>=8",
+  "sphinxcontrib-mermaid>=2.0",
+  "sphinx-rtd-theme>=3.0",
 ]
 
 [tool.pytest.ini_options]
