@@ -12,6 +12,7 @@ import numpy as np
 import oops
 import pytest
 from conftest import FakeSpice, FakeSpiceDB, pds3_lines
+from pdsparser import Pds3Label
 
 import host_cassini.oops.uvis as uvis
 from host_cassini.oops._cassini import _Cassini
@@ -449,5 +450,45 @@ def test_custom_frame(tmp_path: pathlib.Path, fake_spice: FakeSpice) -> None:
 def test_host_from_file_dispatches_to_uvis(tmp_path: pathlib.Path) -> None:
     obs = oops.Host.from_file(write_time_series(tmp_path))
     assert obs.instrument == 'UVIS'
+
+##########################################################################################
+# Index detection
+##########################################################################################
+
+_INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = INDEX_TABLE', 'END_OBJECT = INDEX_TABLE',
+                'END', '']
+
+
+@pytest.mark.parametrize(('relpath', 'expected'), [
+    ('COUVIS_0001/INDEX/INDEX.LBL', True),
+    ('COUVIS_0999_index.lbl', True),
+    ('couvis_0001/index/index.lbl', True),
+    ('INDEX/INDEX.LBL', None),
+], ids=['couvis-directory', 'couvis-file', 'lowercase', 'no-couvis'])
+def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
+                            expected: bool | None) -> None:
+    path = tmp_path / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('\r\n'.join(_INDEX_LABEL))
+    assert CassiniUVIS._detect_in_index(Pds3Label(path)) is expected
+
+
+def test_detection_in_index_without_a_path() -> None:
+    assert CassiniUVIS._detect_in_index(Pds3Label(_INDEX_LABEL[:-1])) is None
+
+
+@pytest.mark.parametrize(('data_set_id', 'expected'), [
+    ('CO-S-UVIS-2-CUBE-V1.2', True),
+    ('CO-J-UVIS-2-SSB-V1.2', True),
+    ('CO-X-UVIS-2-SPEC-V1.2', True),
+    ('CO-S-ISSNA/ISSWA-2-EDR-V1.0', False),
+    ('GO-J-SSI-2-REDR-V1.0', False),
+], ids=['saturn', 'jupiter', 'cruise', 'other-instrument', 'other-mission'])
+def test_detection_in_row(data_set_id: str, expected: bool) -> None:
+    assert CassiniUVIS._detect_in_row({'DATA_SET_ID': data_set_id}) is expected
+
+
+def test_detection_in_row_without_data_set_id() -> None:
+    assert CassiniUVIS._detect_in_row({}) is False
 
 ##########################################################################################

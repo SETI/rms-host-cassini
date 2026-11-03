@@ -21,6 +21,9 @@ _DEBUG = False      # True to assert that the data array must have null values o
                     # active windows
 _ARRAY_NULL = 65535  # Incorrectly -1 in many labels
 
+# DATA_SET_ID of a Cassini UVIS product: CO-<S, J or X>-UVIS-...
+_UVIS_DATA_SET_ID = re.compile(r'CO-[A-Z]-UVIS-')
+
 # TARGET_NAME in a UVIS label -> the target body; "NONE" if no body was targeted
 _TARGET_NAME_REPAIRS = {
     'AG'        : 'AEGAEON',
@@ -950,6 +953,39 @@ class CassiniUVIS(oops.Host):
 
         return (label.get('INSTRUMENT_HOST_NAME', '').startswith('CASSINI')
                 and label.get('INSTRUMENT_ID', '').startswith('UVIS'))
+
+    @staticmethod
+    def _detect_in_index(label):
+        """Whether the given index label describes Cassini UVIS data.
+
+        Parameters:
+            label (Pds3Label): The parsed PDS3 label of an index file.
+
+        Returns:
+            bool | None: True if the label was read from a file whose path contains
+            "COUVIS", in any case; otherwise None, meaning the host must be inferred from
+            the index rows.
+        """
+
+        # The label itself records nothing that identifies the instrument, but the PDS
+        # volume and RMS Node metadata names all start with COUVIS
+        if label.filepath is not None and 'COUVIS' in label.filepath.as_posix().upper():
+            return True
+        return None
+
+    @staticmethod
+    def _detect_in_row(row_dict):
+        """Whether the given row of an index file refers to Cassini UVIS data.
+
+        Parameters:
+            row_dict (dict): The content of one row of an index file.
+
+        Returns:
+            bool: True if the row's DATA_SET_ID names a Cassini UVIS data set, such as
+            "CO-S-UVIS-2-CUBE-V1.2"; False otherwise.
+        """
+
+        return bool(_UVIS_DATA_SET_ID.match(row_dict.get('DATA_SET_ID', '')))
 
     ######################################################################################
     # Initialization

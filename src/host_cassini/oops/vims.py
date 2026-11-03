@@ -1271,6 +1271,38 @@ class CassiniVIMS(oops.Host):
                 return True
         return False
 
+    @staticmethod
+    def _detect_in_index(label):
+        """Whether the given index label describes Cassini VIMS data.
+
+        Parameters:
+            label (Pds3Label): The parsed PDS3 label of an index file.
+
+        Returns:
+            bool | None: True if the label's INSTRUMENT_HOST_ID is "CO" and its
+            INSTRUMENT_ID is "VIMS"; otherwise None, meaning the host must be inferred
+            from the index rows.
+        """
+
+        if (label.get('INSTRUMENT_HOST_ID', '') == 'CO'
+                and label.get('INSTRUMENT_ID', '') == 'VIMS'):
+            return True
+        return None
+
+    @staticmethod
+    def _detect_in_row(row_dict):
+        """Whether the given row of an index file refers to Cassini VIMS data.
+
+        Parameters:
+            row_dict (dict): The content of one row of an index file.
+
+        Returns:
+            bool: True if the row's VOLUME_ID names a Cassini VIMS volume, such as
+            "COVIMS_0040"; False otherwise.
+        """
+
+        return row_dict.get('VOLUME_ID', '').startswith('COVIMS_')
+
     ######################################################################################
     # Initialization
     ######################################################################################

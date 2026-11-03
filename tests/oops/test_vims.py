@@ -584,6 +584,67 @@ def test_host_from_file_dispatches_to_vims(tmp_path: pathlib.Path) -> None:
     assert [obs.instrument for obs in pair] == ['VIMS', 'VIMS']
 
 ##########################################################################################
+# Index detection
+##########################################################################################
+
+_VIMS_INDEX_KEYWORDS = ['INSTRUMENT_HOST_ID = "CO"', 'INSTRUMENT_ID = "VIMS"']
+
+
+def write_index(directory: pathlib.Path, keywords: list[str], volume_id: str) -> pathlib.Path:
+    """Write a one-row, one-column index of VOLUME_ID; return its label's path."""
+
+    row = f'"{volume_id:<11}"\r\n'
+    (directory / 'index.tab').write_text(row, newline='')
+    label = (['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
+              f'RECORD_BYTES = {len(row)}', 'FILE_RECORDS = 1',
+              '^INDEX_TABLE = "index.tab"'] + keywords
+             + ['OBJECT = INDEX_TABLE', '  INTERCHANGE_FORMAT = ASCII',
+                f'  ROW_BYTES = {len(row)}', '  ROWS = 1', '  COLUMNS = 1',
+                '  OBJECT = COLUMN', '    NAME = VOLUME_ID', '    DATA_TYPE = CHARACTER',
+                '    START_BYTE = 2', '    BYTES = 11', '  END_OBJECT = COLUMN',
+                'END_OBJECT = INDEX_TABLE', 'END', ''])
+    path = directory / 'index.lbl'
+    path.write_text('\r\n'.join(label), newline='')
+    return path
+
+
+@pytest.mark.parametrize(('keywords', 'expected'), [
+    (_VIMS_INDEX_KEYWORDS, True),
+    (['INSTRUMENT_HOST_ID = "CO"', 'INSTRUMENT_ID = "ISS"'], None),
+    (['INSTRUMENT_HOST_ID = "GO"', 'INSTRUMENT_ID = "VIMS"'], None),
+    ([], None),
+], ids=['vims', 'other-instrument', 'other-host', 'unidentified'])
+def test_detection_in_index(keywords: list[str], expected: bool | None) -> None:
+    label = Pds3Label(['PDS_VERSION_ID = PDS3', *keywords, 'END'])
+    assert CassiniVIMS._detect_in_index(label) is expected
+
+
+@pytest.mark.parametrize(('row', 'expected'), [
+    ({'VOLUME_ID': 'COVIMS_0040'}, True),
+    ({'VOLUME_ID': 'COISS_2001'}, False),
+    ({}, False),
+], ids=['vims', 'other-volume', 'empty'])
+def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
+    assert CassiniVIMS._detect_in_row(row) is expected
+
+
+@pytest.mark.parametrize(('keywords', 'volume_id'), [
+    (_VIMS_INDEX_KEYWORDS, 'COVIMS_0040'),
+    ([], 'COVIMS_0040'),
+], ids=['from-label', 'from-row'])
+def test_read_index_rows_accepts_vims_index(tmp_path: pathlib.Path, keywords: list[str],
+                                            volume_id: str) -> None:
+    path = write_index(tmp_path, keywords, volume_id)
+    rows = CassiniVIMS._read_index_rows(path, supplement=None)
+    assert [row['VOLUME_ID'] for row in rows] == [volume_id]
+
+
+def test_read_index_rows_rejects_other_index(tmp_path: pathlib.Path) -> None:
+    path = write_index(tmp_path, [], 'COISS_2001')
+    with pytest.raises(WrongHostError, match='not a Cassini VIMS index'):
+        CassiniVIMS._read_index_rows(path, supplement=None)
+
+##########################################################################################
 # select
 ##########################################################################################
 
