@@ -17,12 +17,55 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
    cd rms-host-cassini
    ```
 
-3. Create the virtual environment and install the package with its dev and docs dependencies. The script is safe to re-run, and `scripts/run-all-checks.sh` expects the environment it creates:
+3. Create the virtual environment and install the package with its dev and docs dependencies. On macOS, Linux, or WSL, use the setup script, which is safe to re-run and builds the environment that `scripts/run-all-checks.sh` expects:
 
    ```bash
    ./scripts/setup-venv.sh
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   source venv/bin/activate
    ```
+
+   See [Windows](#windows) for native Windows.
+
+## Windows
+
+The scripts in `scripts/` are bash scripts that expect a macOS or Linux virtual environment, so they do not run in native Windows.
+
+To run the tests in native Windows, install the package the way the Windows CI job does, in PowerShell:
+
+```powershell
+py -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+python -m pip install --force-reinstall --no-deps "rms-oops @ git+https://github.com/SETI/rms-oops@mrs_260925_host_reorg"
+python -m pytest
+```
+
+The second install provides the unreleased `oops.Host` API that the hosts need.
+
+To run the full set of checks (`scripts/run-all-checks.sh`) or build the docs, use WSL (Windows Subsystem for Linux):
+
+1. Install WSL with Ubuntu, from PowerShell as administrator, then restart:
+
+   ```powershell
+   wsl --install -d Ubuntu
+   ```
+
+2. In the Ubuntu shell, install Python with venv support and git:
+
+   ```bash
+   sudo apt update
+   sudo apt install -y python3 python3-venv python3-pip git
+   ```
+
+3. Clone the repository inside the Linux file system, for example under `~`, rather than under `/mnt/c`, where file access is slow and line endings and permissions can differ:
+
+   ```bash
+   cd ~
+   git clone https://github.com/your-username/rms-host-cassini.git
+   cd rms-host-cassini
+   ```
+
+4. Follow the macOS and Linux steps from there: `./scripts/setup-venv.sh`, `source venv/bin/activate`, and `./scripts/run-all-checks.sh`.
 
 ## Development Workflow
 
@@ -34,7 +77,7 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 2. Make your changes, following our coding standards
 3. Write or update tests as necessary
-4. Run the tests, lint, and docs build to ensure they pass:
+4. Run the tests, lint, and docs build to ensure they pass (in native Windows, see [Windows](#windows)):
 
    ```bash
    ./scripts/run-all-checks.sh
