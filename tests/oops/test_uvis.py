@@ -257,6 +257,15 @@ def test_multi_line_qube_window(tmp_path: pathlib.Path) -> None:
     assert np.array_equal(obs.data, full[8:16, :, 2:6][:4, :, :2])
 
 
+def test_line_window_not_a_multiple_of_line_bin(tmp_path: pathlib.Path) -> None:
+    window = {'UL_CORNER_LINE': 8, 'LR_CORNER_LINE': 14, 'LINE_BIN': 2,
+              'UL_CORNER_BAND': 0, 'LR_CORNER_BAND': 7, 'BAND_BIN': 1}
+    path = write_qube(tmp_path, lines=64, window=window)
+    with pytest.raises(oops.host.HostFormatError,
+                       match='line window of 7 lines is not a multiple of LINE_BIN 2'):
+        CassiniUVIS.from_file(path)
+
+
 def test_multiple_windows(tmp_path: pathlib.Path) -> None:
     window = {'UL_CORNER_LINE': [0, 32], 'LR_CORNER_LINE': [15, 63],
               'LINE_BIN': [1, 1], 'UL_CORNER_BAND': [0, 4], 'LR_CORNER_BAND': [3, 7],

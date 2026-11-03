@@ -598,7 +598,9 @@ class CassiniUVIS(oops.Host):
 
         # Bin the lines
         if rebin and lines > 1 and line_bin > 1:
-            assert dline % line_bin == 0
+            if dline % line_bin != 0:
+                raise HostFormatError(f'line window of {dline} lines is not a multiple '
+                                      f'of LINE_BIN {line_bin} in {filepath}')
             fov = oops.fov.SubsampledFOV(fov, (1, line_bin))
             dline_binned = dline // line_bin
             shape = (dline_binned,) + shape[1:]
