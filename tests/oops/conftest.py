@@ -233,7 +233,8 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
     def spice_frame(spice_id: str, *, frame_id: str) -> oops.Frame:
         fake.spice_frames.append(spice_id)
-        return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id=frame_id)
+        return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
+                                  frame_id=frame_id)
 
     def furnsh(*args: Any, **kwargs: Any) -> None:
         raise AssertionError(f'a test tried to furnish a SPICE kernel: {args}')

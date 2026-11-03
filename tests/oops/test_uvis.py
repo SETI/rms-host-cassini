@@ -455,8 +455,8 @@ def test_host_from_file_dispatches_to_uvis(tmp_path: pathlib.Path) -> None:
 # Index detection
 ##########################################################################################
 
-_INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = INDEX_TABLE', 'END_OBJECT = INDEX_TABLE',
-                'END', '']
+_INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = INDEX_TABLE',
+                'END_OBJECT = INDEX_TABLE', 'END', '']
 
 
 @pytest.mark.parametrize(('relpath', 'expected'), [

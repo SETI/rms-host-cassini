@@ -58,9 +58,10 @@ def make_snapshot(dict_: dict[str, Any], *, data: Any = None,
                   **overrides: Any) -> oops.observation.Snapshot:
     """A Snapshot from `_make_snapshot`, with every override not given set to None."""
 
+    all_overrides = {name: overrides.get(name) for name in OVERRIDE_NAMES}
     obs: oops.observation.Snapshot = CassiniISS._make_snapshot(
         dict_, filepath=INDEX_PATH, data=data, fast_distortion=fast_distortion,
-        return_all_planets=False, overrides={name: overrides.get(name) for name in OVERRIDE_NAMES})
+        return_all_planets=False, overrides=all_overrides)
     return obs
 
 
@@ -334,7 +335,8 @@ def test_define_camera_frames_only_once(fake_spice: FakeSpice) -> None:
 
 
 def test_define_camera_frames_skips_existing_camera(fake_spice: FakeSpice) -> None:
-    oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id='CASSINI_ISS_NAC')
+    oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
+                       frame_id='CASSINI_ISS_NAC')
     CassiniISS._define_camera_frames()
     assert fake_spice.spice_frames == ['CASSINI_ISS_WAC']
 
@@ -511,7 +513,8 @@ def test_snapshot_cadence_override() -> None:
 
 @pytest.fixture
 def custom_frame(initialized_iss: FakeSpiceDB) -> oops.Frame:
-    return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000, frame_id='TEST_CMATRIX')
+    return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
+                              frame_id='TEST_CMATRIX')
 
 
 def test_custom_frame_is_used(custom_frame: oops.Frame) -> None:

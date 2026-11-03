@@ -134,10 +134,11 @@ def index_row(**changes: Any) -> dict[str, Any]:
 
     keywords = vims_keywords()
     row = {name: keywords[name]
-           for name in ('TARGET_NAME', 'OBSERVATION_ID', 'START_TIME', 'INSTRUMENT_MODE_ID',
-                        'SWATH_WIDTH', 'SWATH_LENGTH', 'OVERWRITTEN_CHANNEL_FLAG',
-                        'PACKING_FLAG', 'INTERFRAME_DELAY_DURATION',
-                        'INTERLINE_DELAY_DURATION', 'X_OFFSET', 'Z_OFFSET')}
+           for name in ('TARGET_NAME', 'OBSERVATION_ID', 'START_TIME',
+                        'INSTRUMENT_MODE_ID', 'SWATH_WIDTH', 'SWATH_LENGTH',
+                        'OVERWRITTEN_CHANNEL_FLAG', 'PACKING_FLAG',
+                        'INTERFRAME_DELAY_DURATION', 'INTERLINE_DELAY_DURATION',
+                        'X_OFFSET', 'Z_OFFSET')}
     (row['IR_POWER_STATE_FLAG'], row['VIS_POWER_STATE_FLAG']) = (
         keywords['POWER_STATE_FLAG'])
     (row['IR_EXPOSURE'], row['VIS_EXPOSURE']) = keywords['EXPOSURE_DURATION']
@@ -590,7 +591,8 @@ def test_host_from_file_dispatches_to_vims(tmp_path: pathlib.Path) -> None:
 _VIMS_INDEX_KEYWORDS = ['INSTRUMENT_HOST_ID = "CO"', 'INSTRUMENT_ID = "VIMS"']
 
 
-def write_index(directory: pathlib.Path, keywords: list[str], volume_id: str) -> pathlib.Path:
+def write_index(directory: pathlib.Path, keywords: list[str],
+                volume_id: str) -> pathlib.Path:
     """Write a one-row, one-column index of VOLUME_ID; return its label's path."""
 
     row = f'"{volume_id:<11}"\r\n'
