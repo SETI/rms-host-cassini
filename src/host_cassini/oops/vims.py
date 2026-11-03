@@ -847,17 +847,15 @@ class CassiniVIMS(oops.Host):
 
         # POINT/OCCULTATION case
         if swath_width == 1 and swath_length == 1:
-            if backplane_cadence is None:
+
+            # The IR raster's timing, which the VIS channel shares; not built when both
+            # channels are off, because the IR exposure can then be a placeholder
+            if backplane_cadence is None and not (ir_is_off and vis_is_off):
                 fast_stride = ir_texp   # + EXTRA_INTERSAMPLE_DELAY
                 fastcad = oops.cadence.Metronome(tstart, fast_stride, ir_texp, samples)
 
                 slow_stride = ir_texp * samples + interline_delay
                 slowcad = oops.cadence.Metronome(tstart, slow_stride, slow_stride, lines)
-                fullcad = oops.cadence.DualCadence(slowcad, fastcad)
-                ir_cadence = oops.cadence.ReshapedCadence(fullcad, (samples*lines,))
-
-            else:
-                ir_cadence = backplane_cadence
 
             # A cruise POINT cube usually keeps the VIS channel on: its pixels share the
             # IR raster's timing with the VIS exposure. A cube with embedded timing never
@@ -873,11 +871,18 @@ class CassiniVIMS(oops.Host):
                 vis_info = (oops.observation.Pixel, ('t','b'), vis_cadence, vis_fov,
                             _VIS_FRAME_NAME)
 
-            if ir_data is not None:
-                ir_data = ir_data.reshape((frames, 256))
+            if not ir_is_off:
+                if backplane_cadence is None:
+                    fullcad = oops.cadence.DualCadence(slowcad, fastcad)
+                    ir_cadence = oops.cadence.ReshapedCadence(fullcad, (samples*lines,))
+                else:
+                    ir_cadence = backplane_cadence
 
-            ir_info = (oops.observation.Pixel, ('t','b'), ir_cadence, ir_fov,
-                       ir_frame_name)
+                if ir_data is not None:
+                    ir_data = ir_data.reshape((frames, 256))
+
+                ir_info = (oops.observation.Pixel, ('t','b'), ir_cadence, ir_fov,
+                           ir_frame_name)
 
         # Single LINE case
         elif swath_length == 1:

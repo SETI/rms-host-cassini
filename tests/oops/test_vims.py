@@ -338,6 +338,15 @@ def test_point_with_vis_on(tmp_path: pathlib.Path) -> None:
     assert vis.cadence.texp == pytest.approx(1. * vims._TIME_FACTOR)
 
 
+def test_point_with_ir_off(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, samples=2, lines=1, SWATH_WIDTH=1, SWATH_LENGTH=1,
+                           POWER_STATE_FLAG=['OFF', 'ON'])
+    (vis, ir) = CassiniVIMS.from_file(path)
+    assert ir is None
+    assert type(vis) is oops.observation.Pixel
+    assert vis.data.shape == (2, 96)
+
+
 def test_vis_off_tolerates_placeholder_exposure(tmp_path: pathlib.Path) -> None:
     path = write_pds3_cube(tmp_path, POWER_STATE_FLAG=['ON', 'OFF'],
                            EXPOSURE_DURATION=[100., -999.])
@@ -468,6 +477,21 @@ def test_from_index_point_with_vis_on() -> None:
     assert type(vis) is oops.observation.Pixel
     assert vis.cadence.shape == (64,)
     assert vis.time[0] == pytest.approx(ir.time[0])
+
+
+def test_from_index_point_with_ir_off() -> None:
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    IR_POWER_STATE_FLAG='OFF')
+    [(vis, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert ir is None
+    assert type(vis) is oops.observation.Pixel
+
+
+def test_from_index_point_ignores_placeholder_exposure_of_off_channels() -> None:
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    IR_EXPOSURE=-999., VIS_POWER_STATE_FLAG='OFF')
+    [pair] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert pair == (None, None)
 
 
 def test_from_index_vis_off_tolerates_placeholder_exposure() -> None:
