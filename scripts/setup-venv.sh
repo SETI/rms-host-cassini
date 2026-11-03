@@ -108,6 +108,13 @@ fi
 # shellcheck source=/dev/null
 source "$VENV/bin/activate"
 
+# A virtualenv that was moved still activates the directory it was created in, so the
+# installs below would land outside $VENV.
+if [ "$(cd "${VIRTUAL_ENV:-/nonexistent}" 2>/dev/null && pwd -P)" != "$(cd "$VENV" && pwd -P)" ]; then
+    print_error "Activating $VENV set VIRTUAL_ENV to '${VIRTUAL_ENV:-}'; use --recreate"
+    exit 1
+fi
+
 print_info "Upgrading pip"
 python -m pip install --upgrade pip
 
