@@ -146,6 +146,8 @@ _TARGET_STARS = {'FOMALHAUT', 'SPICA'}
 class CassiniISS(oops.Host):
     """The Cassini ISS host: Snapshot constructors for NAC and WAC images."""
 
+    #: The name under which this host registers with :class:`~oops.host.host_.Host` and
+    #: that appears in its error messages.
     NAME = 'Cassini ISS'
 
     _INSTRUMENT_KERNEL = None

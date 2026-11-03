@@ -1,6 +1,14 @@
 ##########################################################################################
 # host_cassini/__init__.py
 ##########################################################################################
+"""The Cassini mission hosts for the OOPS observation geometry toolkit.
+
+The package exports :class:`~host_cassini.oops.iss.CassiniISS`,
+:class:`~host_cassini.oops.uvis.CassiniUVIS` and
+:class:`~host_cassini.oops.vims.CassiniVIMS`. Importing ``host_cassini`` does not import
+oops; the first access to one of these names imports :mod:`host_cassini.oops`, which
+registers all three hosts with :class:`~oops.host.host_.Host`.
+"""
 
 import importlib
 

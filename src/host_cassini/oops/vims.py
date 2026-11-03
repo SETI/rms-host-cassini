@@ -247,6 +247,8 @@ _SHRINKAGE = {
 class CassiniVIMS(oops.Host):
     """The Cassini VIMS host: Observation constructors for VIS and IR cubes."""
 
+    #: The name under which this host registers with :class:`~oops.host.host_.Host` and
+    #: that appears in its error messages.
     NAME = 'Cassini VIMS'
 
     _INSTRUMENT_KERNEL = None

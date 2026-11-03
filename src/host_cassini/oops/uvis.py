@@ -107,6 +107,8 @@ _INSTRUMENT_IDS = {
 class CassiniUVIS(oops.Host):
     """The Cassini UVIS host: Observation constructors for UVIS data products."""
 
+    #: The name under which this host registers with :class:`~oops.host.host_.Host` and
+    #: that appears in its error messages.
     NAME = 'Cassini UVIS'
 
     _INSTRUMENT_KERNEL = None
