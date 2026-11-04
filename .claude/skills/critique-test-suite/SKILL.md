@@ -250,7 +250,7 @@ Produce a single markdown report with the following structure. Do **not** edit a
 [Time, order, external deps, randomness.]
 
 ## 16. Regression and documentation
-[Bug references, spec alignment, deprecation warnings, filterwarnings config.]
+[Regression context, spec alignment, deprecation warnings, filterwarnings config.]
 
 ## 17. Other
 [Clarity, speed, assertion messages, AAA, logic in tests.]
