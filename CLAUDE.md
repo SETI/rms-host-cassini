@@ -13,25 +13,33 @@ Tooling and conventions follow **rms-polymath**. `.claude/rules/*.md`, which wer
 it, are the authoritative coding, testing, documentation, dependency and environment
 standards. The repo layout, CI and scripts come from `rms-devenv/repo_template`, adapted as
 rms-polymath adapted them. Model changes to packaging, CI or scripts on rms-polymath's
-`pyproject.toml`, `.flake8`, `.github/workflows/` and `scripts/`. Some details in the rules
-are polymath-specific, for example the two published `.pyi` stubs and `stubtest`. Ignore
-those until this repo has the equivalent.
+`pyproject.toml`, `.flake8`, `.github/workflows/` and `scripts/`. The rules' references to
+the two published `.pyi` stubs and `stubtest` apply here to the stubs described below.
 
 - Hand-aligned columns (assignments, dict colons, `from x     import`) are deliberate. Never
   run `ruff format` or any other auto-formatter.
 - Keep the file banners: a line of 90 `#` characters at the top and bottom of each module,
-  with a `# host_cassini/<file>.py` header.
+  with a `# host_cassini/<file>.py` header (`.pyi` for a stub).
 
 ## Current state
 
 - `scripts/run-all-checks.sh` is the single source of truth for the checks: ruff, flake8
-  `E12`/`E13`, mypy on `tests/`, pytest, pyroma, pip-audit, the Sphinx build (`-W -n`),
-  codespell and PyMarkdown. `ruff format` is disabled. `.github/workflows/run-tests.yml`
-  runs the same set. `scripts/setup-venv.sh` builds the `venv/` that the scripts expect;
-  set `VENV` to use another.
+  `E12`/`E13`, mypy on `tests/`, pytest, pyroma, stubtest, pip-audit, the Sphinx build
+  (`-W -n`), codespell and PyMarkdown. `ruff format` is disabled.
+  `.github/workflows/run-tests.yml` runs the same set. `scripts/setup-venv.sh` builds the
+  `venv/` that the scripts expect; set `VENV` to use another.
 - The `oops.Host` API first appears in rms-oops 0.4.0, the minimum version in
   `pyproject.toml`. The `ObsArray` entry in `nitpick_ignore_regex` in `docs/conf.py`
   stays: oops never documents that type alias.
+- The type information is published in two stubs: `host_cassini/__init__.pyi` declares
+  the three hosts in full, and `host_cassini/oops/__init__.pyi` re-exports them. `stubtest`
+  checks them against the runtime in the check script and in CI, so adding, renaming or
+  re-signing a public member means updating `host_cassini/__init__.pyi` in the same change.
+  The `[tool.mypy] exclude`, the override list in `pyproject.toml` and
+  `.stubtest-allowlist` keep it off the stub-less modules. Each `type: ignore[override]`
+  marks a real mismatch with `oops.Host`: every `from_file` names its first parameter
+  `fileinfo`, every `from_index` returns a list narrower than the base class's, and
+  CassiniUVIS's `select` accepts no channel name.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.

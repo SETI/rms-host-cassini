@@ -92,7 +92,9 @@ filterwarnings = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-host_cassini = ["py.typed"]
+# PEP 561 marker and type stubs must be shipped in the wheel, or downstream type
+# checkers ignore them.
+host_cassini = ["py.typed", "*.pyi", "oops/*.pyi"]
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
@@ -117,12 +119,22 @@ fail_under = 65
 
 [tool.mypy]
 strict = true
+# stubtest discovers every module under the package and would compare each unannotated
+# .py module against itself. Only the two __init__.pyi stubs carry type information, so
+# every other module is excluded from discovery; the override below keeps mypy from
+# following an import into one of them.
+exclude = [
+  'host_cassini/oops/(_cassini|iss|uvis|vims)\.py$',
+]
 
-# src is deliberately unannotated (see .claude/rules/python.md), so mypy checks only the
-# tests and treats everything imported from host_cassini as Any.
+# src is deliberately unannotated (see .claude/rules/python.md). The published type
+# information lives in the stubs of host_cassini and host_cassini.oops; every other module
+# has no stub, so mypy treats what the tests import from it as Any.
 [[tool.mypy.overrides]]
-module = ["host_cassini", "host_cassini.*"]
+module = ["host_cassini._version", "host_cassini.oops._cassini", "host_cassini.oops.iss",
+          "host_cassini.oops.uvis", "host_cassini.oops.vims"]
 follow_imports = "skip"
+ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = ["cspyce", "cspyce.*", "julian", "julian.*"]
@@ -131,8 +143,8 @@ ignore_missing_imports = true
 # attr-defined is off in the tests for two reasons that no change to the tests can fix:
 #   - Observation subfields such as detector and filter are attached at runtime by
 #     insert_subfield(), so no declaration of them can exist.
-#   - The oops and spicedb stubs do not yet declare oops.Host, oops.host or
-#     spicedb.KERNEL_TYPE_SORT_ORDER.
+#   - The oops and spicedb stubs do not declare oops.Host (the oops stub declares only
+#     oops.host.Host) or spicedb.KERNEL_TYPE_SORT_ORDER.
 [[tool.mypy.overrides]]
 module = ["conftest", "test_cassini", "test_iss", "test_uvis", "test_vims"]
 disable_error_code = ["attr-defined"]
