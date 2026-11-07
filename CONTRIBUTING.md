@@ -1,0 +1,183 @@
+# Contributing to rms-host-cassini
+
+Thank you for your interest in contributing to rms-host-cassini! This document provides guidelines and instructions for contributing to the project.
+
+## Code of Conduct
+
+We expect all contributors to follow our Code of Conduct, which ensures a welcoming and inclusive environment for everyone.
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+## Getting Started
+
+1. Fork the repository on GitHub
+2. Clone your fork locally:
+
+   ```bash
+   git clone https://github.com/your-username/rms-host-cassini.git
+   cd rms-host-cassini
+   ```
+
+3. Create the virtual environment and install the package with its dev and docs dependencies. On macOS, Linux, or WSL, use the setup script, which is safe to re-run and builds the environment that `scripts/run-all-checks.sh` expects:
+
+   ```bash
+   ./scripts/setup-venv.sh
+   source venv/bin/activate
+   ```
+
+   See [Windows](#windows) for native Windows.
+
+## Windows
+
+The scripts in `scripts/` are bash scripts that expect a macOS or Linux virtual environment, so they do not run in native Windows.
+
+To run the tests in native Windows, install the package the way the Windows CI job does, in PowerShell:
+
+```powershell
+py -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+python -m pytest
+```
+
+To run the full set of checks (`scripts/run-all-checks.sh`) or build the docs, use WSL (Windows Subsystem for Linux):
+
+1. Install WSL with Ubuntu, from PowerShell as administrator, then restart:
+
+   ```powershell
+   wsl --install -d Ubuntu
+   ```
+
+2. In the Ubuntu shell, install Python with venv support and git:
+
+   ```bash
+   sudo apt update
+   sudo apt install -y python3 python3-venv python3-pip git
+   ```
+
+3. Clone the repository inside the Linux file system, for example under `~`, rather than under `/mnt/c`, where file access is slow and line endings and permissions can differ:
+
+   ```bash
+   cd ~
+   git clone https://github.com/your-username/rms-host-cassini.git
+   cd rms-host-cassini
+   ```
+
+4. Follow the macOS and Linux steps from there: `./scripts/setup-venv.sh`, `source venv/bin/activate`, and `./scripts/run-all-checks.sh`.
+
+## Development Workflow
+
+1. Create a new branch from `main`, named `<initials>_<YYMMDD>_<topic>`:
+
+   ```bash
+   git checkout -b rf_251204_mixins
+   ```
+
+2. Make your changes, following our coding standards
+3. Write or update tests as necessary
+4. Run the tests, lint, and docs build to ensure they pass (in native Windows, see [Windows](#windows)):
+
+   ```bash
+   ./scripts/run-all-checks.sh
+   ```
+
+5. Commit your changes with a subject written as a plain imperative sentence, with no type prefix:
+
+   ```bash
+   git commit -m "Take star light sources from OBSERVATION_ID"
+   ```
+
+6. Push your branch to your fork:
+
+   ```bash
+   git push origin rf_251204_mixins
+   ```
+
+7. Open a Pull Request on GitHub
+
+## Coding Standards
+
+We follow these standards for all code contributions:
+
+* **Python Style**: Follow PEP 8, with a maximum line length of 90. `ruff check` is the linter of record; do not run `ruff format`, because it removes the column alignment the code uses deliberately
+* **Type Hints**: Do not annotate code under `src/`; give parameter and return types in the docstrings instead. Annotate every test function
+* **Docstrings**: Document all modules, classes, and methods with docstrings following the Google style, using `Parameters:` rather than `Args:`
+* **Testing**: Include unit tests for new functionality
+* **Compatibility**: Ensure compatibility with Python 3.11+
+
+Example of a well-formatted function:
+
+```python
+def _fix_cassini_ring_target(target, dict_, tstart):
+    """The target of a ring observation, or the given target otherwise.
+
+    Parameters:
+        target (str): The target name from the label, after repairs.
+        dict_ (dict): The label or index row, from which OBSERVATION_ID is read.
+        tstart (float): The observation start time in seconds TDB, which determines
+            whether a ring observation is of Jupiter's rings or Saturn's.
+
+    Returns:
+        str: "JUPITER_RING_PLANE" for a ring observation before the Saturn tour,
+        "SATURN_RING_PLANE" for one during it, and `target` for any other observation
+        or if OBSERVATION_ID is absent or not of the expected form.
+    """
+```
+
+## Pull Request Process
+
+1. Ensure all checks in `scripts/run-all-checks.sh` pass
+2. Update documentation if necessary
+3. Request a review from a maintainer
+4. Address any feedback from reviewers
+
+The maintainers will squash-merge your PR once it meets all requirements.
+
+## Testing
+
+We use pytest for testing. To run the tests:
+
+```bash
+pytest
+```
+
+For more verbose output:
+
+```bash
+pytest -v
+```
+
+To run a specific test file:
+
+```bash
+pytest tests/test_specific_file.py
+```
+
+## Documentation
+
+We use Sphinx for documentation. To build the docs and open them in a browser:
+
+```bash
+./scripts/read-docs.sh
+```
+
+The generated documentation will be in `docs/_build/html`.
+
+When adding new features, please update the relevant documentation:
+
+* Update docstrings for new functions and classes
+* Add examples if appropriate
+* Update the user guide or developer guide if necessary
+
+## Reporting Issues
+
+If you find a bug or have a suggestion for improvement:
+
+1. Check if the issue already exists in the GitHub issue tracker
+2. If not, create a new issue with:
+   * A clear, descriptive title
+   * A detailed description of the issue
+   * Steps to reproduce (for bugs)
+   * Your environment information (Python version, OS, etc.)
+   * Any relevant logs or screenshots
+
+Thank you for contributing to rms-host-cassini!
