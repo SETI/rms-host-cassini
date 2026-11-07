@@ -36,11 +36,8 @@ To run the tests in native Windows, install the package the way the Windows CI j
 py -m venv venv
 venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-python -m pip install --force-reinstall --no-deps "rms-oops @ git+https://github.com/SETI/rms-oops@mrs_260925_host_reorg"
 python -m pytest
 ```
-
-The second install provides the unreleased `oops.Host` API that the hosts need.
 
 To run the full set of checks (`scripts/run-all-checks.sh`) or build the docs, use WSL (Windows Subsystem for Linux):
 

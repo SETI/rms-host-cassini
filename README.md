@@ -44,13 +44,6 @@ be installed with:
 pip install rms-host-cassini
 ```
 
-The host needs the `oops.Host` interface, which is not yet in a released version of
-`rms-oops`. Until it is, install `rms-oops` from its development branch:
-
-```sh
-pip install "rms-oops @ git+https://github.com/SETI/rms-oops@mrs_260925_host_reorg"
-```
-
 Geometry calculations need a SPICE kernel database, located through `spicedb` by the
 `SPICE_PATH` environment variable (or `$OOPS_RESOURCES/SPICE`) and `SPICE_SQLITE_DB_NAME`.
 It must contain the kernel sets `CAS-SPK-*`, `CAS-CK-*`, and `CAS-CK-GAPFILL`.

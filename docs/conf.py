@@ -126,13 +126,6 @@ nitpick_ignore_regex = [
     # Napoleon splits a type such as "(bool, optional)" on the comma and looks up each
     # piece, so the trailing "optional" of every optional parameter arrives here.
     (r'py:class', r'optional'),
-    # oops.Host is not yet in a released oops, so the published oops inventory has no
-    # entry for it. Remove this entry once a release that has it is on ReadTheDocs.
-    (r'py:class', r'oops\.host\.host_\.Host'),
-    # The oops.host exceptions are not yet in a released oops either. Docstrings name them
-    # either in full or by the short names in _SHORT_NAMES; Sphinx matches this pattern
-    # against the name as written. Remove this entry with the one above.
-    (r'py:exc', r'(oops\.host\.)?\w*HostError|(oops\.host\.)?Host\w+Error'),
     # ObsArray is a type alias in oops.host.host_ for an object array of Observations.
     # oops does not document it, so no inventory has an entry to link to.
     (r'py:class', r'ObsArray'),
