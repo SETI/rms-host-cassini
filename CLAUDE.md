@@ -75,6 +75,15 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   `_INSTRUMENT_IDS` (instrument kernel) for the FOV lookup in `initialize()`.
 - TARGET_NAME repairs are per instrument: each module keeps its own
   `_TARGET_NAME_REPAIRS`. Don't merge them into `_cassini.py`.
+- `CassiniISS.from_file()` reads only the VICAR image file when given it, and the PDS3
+  label plus the whole image file when given the label (the label alone with
+  `astrometry`). `_merged_dict()` combines the two into `dict`: PDS3 null values count as
+  missing, a rounded number loses to the precise one, and otherwise `_RESOLUTION_RULES`
+  names the winner, the label by default. Each rule's comment gives the survey counts and
+  cites issue #10, which lists every item on which the two disagree; update both together.
+  The array always comes from the VICAR header's layout, never the label's `^IMAGE`
+  offset, which is wrong for calibrated files. Labels the fast parser rejects or misreads
+  go through `_parse_fileinfo()`'s fallbacks and in-memory repairs (#11).
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
   that importing `host_cassini` does not import oops. Keep any import of
   `host_cassini.oops` out of `host_cassini/__init__.py`.

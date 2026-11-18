@@ -76,8 +76,15 @@ The hosts are:
 
 - `CassiniISS`: The Imaging Science Subsystem narrow- and wide-angle cameras. A file
   becomes a `Snapshot`; an image index can also be read with `CassiniISS.from_index()`.
-  A raw or calibrated image can be given as its PDS3 label or as the VICAR image file,
-  and either one gives the same `Snapshot`.
+  A raw or calibrated image can be given as its PDS3 label or as the VICAR image file.
+  Given the image file, only that file is read. Given the label, the image file beside
+  it is read too, unless `astrometry=True`. The metadata comes from whichever of the
+  two were read, and where they disagree a rule for each item chooses one value. The
+  pixels, and every value the two agree on, are the same from either file. Metadata that
+  neither file gives, or gives only as `UNK` or `N/A`, is left out rather than set to
+  None. Both originals are kept, in the `label_dict` and `header_dict` subfields.
+  [Issue #10](https://github.com/SETI/rms-host-cassini/issues/10) lists where the two
+  files disagree and which value is used.
 - `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
   one for each window of a QUBE with several windows.
 - `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of

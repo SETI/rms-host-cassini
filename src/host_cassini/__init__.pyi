@@ -35,6 +35,9 @@ __all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
 class CassiniISS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
+    # Raises FileNotFoundError, oops.host.HostError (no C kernel pointing; the message
+    # ends with the SPICE error code), HostFormatError (a required item missing or
+    # invalid), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
