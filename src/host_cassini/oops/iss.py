@@ -389,9 +389,10 @@ class CassiniISS(oops.Host):
 
         Parameters:
             dict_ (dict[str, Any]): The PDS3 label, VICAR label or index row. It must
-                contain START_TIME, EXPOSURE_DURATION, INSTRUMENT_MODE_ID,
-                INSTRUMENT_NAME, TARGET_NAME, OBSERVATION_ID and GAIN_MODE_ID, and either
-                FILTER_NAME or both FILTER1_NAME and FILTER2_NAME.
+                contain SHUTTER_STATE_ID, IMAGE_TIME, START_TIME, EXPOSURE_DURATION,
+                INSTRUMENT_MODE_ID, INSTRUMENT_NAME, TARGET_NAME, OBSERVATION_ID and
+                GAIN_MODE_ID, and either FILTER_NAME or both FILTER1_NAME and
+                FILTER2_NAME.
             filepath (str | FCPath): The path to the image file; used for the `filepath`
                 and `basename` subfields.
             data (np.ndarray | None): The image array, inserted as the `data` subfield;
@@ -410,8 +411,17 @@ class CassiniISS(oops.Host):
         """
 
         # Note that VICAR and PDS3 dictionaries use the same names.
-        tstart = julian.tdb_from_iso(dict_['START_TIME'])
-        texp   = dict_['EXPOSURE_DURATION'] / 1000.
+        #
+        # IMAGE_TIME is the shutter-close time, and START_TIME should precede it by the
+        # exposure duration. On some labels from the 1999 cruise, however, START_TIME
+        # equals IMAGE_TIME, so the exposure is timed back from IMAGE_TIME instead. When
+        # the shutter was inhibited, the index labels define START_TIME, STOP_TIME and
+        # IMAGE_TIME as the start of the exposure window, so START_TIME is used.
+        texp = dict_['EXPOSURE_DURATION'] / 1000.
+        if dict_['SHUTTER_STATE_ID'] == 'DISABLED':
+            tstart = julian.tdb_from_iso(dict_['START_TIME'])
+        else:
+            tstart = julian.tdb_from_iso(dict_['IMAGE_TIME']) - texp
         mode   = dict_['INSTRUMENT_MODE_ID']        # "FULL", "SUM2", or "SUM4"
         camera = 'WAC' if 'WIDE' in dict_['INSTRUMENT_NAME'] else 'NAC'
 

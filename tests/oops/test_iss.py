@@ -25,6 +25,7 @@ from host_cassini.oops._cassini import _Cassini
 from host_cassini.oops.iss      import CassiniISS
 
 START_TIME = '2005-01-01T00:00:00.000'
+IMAGE_TIME = '2005-01-01T00:00:01.000'  # START_TIME plus the 1 s exposure
 NAC_NAME = 'IMAGING SCIENCE SUBSYSTEM NARROW ANGLE'
 WAC_NAME = 'IMAGING SCIENCE SUBSYSTEM WIDE ANGLE'
 INDEX_PATH = 'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'
@@ -38,6 +39,8 @@ def label_dict(**changes: Any) -> dict[str, Any]:
         'INSTRUMENT_ID'       : 'ISSNA',
         'INSTRUMENT_NAME'     : NAC_NAME,
         'START_TIME'          : START_TIME,
+        'IMAGE_TIME'          : IMAGE_TIME,
+        'SHUTTER_STATE_ID'    : 'ENABLED',
         'EXPOSURE_DURATION'   : 1000.0,
         'INSTRUMENT_MODE_ID'  : 'FULL',
         'FILTER_NAME'         : ['CL1', 'GRN'],
@@ -351,7 +354,24 @@ uses_iss = pytest.mark.usefixtures('initialized_iss')
 @uses_iss
 def test_snapshot_times() -> None:
     tstart = julian.tdb_from_iso(START_TIME)
-    assert snapshot().time == pytest.approx((tstart, tstart + 1.))
+    assert snapshot().time == pytest.approx((tstart, tstart + 1.), abs=1.e-6)
+
+
+@uses_iss
+def test_snapshot_ends_at_image_time_when_start_time_equals_it() -> None:
+    # Some labels from the 1999 cruise set START_TIME to IMAGE_TIME, the shutter-close
+    # time, although the shutter was enabled.
+    tstop = julian.tdb_from_iso(IMAGE_TIME)
+    obs = snapshot(START_TIME=IMAGE_TIME)
+    assert obs.time == pytest.approx((tstop - 1., tstop), abs=1.e-6)
+
+
+@uses_iss
+def test_snapshot_starts_at_start_time_when_shutter_disabled() -> None:
+    # With the shutter inhibited, START_TIME = IMAGE_TIME = the start of the exposure.
+    tstart = julian.tdb_from_iso(IMAGE_TIME)
+    obs = snapshot(SHUTTER_STATE_ID='DISABLED', START_TIME=IMAGE_TIME)
+    assert obs.time == pytest.approx((tstart, tstart + 1.), abs=1.e-6)
 
 
 @uses_iss
@@ -667,6 +687,8 @@ _INDEX_COLUMNS = [
     ('INSTRUMENT_HOST_NAME', 'CHARACTER', 15),
     ('INSTRUMENT_NAME', 'CHARACTER', 38),
     ('START_TIME', 'CHARACTER', 23),
+    ('IMAGE_TIME', 'CHARACTER', 23),
+    ('SHUTTER_STATE_ID', 'CHARACTER', 8),
     ('EXPOSURE_DURATION', 'ASCII_REAL', 10),
     ('INSTRUMENT_MODE_ID', 'CHARACTER', 4),
     ('FILTER1_NAME', 'CHARACTER', 3),
@@ -679,11 +701,13 @@ _INDEX_COLUMNS = [
 _INDEX_ROWS = [
     ('COISS_2009', 'data/1484506648_1484573295/N1484506648_1.IMG', 'CASSINI ORBITER',
      NAC_NAME,
-     '2005-01-15T18:30:00.000', 1000.0, 'FULL', 'CL1', 'GRN', '12 ELECTRONS PER DN',
+     '2005-01-15T18:30:00.000', '2005-01-15T18:30:00.000', 'DISABLED',
+     1000.0, 'FULL', 'CL1', 'GRN', '12 ELECTRONS PER DN',
      'SATURN', 'ISS_000SA_TEST001_PRIME'),
     ('COISS_2009', 'data/1484506648_1484573295/W1484506649_1.IMG', 'CASSINI ORBITER',
      WAC_NAME,
-     '2005-01-15T18:31:00.000', 500.0, 'SUM2', 'RED', 'CL2', '29 ELECTRONS PER DN',
+     '2005-01-15T18:31:00.000', '2005-01-15T18:31:00.000', 'ENABLED',
+     500.0, 'SUM2', 'RED', 'CL2', '29 ELECTRONS PER DN',
      'ERRIAPO', 'ISS_000SA_TEST002_PRIME'),
 ]
 
@@ -754,9 +778,18 @@ def test_from_index_rows(index_snapshots: list[oops.observation.Snapshot]) -> No
         'ISS_000SA_TEST001_PRIME', 'ISS_000SA_TEST002_PRIME']
 
 
-def test_from_index_times(index_snapshots: list[oops.observation.Snapshot]) -> None:
-    tstart = julian.tdb_from_iso('2005-01-15T18:31:00.000')
-    assert index_snapshots[1].time == pytest.approx((tstart, tstart + 0.5))
+def test_from_index_starts_at_start_time_when_shutter_disabled(
+        index_snapshots: list[oops.observation.Snapshot]) -> None:
+    # The first row's shutter is disabled, and its START_TIME equals its IMAGE_TIME.
+    tstart = julian.tdb_from_iso('2005-01-15T18:30:00.000')
+    assert index_snapshots[0].time == pytest.approx((tstart, tstart + 1.), abs=1.e-6)
+
+
+def test_from_index_ends_at_image_time_when_start_time_equals_it(
+        index_snapshots: list[oops.observation.Snapshot]) -> None:
+    # The second row's shutter is enabled, but its START_TIME equals its IMAGE_TIME.
+    tstop = julian.tdb_from_iso('2005-01-15T18:31:00.000')
+    assert index_snapshots[1].time == pytest.approx((tstop - 0.5, tstop), abs=1.e-6)
 
 
 def test_from_index_defines_camera_frames(
