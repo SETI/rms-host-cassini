@@ -624,6 +624,8 @@ def test_from_file_reads_the_array_the_vicar_header_places(tmp_path: pathlib.Pat
                                                            prefix_bytes: int,
                                                            binary_header: bool,
                                                            pointer_error: int) -> None:
+    """Either input gives the array that the VICAR header locates, not the label."""
+
     label_path = write_pds3_image(tmp_path, prefix_bytes=prefix_bytes,
                                   binary_header=binary_header,
                                   pointer_error=pointer_error)
@@ -682,6 +684,8 @@ def test_from_file_vicar_label_reads_data(tmp_path: pathlib.Path) -> None:
 @pytest.mark.parametrize('astrometry', [False, True])
 def test_from_file_label_names_the_image(tmp_path: pathlib.Path,
                                          astrometry: bool) -> None:
+    """Given a label, the four path subfields name the image file, not the label."""
+
     image_path = write_pds3_image(tmp_path).with_suffix('.IMG')
     obs = CassiniISS.from_file(tmp_path / 'N0000000001_1.LBL', astrometry=astrometry)
     assert obs.filepath == FCPath(image_path)
@@ -709,6 +713,8 @@ def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_rejects_label_naming_no_image_file(tmp_path: pathlib.Path) -> None:
+    """A label whose ^IMAGE pointer names no file raises PdsHostError."""
+
     path = write_pds3_image(tmp_path)
     lines = ['^IMAGE = 2' if line.startswith('^IMAGE') else line
              for line in path.read_text().splitlines()]
@@ -774,22 +780,30 @@ _EARLY_PDS3 = {
     ({'MISSION_NAME': 'GALILEO', 'INSTRUMENT_ID': 'ISSNA'}, False),
 ], ids=['nac', 'other-instrument', 'other-mission'])
 def test_detection_in_early_vicar_header(label: dict[str, str], expected: bool) -> None:
+    """An early header is detected by its MISSION_NAME and INSTRUMENT_ID."""
+
     assert CassiniISS._detect_in_vicar(label) is expected
 
 
 def test_early_vicar_header_takes_pds3_names() -> None:
+    """An early header's keywords are given the names and spellings of its label."""
+
     assert CassiniISS._pds3_dict_from_vicar(dict(_EARLY_VICAR)) == _EARLY_PDS3
 
 
 def test_current_vicar_header_is_unchanged() -> None:
+    """A header that already uses the PDS3 keywords is returned unchanged."""
+
     assert CassiniISS._pds3_dict_from_vicar(label_dict()) == label_dict()
 
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_early_vicar_header(tmp_path: pathlib.Path) -> None:
+    """An early VICAR file loads, with the times and subfields its label would give."""
+
     obs = CassiniISS.from_file(write_vicar_image(tmp_path, keywords=_EARLY_VICAR))
     tstart = julian.tdb_from_iso(_EARLY_TIME)
-    assert obs.time == pytest.approx((tstart, tstart + 0.5))
+    assert obs.time == pytest.approx((tstart, tstart + 0.5), abs=1.e-6)
     assert obs.detector == 'WAC'
     assert obs.filter == 'GRN'
     assert obs.gain_mode == 3
