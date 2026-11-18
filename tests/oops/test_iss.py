@@ -730,6 +730,7 @@ def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
     with pytest.raises(oops.host.WrongHostError, match='not a Cassini ISS PDS3 label'):
         CassiniISS.from_file(path, astrometry=True)
 
+
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_rejects_label_naming_no_image_file(tmp_path: pathlib.Path) -> None:
     """A label whose ^IMAGE pointer names no file raises PdsHostError."""
