@@ -76,6 +76,8 @@ The hosts are:
 
 - `CassiniISS`: The Imaging Science Subsystem narrow- and wide-angle cameras. A file
   becomes a `Snapshot`; an image index can also be read with `CassiniISS.from_index()`.
+  A raw or calibrated image can be given as its PDS3 label or as the VICAR image file,
+  and either one gives the same `Snapshot`.
 - `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
   one for each window of a QUBE with several windows.
 - `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of

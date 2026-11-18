@@ -142,6 +142,27 @@ _TARGET_NAME_REPAIRS = {
 # These are star targets and need to be defined as LightSources
 _TARGET_STARS = {'FOMALHAUT', 'SPICA'}
 
+# The VICAR headers of the early cruise images, from 1999 to July 2000 (the first 1250
+# images of volume COISS_1001), predate the PDS3 keywords. Their keywords are renamed to
+# the PDS3 keywords that the archive's labels give the same values: VICAR name -> PDS3
+# name.
+_EARLY_VICAR_RENAMES = {
+    'BIAS'                 : 'BIAS_STRIP_MEAN',
+    'CALIB_LAMP_STATE_FLAG': 'CALIBRATION_LAMP_STATE_FLAG',
+    'CONVERSION_TYPE'      : 'DATA_CONVERSION_TYPE',
+    'ENCODING_TYPE'        : 'INST_CMPRS_TYPE',
+    'EXTENDED_PIXEL_VALUE' : 'DARK_STRIP_MEAN',
+    'SENSOR_HEAD_ELEC_TEMP': 'SENSOR_HEAD_ELEC_TEMPERATURE',
+    'SHUTTER_MODE_ID'      : 'SHUTTER_STATE_ID',  # "ENABLED" or "DISABLED"
+    'SHUTTER_EVENT_TYPE'   : 'SHUTTER_MODE_ID',   # "NACONLY", "WACONLY" or "BOTSIM"
+}
+
+# INSTRUMENT_ID -> INSTRUMENT_NAME, as the labels of the early cruise images spell it
+_EARLY_VICAR_INSTRUMENT_NAMES = {
+    'ISSNA': 'IMAGING SCIENCE SUBSYSTEM NARROW ANGLE',
+    'ISSWA': 'IMAGING SCIENCE SUBSYSTEM WIDE ANGLE',
+}
+
 
 class CassiniISS(oops.Host):
     """The Cassini ISS host: Snapshot constructors for NAC and WAC images."""
@@ -163,8 +184,9 @@ class CassiniISS(oops.Host):
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
-                The file path or its parsed content as a Pds3Label, VicarLabel, or
-                VicarImage.
+                The path to the VICAR image file or to its detached PDS3 label, or the
+                parsed content of either as a Pds3Label, VicarLabel, or VicarImage. Either
+                file gives the same observation.
             fast_distortion (bool | None, optional): True to use a pre-inverted
                 polynomial; False to use a dynamically solved polynomial; None to use a
                 :class:`~oops.fov.FlatFOV`.
@@ -217,7 +239,12 @@ class CassiniISS(oops.Host):
             `detector`, `sampling`, `filter`, `filter1`, `filter2`, `gain_mode`, `texp`,
             `label_target`, `observation_id`, `spice_kernels`, `filepath`, `basename`,
             `spice_to_frame`, `spice_frame_name`, `spice_frame_id`, `abspath` and
-            `image_url` inserted, and `data` unless `astrometry` is True.
+            `image_url` inserted, and `data` unless `astrometry` is True. `filepath`,
+            `basename`, `abspath` and `image_url` name the image file, also when
+            `fileinfo` is its PDS3 label. `data` is the array that the image file's VICAR
+            header locates. `dict` holds the keywords of the PDS3 label or of the VICAR
+            header under their PDS3 names; the VICAR headers of the early cruise images,
+            which use older names, are given the names and spellings of their labels.
 
         Raises:
             PdsHostError: If the PDS3 label cannot be parsed.
@@ -238,8 +265,14 @@ class CassiniISS(oops.Host):
 
         data = None
         if isinstance(fileinfo, Pds3Label):
+            filepath = CassiniISS._image_path(fileinfo)
             if not astrometry:
-                data = oops.host.read_pds3_image_array(fileinfo)
+                # The image file is a VICAR file, and its own header, not the label's
+                # ^IMAGE pointer, locates the array. The pointer is one record off in
+                # every calibrated file, where it leaves out the binary header record,
+                # and in the raw files of COISS_1006 whose VICAR label fills one record,
+                # where it points one record past the first line (#6).
+                data = VicarImage(filepath, strict=False).data_2d
             dict_ = fileinfo.as_dict()
         else:
             if not astrometry:
@@ -247,9 +280,8 @@ class CassiniISS(oops.Host):
                     # A VicarImage built from a VicarLabel has no array; re-read the file
                     fileinfo = VicarImage(fileinfo.filepath, strict=False)
                 data = fileinfo.data_2d
-            dict_ = fileinfo.as_dict(unique=False)
-
-        filepath = FCPath(fileinfo.filepath)
+            dict_ = CassiniISS._pds3_dict_from_vicar(fileinfo.as_dict(unique=False))
+            filepath = FCPath(fileinfo.filepath)
 
         overrides = {
             'target'      : target,
@@ -525,6 +557,72 @@ class CassiniISS(oops.Host):
 
         return params
 
+    @staticmethod
+    def _image_path(label):
+        """The path to the image file that a detached PDS3 label describes.
+
+        Parameters:
+            label (Pds3Label): The parsed PDS3 label of an ISS image.
+
+        Returns:
+            FCPath: The file named by the label's ^IMAGE pointer, in the label's
+            directory.
+
+        Raises:
+            PdsHostError: If the label's ^IMAGE pointer names no file.
+        """
+
+        pointer = label.get('^IMAGE', None)
+        if not isinstance(pointer, str):
+            raise oops.host.PdsHostError('^IMAGE names no image file in '
+                                         f'{label.filepath}')
+        return FCPath(label.filepath).parent / pointer
+
+    @staticmethod
+    def _pds3_dict_from_vicar(dict_):
+        """The keywords of an ISS VICAR header under their PDS3 label names and meanings.
+
+        Most VICAR headers already use the keywords of the PDS3 label. Those of the early
+        cruise images, which carry no INSTRUMENT_HOST_NAME, use older names. For these,
+        each keyword is given the name and spelling that the image's PDS3 label gives the
+        same value:
+
+        * INSTRUMENT_HOST_NAME is "CASSINI ORBITER", and INSTRUMENT_NAME is the name of
+          the camera that INSTRUMENT_ID identifies.
+        * FILTER_NAME is the list of FILTER1_NAME and FILTER2_NAME.
+        * GAIN_MODE_ID is spelled in full, e.g. "12 ELECTRONS PER DN" for "12 e/DN".
+        * START_TIME and STOP_TIME are IMAGE_TIME.
+        * The VICAR SHUTTER_MODE_ID is SHUTTER_STATE_ID, and SHUTTER_EVENT_TYPE is
+          SHUTTER_MODE_ID.
+        * BIAS is BIAS_STRIP_MEAN, CALIB_LAMP_STATE_FLAG is CALIBRATION_LAMP_STATE_FLAG,
+          CONVERSION_TYPE is DATA_CONVERSION_TYPE, ENCODING_TYPE is INST_CMPRS_TYPE,
+          EXTENDED_PIXEL_VALUE is DARK_STRIP_MEAN, and SENSOR_HEAD_ELEC_TEMP is
+          SENSOR_HEAD_ELEC_TEMPERATURE.
+
+        Every other keyword keeps its VICAR name and value.
+
+        Parameters:
+            dict_ (dict[str, Any]): The keywords of the VICAR header.
+
+        Returns:
+            dict[str, Any]: `dict_` itself if it already holds INSTRUMENT_HOST_NAME;
+            otherwise a new dictionary of its keywords under their PDS3 names.
+        """
+
+        if 'INSTRUMENT_HOST_NAME' in dict_:
+            return dict_
+
+        pds3 = {_EARLY_VICAR_RENAMES.get(key, key): value
+                for (key, value) in dict_.items()}
+        pds3['INSTRUMENT_HOST_NAME'] = 'CASSINI ORBITER'
+        pds3['INSTRUMENT_NAME'] = _EARLY_VICAR_INSTRUMENT_NAMES[dict_['INSTRUMENT_ID']]
+        pds3['FILTER_NAME'] = [dict_['FILTER1_NAME'], dict_['FILTER2_NAME']]
+        pds3['GAIN_MODE_ID'] = dict_['GAIN_MODE_ID'].replace(' e/DN',
+                                                             ' ELECTRONS PER DN')
+        pds3['START_TIME'] = dict_['IMAGE_TIME']
+        pds3['STOP_TIME'] = dict_['IMAGE_TIME']
+        return pds3
+
     ######################################################################################
     # Detectors
     ######################################################################################
@@ -541,8 +639,11 @@ class CassiniISS(oops.Host):
     def _detect_in_vicar(label):
         """True if the given VicarLabel describes data from this host/instrument."""
 
-        # PDS3 and VICAR use the same names
-        return CassiniISS._detect_in_pds3(label)
+        # Most VICAR headers use the PDS3 names; the early cruise headers have no
+        # INSTRUMENT_HOST_NAME but give MISSION_NAME = "CASSINI"
+        return (CassiniISS._detect_in_pds3(label)
+                or (label.get('MISSION_NAME', '').startswith('CASSINI')
+                    and label.get('INSTRUMENT_ID', '').startswith('ISS')))
 
     @staticmethod
     def _detect_in_index(label):

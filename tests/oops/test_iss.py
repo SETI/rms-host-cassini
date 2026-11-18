@@ -9,6 +9,7 @@ import subprocess
 import sys
 from typing import Any, cast
 
+from filecache import FCPath
 import julian
 import numpy as np
 import oops
@@ -543,36 +544,59 @@ def test_custom_frame_reports_no_cks(custom_frame: oops.Frame,
 ##########################################################################################
 
 
-def write_pds3_image(directory: pathlib.Path, *, lines: int = 256,
-                     **changes: Any) -> pathlib.Path:
-    """Write a detached PDS3 label and its 8-bit image; return the label's path."""
-
-    image = np.arange(lines * lines, dtype='uint32').reshape(lines, lines) % 256
-    (directory / 'N0000000001_1.IMG').write_bytes(image.astype('uint8').tobytes())
-
-    keywords = label_dict(INSTRUMENT_MODE_ID='SUM4', **changes)
-    text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
-            f'RECORD_BYTES = {lines}', f'FILE_RECORDS = {lines}',
-            '^IMAGE = "N0000000001_1.IMG"']
-    text += pds3_lines(keywords)
-    text += ['OBJECT = IMAGE', f'  LINES = {lines}', f'  LINE_SAMPLES = {lines}',
-             '  SAMPLE_BITS = 8', '  SAMPLE_TYPE = MSB_UNSIGNED_INTEGER',
-             'END_OBJECT = IMAGE', 'END', '']
-    path = directory / 'N0000000001_1.LBL'
-    path.write_text('\r\n'.join(text))
-    return path
-
-
-def write_vicar_image(directory: pathlib.Path, *, lines: int = 256,
+def write_vicar_image(directory: pathlib.Path, *, lines: int = 256, prefix_bytes: int = 0,
+                      binary_header: bool = False, keywords: dict[str, Any] | None = None,
                       **changes: Any) -> pathlib.Path:
-    """Write a VICAR image with an ISS label; return its path."""
+    """Write a VICAR image with an ISS label; return its path.
+
+    The image is an 8-bit ramp. `prefix_bytes` gives each line a binary prefix holding its
+    line number, and `binary_header` adds a one-record binary header after the label, as
+    the archive's raw and calibrated files have. The label holds `keywords`, or by default
+    `label_dict(INSTRUMENT_MODE_ID='SUM4', **changes)`.
+    """
 
     image = np.arange(lines * lines, dtype='uint32').reshape(lines, lines) % 256
-    vic = vicar.VicarImage.from_array(image.astype('uint8'))
-    for (key, value) in label_dict(INSTRUMENT_MODE_ID='SUM4', **changes).items():
+    prefix = None
+    if prefix_bytes:
+        prefix = np.zeros((1, lines, prefix_bytes), dtype='uint8')
+        prefix[0, :, 1] = np.arange(1, lines + 1) % 256
+    header = bytes(lines + prefix_bytes) if binary_header else None
+    vic = vicar.VicarImage(array=image.astype('uint8'), prefix=prefix, binheader=header)
+    if keywords is None:
+        keywords = label_dict(INSTRUMENT_MODE_ID='SUM4', **changes)
+    for (key, value) in keywords.items():
         vic[key] = value
     path = directory / 'N0000000001_1.IMG'
     vic.write_file(path)
+    return path
+
+
+def write_pds3_image(directory: pathlib.Path, *, lines: int = 256, prefix_bytes: int = 0,
+                     binary_header: bool = False, pointer_error: int = 0,
+                     **changes: Any) -> pathlib.Path:
+    """Write a VICAR image and a detached PDS3 label for it; return the label's path.
+
+    The label's ^IMAGE pointer is `pointer_error` records away from the array, which the
+    archive's labels give as -1 for a calibrated file and +1 for some raw files.
+    """
+
+    image_path = write_vicar_image(directory, lines=lines, prefix_bytes=prefix_bytes,
+                                   binary_header=binary_header, **changes)
+    vic = vicar.VicarLabel(image_path)
+    recsize = cast(int, vic['RECSIZE'])
+    record = (cast(int, vic['LBLSIZE']) // recsize + cast(int, vic['NLB']) + 1
+              + pointer_error)
+
+    keywords = label_dict(INSTRUMENT_MODE_ID='SUM4', **changes)
+    text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
+            f'RECORD_BYTES = {recsize}', f'FILE_RECORDS = {lines + record}',
+            f'^IMAGE = ("{image_path.name}", {record})']
+    text += pds3_lines(keywords)
+    text += ['OBJECT = IMAGE', f'  LINES = {lines}', f'  LINE_SAMPLES = {lines}',
+             '  SAMPLE_BITS = 8', '  SAMPLE_TYPE = MSB_UNSIGNED_INTEGER',
+             f'  LINE_PREFIX_BYTES = {prefix_bytes}', 'END_OBJECT = IMAGE', 'END', '']
+    path = directory / 'N0000000001_1.LBL'
+    path.write_text('\r\n'.join(text))
     return path
 
 
@@ -581,8 +605,30 @@ def test_from_file_pds3(tmp_path: pathlib.Path) -> None:
     obs = CassiniISS.from_file(write_pds3_image(tmp_path))
     assert obs.data.shape == (256, 256)
     assert obs.data[1, 2] == 258 % 256
-    assert obs.basename == 'N0000000001_1.LBL'
+    assert obs.basename == 'N0000000001_1.IMG'
     assert obs.fov is CassiniISS._FOVS['NAC', 'SUM4', True]
+
+
+_RAMP = np.arange(256 * 256).reshape(256, 256) % 256
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize(('prefix_bytes', 'binary_header', 'pointer_error'), [
+    (0, False, 0),
+    (0, True, -1),
+    (24, True, 1),
+], ids=['plain', 'calibrated', 'raw-coiss-1006'])
+@pytest.mark.parametrize('source', ['label', 'image'])
+def test_from_file_reads_the_array_the_vicar_header_places(tmp_path: pathlib.Path,
+                                                           source: str,
+                                                           prefix_bytes: int,
+                                                           binary_header: bool,
+                                                           pointer_error: int) -> None:
+    label_path = write_pds3_image(tmp_path, prefix_bytes=prefix_bytes,
+                                  binary_header=binary_header,
+                                  pointer_error=pointer_error)
+    path = label_path if source == 'label' else label_path.with_suffix('.IMG')
+    assert np.array_equal(CassiniISS.from_file(path).data, _RAMP)
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -633,10 +679,15 @@ def test_from_file_vicar_label_reads_data(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.usefixtures('initialized_iss')
-def test_from_file_sets_local_paths(tmp_path: pathlib.Path) -> None:
-    path = write_pds3_image(tmp_path)
-    obs = CassiniISS.from_file(path, astrometry=True)
-    assert obs.abspath == path.resolve()
+@pytest.mark.parametrize('astrometry', [False, True])
+def test_from_file_label_names_the_image(tmp_path: pathlib.Path,
+                                         astrometry: bool) -> None:
+    image_path = write_pds3_image(tmp_path).with_suffix('.IMG')
+    obs = CassiniISS.from_file(tmp_path / 'N0000000001_1.LBL', astrometry=astrometry)
+    assert obs.filepath == FCPath(image_path)
+    assert obs.basename == 'N0000000001_1.IMG'
+    assert obs.abspath == image_path.resolve()
+    assert obs.image_url == image_path.as_posix()
 
 
 def test_from_file_initializes_iss(tmp_path: pathlib.Path) -> None:
@@ -655,6 +706,94 @@ def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, INSTRUMENT_HOST_NAME='GALILEO ORBITER')
     with pytest.raises(oops.host.WrongHostError, match='not a Cassini ISS PDS3 label'):
         CassiniISS.from_file(path, astrometry=True)
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_rejects_label_naming_no_image_file(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_image(tmp_path)
+    lines = ['^IMAGE = 2' if line.startswith('^IMAGE') else line
+             for line in path.read_text().splitlines()]
+    path.write_text('\r\n'.join(lines))
+    with pytest.raises(oops.host.PdsHostError, match=r'\^IMAGE names no image file in '):
+        CassiniISS.from_file(path, astrometry=True)
+
+
+# An early cruise VICAR header, as in COISS_1001/data/1338756756_1338935702/W1338928383_1.
+# The keywords whose names or values differ from the PDS3 label's are listed with what the
+# label says.
+_EARLY_TIME = '2000-157T20:23:28.509'
+_EARLY_VICAR = {
+    'MISSION_NAME'         : 'CASSINI',
+    'INSTRUMENT_ID'        : 'ISSWA',      # INSTRUMENT_NAME = WAC_NAME
+    'IMAGE_TIME'           : _EARLY_TIME,  # START_TIME = STOP_TIME = IMAGE_TIME
+    'INSTRUMENT_MODE_ID'   : 'SUM4',
+    'FILTER1_NAME'         : 'CL1',        # FILTER_NAME = ("CL1", "GRN")
+    'FILTER2_NAME'         : 'GRN',
+    'EXPOSURE_DURATION'    : 500.0,
+    'GAIN_MODE_ID'         : '12 e/DN',    # "12 ELECTRONS PER DN"
+    'TARGET_NAME'          : 'SATURN',
+    'OBSERVATION_ID'       : 'ICO2_DARK_CURRENT_2',
+    'SHUTTER_MODE_ID'      : 'DISABLED',   # SHUTTER_STATE_ID
+    'SHUTTER_EVENT_TYPE'   : 'BOTSIM',     # SHUTTER_MODE_ID
+    'BIAS'                 : 55.08,        # BIAS_STRIP_MEAN
+    'CALIB_LAMP_STATE_FLAG': 'OFF',        # CALIBRATION_LAMP_STATE_FLAG
+    'CONVERSION_TYPE'      : '8LSB',       # DATA_CONVERSION_TYPE
+    'ENCODING_TYPE'        : 'LOSSLESS',   # INST_CMPRS_TYPE
+    'EXTENDED_PIXEL_VALUE' : 55.09,        # DARK_STRIP_MEAN
+    'SENSOR_HEAD_ELEC_TEMP': 5.27707,      # SENSOR_HEAD_ELEC_TEMPERATURE
+}
+_EARLY_PDS3 = {
+    'MISSION_NAME'                : 'CASSINI',
+    'INSTRUMENT_ID'               : 'ISSWA',
+    'IMAGE_TIME'                  : _EARLY_TIME,
+    'INSTRUMENT_MODE_ID'          : 'SUM4',
+    'FILTER1_NAME'                : 'CL1',
+    'FILTER2_NAME'                : 'GRN',
+    'EXPOSURE_DURATION'           : 500.0,
+    'GAIN_MODE_ID'                : '12 ELECTRONS PER DN',
+    'TARGET_NAME'                 : 'SATURN',
+    'OBSERVATION_ID'              : 'ICO2_DARK_CURRENT_2',
+    'SHUTTER_STATE_ID'            : 'DISABLED',
+    'SHUTTER_MODE_ID'             : 'BOTSIM',
+    'INSTRUMENT_HOST_NAME'        : 'CASSINI ORBITER',
+    'INSTRUMENT_NAME'             : WAC_NAME,
+    'FILTER_NAME'                 : ['CL1', 'GRN'],
+    'START_TIME'                  : _EARLY_TIME,
+    'STOP_TIME'                   : _EARLY_TIME,
+    'BIAS_STRIP_MEAN'             : 55.08,
+    'CALIBRATION_LAMP_STATE_FLAG' : 'OFF',
+    'DATA_CONVERSION_TYPE'        : '8LSB',
+    'INST_CMPRS_TYPE'             : 'LOSSLESS',
+    'DARK_STRIP_MEAN'             : 55.09,
+    'SENSOR_HEAD_ELEC_TEMPERATURE': 5.27707,
+}
+
+
+@pytest.mark.parametrize(('label', 'expected'), [
+    ({'MISSION_NAME': 'CASSINI', 'INSTRUMENT_ID': 'ISSNA'}, True),
+    ({'MISSION_NAME': 'CASSINI', 'INSTRUMENT_ID': 'VIMS'}, False),
+    ({'MISSION_NAME': 'GALILEO', 'INSTRUMENT_ID': 'ISSNA'}, False),
+], ids=['nac', 'other-instrument', 'other-mission'])
+def test_detection_in_early_vicar_header(label: dict[str, str], expected: bool) -> None:
+    assert CassiniISS._detect_in_vicar(label) is expected
+
+
+def test_early_vicar_header_takes_pds3_names() -> None:
+    assert CassiniISS._pds3_dict_from_vicar(dict(_EARLY_VICAR)) == _EARLY_PDS3
+
+
+def test_current_vicar_header_is_unchanged() -> None:
+    assert CassiniISS._pds3_dict_from_vicar(label_dict()) == label_dict()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_early_vicar_header(tmp_path: pathlib.Path) -> None:
+    obs = CassiniISS.from_file(write_vicar_image(tmp_path, keywords=_EARLY_VICAR))
+    tstart = julian.tdb_from_iso(_EARLY_TIME)
+    assert obs.time == pytest.approx((tstart, tstart + 0.5))
+    assert obs.detector == 'WAC'
+    assert obs.filter == 'GRN'
+    assert obs.gain_mode == 3
+    assert obs.dict['SHUTTER_MODE_ID'] == 'BOTSIM'
 
 ##########################################################################################
 # from_index()
