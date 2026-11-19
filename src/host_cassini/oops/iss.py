@@ -2,7 +2,7 @@
 # host_cassini/oops/iss.py
 ##########################################################################################
 
-import math
+import datetime
 import re
 
 import numpy as np
@@ -10,7 +10,7 @@ import julian
 
 from filecache import FCPath
 from pdsparser import Pds3Label
-from vicar     import VicarError, VicarImage
+from vicar     import VicarError, VicarImage, VicarLabel
 
 import oops
 from ._cassini import (_Cassini, _CMATRIX_ROTATION, _fix_cassini_ring_target,
@@ -166,9 +166,18 @@ _EARLY_VICAR_INSTRUMENT_NAMES = {
     'ISSWA': 'IMAGING SCIENCE SUBSYSTEM WIDE ANGLE',
 }
 
-# The PDS3 null constants. A value that is one of these, or a list or set of nothing but
-# these, states nothing: the item is missing from that source.
+# The PDS3 null constants, compared without regard to case or surrounding blanks. A value
+# that is one of these states nothing: the item is missing from that source.
 _PDS3_NULLS = {'UNK', 'N/A', 'NULL'}
+
+# The number that both sources write for a reading that was not made, which counts as
+# missing like a null constant: the back optics temperature of a camera with no back
+# sensor, the COMPRESSION_RATIO of the early cruise headers, and the temperatures of
+# products whose headers were filled with predictions, such as the DETECTOR_TEMPERATURE
+# of -999 degrees C, below absolute zero, in N1640662528_3_CALIB.LBL of
+# calibrated/COISS_2059, whose DESCRIPTION says "Predicted values used to populate
+# header" (#10).
+_FILL_VALUE = -999.
 
 # Items without which no Snapshot can be built.
 _REQUIRED_ITEMS = ('START_TIME', 'EXPOSURE_DURATION', 'INSTRUMENT_MODE_ID',
@@ -186,44 +195,73 @@ _OPTIONAL_SUBFIELDS = (
 )
 
 # The two sources of an image's metadata, the detached PDS3 label and the VICAR header of
-# the image file, as the winner of an item they disagree on.
+# the image file, as the source of an item where they disagree.
 _LABEL = 'label'
 _HEADER = 'header'
 
-# The items on which the label and the header disagree in the archive, and which source
-# wins each, from a comparison of 2,493 raw and calibrated products (#10). The label, the
-# archive's curated description of the product, wins any item not listed, and is listed
-# where it wins for a reason of its own. Before this table applies, a PDS3 null value
-# loses to a value, and a number rounded to fewer digits loses to the precise one; that
-# settles BIAS_STRIP_MEAN, DARK_STRIP_MEAN, DETECTOR_TEMPERATURE, FILTER_TEMPERATURE,
-# INSTRUMENT_DATA_RATE, INST_CMPRS_RATIO and SENSOR_HEAD_ELEC_TEMPERATURE, which the
-# header writes to 6 significant digits (524 to 1,869 products each), and
-# EXPECTED_MAXIMUM and INST_CMPRS_RATE, where the label is the rounded one in 21
-# products.
+# The source of each item on which the label and the header disagree in the archive. The
+# source is fixed for the item, the same for every image, and chosen for being right
+# where the two differ; the issue of label differences, #10, gives the counts and the
+# images on which the chosen source is wrong. An item not listed takes the label, the
+# archive's curated description of the product. A value that is missing from the chosen
+# source, as a null constant or the fill value, is taken from the other.
 _RESOLUTION_RULES = {
-    # 301 of 1,880: the cruise headers carry an older data set name
-    'DATA_SET_ID'              : _LABEL,
-    # 906 of 1,605, all calibrated: the header keeps the raw image's description, the
-    # label describes the calibration; the raw one stays in header_dict
-    'DESCRIPTION'              : _LABEL,
-    # 34 and 44 of 1,880: the two differ by 1 or 2 milliseconds
-    'EARTH_RECEIVED_START_TIME': _LABEL,
-    'EARTH_RECEIVED_STOP_TIME' : _LABEL,
-    # 887 of 1,880: later labels write " - " in the name; either spelling gives the camera
-    'INSTRUMENT_NAME'          : _LABEL,
-    # 34 of 1,605: the labels replace ";" and "," with spaces and "@" with a line break
-    'METHOD_DESC'              : _HEADER,
-    # 888 of 2,493: the cruise headers say "CASSINI"
-    'MISSION_NAME'             : _LABEL,
-    # 694 of 2,493: the headers write underscores; the early cruise headers name a finer
-    # phase than the labels' "SCIENCE CRUISE"
-    'MISSION_PHASE_NAME'       : _LABEL,
-    # 888 of 2,493: the cruise headers give the front temperature alone, which the labels
-    # give rounded to 5 digits beside an unknown back temperature
-    'OPTICS_TEMPERATURE'       : _LABEL,
-    # 1,133 of 1,880, all calibrated: the header keeps the raw product's creation time
-    'PRODUCT_CREATION_TIME'    : _LABEL,
+    # Label: every differing label value is a float32 printed to 6 decimal places, and the
+    # header's is that float32 rounded to 6 significant digits (#10)
+    'BIAS_STRIP_MEAN'             : _LABEL,
+    'DARK_STRIP_MEAN'             : _LABEL,
+    'DETECTOR_TEMPERATURE'        : _LABEL,
+    'FILTER_TEMPERATURE'          : _LABEL,
+    'INST_CMPRS_RATIO'            : _LABEL,
+    'SENSOR_HEAD_ELEC_TEMPERATURE': _LABEL,
+    # Label: the label is the float32 of the header's value, 182.783997 for 182.784 (#10)
+    'INSTRUMENT_DATA_RATE'        : _LABEL,
+    # Label: float32 values printed to 6 decimal places; the header's 6 significant digits
+    # are better only for values below 0.1, in a handful of products, by at most 5e-7
+    # (#10)
+    'EXPECTED_MAXIMUM'            : _LABEL,
+    'INST_CMPRS_RATE'             : _LABEL,
+    # Label: the front and back temperatures as PDS3 defines the item. The cruise headers
+    # give the front temperature alone, which their labels round to 5 digits (#10)
+    'OPTICS_TEMPERATURE'          : _LABEL,
+    # Label: the cruise headers carry an older data set name; the COISS_1001 catalog and
+    # volume description give the label's (#10)
+    'DATA_SET_ID'                 : _LABEL,
+    # Label: the cruise headers say "CASSINI"; the catalog says "CASSINI-HUYGENS" (#10)
+    'MISSION_NAME'                : _LABEL,
+    # Label: the instrument catalog's spelling of the camera's name; either spelling gives
+    # the camera (#10)
+    'INSTRUMENT_NAME'             : _LABEL,
+    # Label: a calibrated header keeps the raw product's creation time, while the label
+    # gives the calibrated file's own (#10)
+    'PRODUCT_CREATION_TIME'       : _LABEL,
+    # Label: a calibrated header keeps the raw product's description, while the label
+    # describes the calibrated product; the raw one stays in header_dict (#10)
+    'DESCRIPTION'                 : _LABEL,
+    # Label: the two differ by a millisecond, and nothing shows which is right (#10)
+    'EARTH_RECEIVED_START_TIME'   : _LABEL,
+    'EARTH_RECEIVED_STOP_TIME'    : _LABEL,
+    # Header: every early cruise label says "SCIENCE CRUISE", which the mission catalog
+    # dates 2002 to 2004, while each header names the phase of its 1999-2000 date in that
+    # catalog; elsewhere the two differ only in the underscores the headers write (#10)
+    'MISSION_PHASE_NAME'          : _HEADER,
+    # Header: the labels replace ";" and "," with spaces and "@" with a line break (#10)
+    'METHOD_DESC'                 : _HEADER,
 }
+
+# A time as the VICAR headers write it, ending in a "Z" that the PDS3 labels leave out
+_HEADER_TIME = re.compile(r'\d{4}-(?:\d{3}|\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d*)?Z')
+
+# The keys that the PDS3 label parser derives from a keyword, named by the keyword plus
+# one of these suffixes, such as "START_TIME_fmt", and the lists of OBJECT and GROUP names
+# that it adds. They state nothing of their own, and the VICAR header has none, so the
+# merged metadata leaves them out; label_dict keeps them.
+_DERIVED_SUFFIXES = ('_day', '_detail', '_digits', '_fmt', '_list', '_offset', '_radix',
+                     '_sec', '_source', '_type', '_unit', '_unwrap')
+_DERIVED_KEYS = ('groups', 'objects')
+
+# The order in which the PDS3 label parsers are tried, from the one requested onward
+_PARSER_METHODS = ('fast', 'strict', 'loose')
 
 # Repairs to the text of a PDS3 label, as (pattern, replacement):
 #
@@ -237,18 +275,17 @@ _NEXT_LINE_VALUE = (r'(?m)^([A-Z][A-Z0-9_]* =)[ \t]*\r?\n[ \t]+"', r'\1 "')
 _UNTERMINATED_DESCRIPTION = (r'(?m)^(DESCRIPTION = "[^"]*?)(\r?\n)(?=[A-Z][A-Z0-9_]* = )',
                              r'\1"\2')
 
-_LABEL_REPAIRS = (_NEXT_LINE_VALUE, _UNTERMINATED_DESCRIPTION)
+# The calibrated DESCRIPTION of some calibrated labels, as in N1640662528_3_CALIB.LBL of
+# calibrated/COISS_2059, ends with a quote on a line of its own, and the raw label's
+# description follows as a second quoted string on the next line, so no parser accepts
+# them. The two strings are joined into one (#11).
+_SPLIT_DESCRIPTION = (r'\r?\n"(\r?\n[ \t]+)"', r'\1')
+
+_LABEL_REPAIRS = (_NEXT_LINE_VALUE, _UNTERMINATED_DESCRIPTION, _SPLIT_DESCRIPTION)
 
 # A keyword name that a parsed PDS3 label can hold, including the suffixed keys that the
 # parser adds, such as "START_TIME_fmt", and its "objects" list
 _PDS3_NAME = re.compile(r'\^?[A-Za-z][A-Za-z0-9_:]*')
-
-# The short code at the start of a SPICE error message, such as "SPICE(CKINSUFFDATA)"
-_SPICE_ERROR_CODE = re.compile(r'SPICE\([A-Z0-9_]+\)')
-
-
-class _NoPointingError(oops.host.HostError):
-    """The C kernels hold no pointing for the camera at the time of an image."""
 
 
 class CassiniISS(oops.Host):
@@ -277,14 +314,23 @@ class CassiniISS(oops.Host):
         locates.
 
         The metadata comes from whichever of the label and the header were read. An item
-        that a source gives as a PDS3 null value ("UNK", "N/A" or "NULL") counts as
-        missing from it, and an item missing from every source read is left out: its
-        subfield is absent, never None. Where the label and the header give different
-        values for an item, a rule for that item chooses one. A value that is the other
-        rounded to fewer digits loses to it. Otherwise the label wins, except for
-        METHOD_DESC, where the header's value keeps the semicolons, commas and "@" that
-        the labels replace. Times, field of view, pointing, target and light source are
-        computed from the merged metadata.
+        that a source gives as a PDS3 null value ("UNK", "N/A" or "NULL", in any case) or
+        as the fill value -999 counts as missing from it, and an item missing from every
+        source read is left out: its subfield is absent, never None. Where the label and
+        the header give different values for an item, the item's fixed source supplies
+        it, the same source for every image: the header for MISSION_PHASE_NAME, which
+        the early cruise labels give as "SCIENCE CRUISE" while each header names the
+        phase of the image's date, and for METHOD_DESC, whose semicolons, commas and "@"
+        the labels replace; the label for every other item. A value missing from the
+        fixed source is taken from the other. The header's values are first written in
+        the label's forms: a time without its final "Z", IMAGE_NUMBER as text,
+        IMAGE_OBSERVATION_TYPE as a list, a single OPTICS_TEMPERATURE as the pair of it
+        and None, and MISSION_PHASE_NAME with spaces for underscores. Times, field of
+        view, pointing, target and light source are computed from the merged metadata.
+
+        If the observation's frame comes from SPICE, the C kernels must give the camera's
+        pointing at its midtime, after any cadence override. Nothing is checked when a
+        `frame` override is given.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
@@ -297,10 +343,11 @@ class CassiniISS(oops.Host):
             return_all_planets (bool, optional): Include kernels for all planets, not just
                 Jupiter or Saturn.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser. With the
-                default method, "fast", a label that the fast parser rejects or misreads
-                is parsed again by the "strict" and then the "loose" parser, and a label
-                with a known archive defect is repaired in memory first.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. A label
+                that the requested parser, by default "fast", rejects, cannot convert, or
+                misreads is parsed again by each later one of "fast", "strict" and
+                "loose", and a label with a known archive defect is repaired in memory.
+                `repairs` may be a list of (pattern, replacement) pairs or a single pair.
             astrometry (bool, optional):
                 True to specify that the returned Observations will only be used for
                 timing and astrometry. In this case, no data arrays are read and returned
@@ -312,7 +359,8 @@ class CassiniISS(oops.Host):
                 of the observation.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of the observing
-                instrument.
+                instrument, such as a :class:`~oops.frame.Cmatrix`. With it, the C
+                kernels are neither loaded nor checked.
             cadence (oops.Cadence, optional): Override for the Cadence of the observation.
             fov (oops.FOV, optional): Override for the default FOV of the observing
                 instrument.
@@ -356,32 +404,46 @@ class CassiniISS(oops.Host):
               The clock counts are text, as the label spells them, such as
               "1459509269.122".
             * `dict`: the merged metadata, keyed by the PDS3 names. It holds every item
-              of each source read, under its own name, except those whose value is a
-              PDS3 null value. The VICAR headers of the early cruise images, which use
-              older names, are given the names and spellings of their labels.
-            * `label_dict`: the PDS3 label as its parser gives it, when the label was
-              read.
-            * `header_dict`: the VICAR header as ``VicarLabel.as_dict(unique=False)``
-              gives it, when the header was read.
+              of each source read, except those whose value is missing, and in a list a
+              missing element is None. The VICAR headers of the early cruise images,
+              which use older names, are given the names and spellings of their labels,
+              and their FILTER1_NAME and FILTER2_NAME appear only within FILTER_NAME.
+              Every other keyword keeps its own name. The keys that the label parser
+              derives from a keyword, such as "START_TIME_fmt", and its END are left
+              out. An item has the same value and type from either input wherever the
+              two sources agree: times are text, as the label writes them, and sets are
+              lists.
+            * `label_dict`: the PDS3 label as its parser gives it, every key included,
+              except that times are the label's text and sets are lists; when the label
+              was read.
+            * `header_dict`: every parameter of the VICAR header, keyed by its name, or,
+              for one that occurs more than once, by its name and occurrence counted
+              from zero, such as "TASK[1]"; when the header was read.
 
-            `filepath`, `basename`, `abspath` and `image_url` name the image file, also
-            when `fileinfo` is its PDS3 label.
+            `dict`, `label_dict` and `header_dict` can be written as JSON. `filepath`,
+            `basename`, `abspath` and `image_url` name the image file, also when
+            `fileinfo` is its PDS3 label.
 
         Raises:
             FileNotFoundError: If the file, or the image file of a PDS3 label read without
                 `astrometry`, does not exist in the case spelled or in upper or lower
                 case.
-            HostError: If no frame override is given and the C kernels hold no pointing
-                for the camera at the midtime of the exposure. The message ends with the
-                SPICE error code, such as "SPICE(CKINSUFFDATA)", when SPICE gives one.
             HostFormatError: If START_TIME, EXPOSURE_DURATION, INSTRUMENT_MODE_ID or
                 INSTRUMENT_NAME is missing from every source read, or START_TIME or
-                INSTRUMENT_MODE_ID is invalid; the message names the item and the file.
+                INSTRUMENT_MODE_ID is invalid; the message names the item and the image
+                file.
+            OopsSpiceError: If no frame override is given and the C kernels hold no
+                pointing for the camera at the midtime of the observation. The message
+                reads "no Cassini ISS NAC pointing at <time> for <image file>: <code>",
+                ending with the SPICE error code, such as "SPICE(CKINSUFFDATA)"; the
+                `spice_code` and `filepath` attributes hold the code and the image file.
             OSError: If the file cannot be read.
             PdsHostError: If the PDS3 label cannot be parsed, or its ^IMAGE pointer names
-                no file.
-            VicarHostError: If the VICAR header cannot be parsed.
-            WrongHostError: If the file is not a Cassini ISS file.
+                no file; the message names the label.
+            VicarHostError: If the VICAR header cannot be parsed, or the image file ends
+                before its array; the message names the image file.
+            WrongHostError: If the file, or the parsed content given, is not of a Cassini
+                ISS image.
         """
 
         CassiniISS.initialize()  # define everything the first time through; use defaults
@@ -420,8 +482,8 @@ class CassiniISS(oops.Host):
                 data = header.data_2d
             filepath = FCPath(fileinfo.filepath)
 
-        label_dict = None if label is None else label.as_dict()
-        header_dict = None if header is None else header.as_dict(unique=False)
+        label_dict = None if label is None else CassiniISS._label_dict(label)
+        header_dict = None if header is None else CassiniISS._header_dict(header)
         dict_ = CassiniISS._merged_dict(label_dict, header_dict)
 
         overrides = {
@@ -438,12 +500,10 @@ class CassiniISS(oops.Host):
             'parallel'    : parallel,
         }
 
-        source = filepath if label is None else FCPath(label.filepath)
         snapshot = CassiniISS._make_snapshot(dict_, filepath=filepath, data=data,
                                              fast_distortion=fast_distortion,
                                              return_all_planets=return_all_planets,
-                                             overrides=overrides, source=source,
-                                             check_pointing=True)
+                                             overrides=overrides, check_pointing=True)
         if label_dict is not None:
             snapshot.insert_subfield('label_dict', label_dict)
         if header_dict is not None:
@@ -455,18 +515,23 @@ class CassiniISS(oops.Host):
         return snapshot
 
     @staticmethod
-    def from_index(filepath, *, row_dicts=None, pds3_options=None, filter=None,
-                   fast_distortion=True, return_all_planets=False, target=None,
-                   lightsource=None, path=None, frame=None, cadence=None, fov=None,
-                   calibrations=None, timeshift=None, navigation=None, tracker=None,
-                   parallel=None, **kwargs):
+    def from_index(filepath, *, supplement=None, row_dicts=None, pds3_options=None,
+                   filter=None, fast_distortion=True, return_all_planets=False,
+                   select=None, target=None, lightsource=None, path=None, frame=None,
+                   cadence=None, fov=None, calibrations=None, timeshift=None,
+                   navigation=None, tracker=None, parallel=None, **kwargs):
         """A list of Snapshot objects, one for each row of a Cassini ISS index file.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
+            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
+                of a supplemental index file, whose columns are merged into each row. Its
+                rows must name the same files in the same order as the index. If not
+                specified, no supplement is read; the archive has none for ISS.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
-                row of the index. Include if `filepath` has already been read.
+                row of the index. Include if `filepath` has already been read. If
+                provided, `supplement` is ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -479,6 +544,9 @@ class CassiniISS(oops.Host):
                 :class:`~oops.fov.FlatFOV`.
             return_all_planets (bool, optional): Include kernels for all planets, not just
                 Jupiter or Saturn.
+            select (int | slice | str | tuple[int | slice | str, ...], optional):
+                Accepted for compatibility with :meth:`oops.host.Host.from_index` and
+                ignored, because each row describes a single observation.
             target (str | oops.Body, optional): Override for the default target Body of
                 every observation. Use "NONE" for inertial pointing, indicating that no
                 Solar System body was tracked.
@@ -513,8 +581,7 @@ class CassiniISS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments; they are accepted and ignored. This
-                includes `select` and `supplement`.
+            **kwargs: Additional keyword arguments; they are accepted and ignored.
 
         Returns:
             list[Snapshot]: One observation per filtered row of the index, each with
@@ -523,13 +590,18 @@ class CassiniISS(oops.Host):
             and `spice_frame_id` inserted, and `filter`, `filter1`, `filter2`,
             `gain_mode`, `label_target`, `observation_id`,
             `spacecraft_clock_start_count` and `spacecraft_clock_stop_count` where the
-            row gives their columns. `dict` is the row without its PDS3 null values;
-            a column that holds one is treated as missing.
+            row gives their columns. `dict` is the row in Python types (a list for an
+            array column), without the table's "_mask" entries, and without each value
+            that is masked, a PDS3 null constant, or the fill value -999, any of which is
+            treated as missing; a missing element of an array column is None. The
+            pointing is not checked, and every filtered row gives an observation.
 
         Raises:
+            FileNotFoundError: If `supplement` is given and does not exist.
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID.
+            HostIndexError: If `supplement` does not have the same rows as the index.
             PdsHostError: If the PDS3 label cannot be parsed.
             OSError: If `filepath` cannot be read.
             WrongHostError: If `filepath` is not a Cassini ISS index file.
@@ -539,7 +611,8 @@ class CassiniISS(oops.Host):
 
         # Read and filter the index table
         if row_dicts is None:
-            row_dicts = CassiniISS._read_index_rows(filepath, pds3_options=pds3_options)
+            row_dicts = CassiniISS._read_index_rows(filepath, supplement=supplement,
+                                                    pds3_options=pds3_options)
         row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
 
         overrides = {
@@ -560,31 +633,30 @@ class CassiniISS(oops.Host):
         snapshots = []
         for row_dict in row_dicts:
             fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
-            obs = CassiniISS._make_snapshot(CassiniISS._without_nulls(row_dict),
+            obs = CassiniISS._make_snapshot(CassiniISS._row_items(row_dict),
                                             filepath=fpath, data=None,
                                             fast_distortion=fast_distortion,
                                             return_all_planets=return_all_planets,
-                                            overrides=overrides, source=fpath,
-                                            check_pointing=False)
+                                            overrides=overrides, check_pointing=False)
             snapshots.append(obs)
 
         return snapshots
 
     @staticmethod
     def _make_snapshot(dict_, filepath, data, *, fast_distortion, return_all_planets,
-                       overrides, source, check_pointing):
+                       overrides, check_pointing):
         """A Snapshot built from the metadata of an ISS image or one row of an ISS index.
 
         Loads the SPK kernels covering the exposure. Unless `overrides` supplies a frame,
         it also loads the CK kernels and registers the camera frames.
 
         Parameters:
-            dict_ (dict[str, Any]): The metadata, from which PDS3 null values have been
+            dict_ (dict[str, Any]): The metadata, from which missing values have been
                 removed. It must contain START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID and INSTRUMENT_NAME; each other item that it lacks
                 leaves out the subfields that would be taken from it.
             filepath (str | FCPath): The path to the image file; used for the `filepath`
-                and `basename` subfields.
+                and `basename` subfields, and named in errors.
             data (np.ndarray | None): The image array, inserted as the `data` subfield;
                 None to insert no `data`.
             fast_distortion (bool | None): True to use a pre-inverted polynomial; False to
@@ -595,33 +667,33 @@ class CassiniISS(oops.Host):
                 `lightsource`, `path`, `frame`, `cadence`, `fov`, `calibrations`,
                 `timeshift`, `navigation`, `tracker` and `parallel`, keyed by name, each
                 None to keep the default.
-            source (str | FCPath): The file the metadata came from, named in errors.
             check_pointing (bool): True to require that the C kernels give the camera's
-                pointing at the midtime of the exposure, when no frame override is given.
+                pointing at the midtime of the observation, when no frame override is
+                given.
 
         Returns:
             Snapshot: The observation, with the subfields listed in :meth:`from_file`.
 
         Raises:
             HostFormatError: If a required item is missing or invalid.
-            HostError: If `check_pointing` is True and the C kernels hold no pointing for
-                the camera at the midtime of the exposure. The message ends with the
-                SPICE error code, such as "SPICE(CKINSUFFDATA)", when SPICE gives one.
+            OopsSpiceError: If `check_pointing` is True, no frame override is given, and
+                the C kernels hold no pointing for the camera at the midtime of the
+                observation.
         """
 
-        CassiniISS._require_items(dict_, source)
+        CassiniISS._require_items(dict_, filepath)
         try:
             tstart = julian.tdb_from_iso(dict_['START_TIME'])
         except (TypeError, ValueError) as err:
             raise oops.host.HostFormatError(f'invalid START_TIME '
-                                            f'{dict_["START_TIME"]!r} in {source}'
+                                            f'{dict_["START_TIME"]!r} in {filepath}'
                                             ) from err
         texp   = dict_['EXPOSURE_DURATION'] / 1000.
         mode   = dict_['INSTRUMENT_MODE_ID']        # "FULL", "SUM2", or "SUM4"
         camera = 'WAC' if 'WIDE' in dict_['INSTRUMENT_NAME'] else 'NAC'
         if (camera, mode, fast_distortion) not in CassiniISS._FOVS:
             raise oops.host.HostFormatError(f'invalid INSTRUMENT_MODE_ID {mode!r} in '
-                                            f'{source}')
+                                            f'{filepath}')
 
         # Determine target and light source; with no target named, nothing is tracked
         label_target = dict_.get('TARGET_NAME', 'NONE')
@@ -639,10 +711,6 @@ class CassiniISS(oops.Host):
         if using_cks:
             _Cassini.load_cks(tstart, tstart + texp)
             CassiniISS._define_camera_frames()
-            if check_pointing:
-                # Report missing pointing now, with its SPICE code, not when the frame
-                # is first used (#15)
-                CassiniISS._check_pointing(camera, tstart + texp/2., source)
 
         # Define the Snapshot parameters
         params = {
@@ -659,6 +727,11 @@ class CassiniISS(oops.Host):
         oops.Host._apply_overrides(params, filepath, **overrides)
 
         obs = oops.observation.Snapshot(('v','u'), **params)
+        if using_cks and check_pointing:
+            # Report missing pointing now, with its SPICE code, not when the frame is
+            # first used; at the midtime of the observation, after any cadence override
+            # (#15)
+            CassiniISS._check_pointing(camera, obs.midtime, filepath)
         if data is not None:
             obs.insert_subfield('data', data)
 
@@ -679,35 +752,38 @@ class CassiniISS(oops.Host):
         return obs
 
     @staticmethod
-    def _require_items(dict_, source):
+    def _require_items(dict_, filepath):
         """Raise HostFormatError unless the metadata gives every required item.
 
         Parameters:
-            dict_ (dict[str, Any]): The metadata, without PDS3 null values.
-            source (str | FCPath): The file the metadata came from, named in the error.
+            dict_ (dict[str, Any]): The metadata, without missing values.
+            filepath (str | FCPath): The image file, named in the error.
 
         Raises:
             HostFormatError: If START_TIME, EXPOSURE_DURATION, INSTRUMENT_MODE_ID or
-                INSTRUMENT_NAME is missing; the message names the item and `source`.
+                INSTRUMENT_NAME is missing; the message names the item and `filepath`.
         """
 
         for item in _REQUIRED_ITEMS:
             if item not in dict_:
-                raise oops.host.HostFormatError(f'{item} is missing from {source}')
+                raise oops.host.HostFormatError(f'{item} is missing from {filepath}')
 
     @staticmethod
-    def _check_pointing(camera, time, source):
-        """Raise HostError unless the C kernels give the camera's pointing at a time.
+    def _check_pointing(camera, time, filepath):
+        """Raise OopsSpiceError unless the C kernels give the camera's pointing at a time.
 
         Parameters:
             camera (str): "NAC" or "WAC".
             time (float): The time in seconds TDB.
-            source (str | FCPath): The file of the image, named in the error.
+            filepath (str | FCPath): The image file, named in the error.
 
         Raises:
-            HostError: If the camera frame cannot be evaluated at `time`. Its cause is the
-                exception that SPICE raised, and its message ends with the SPICE error
-                code, such as "SPICE(CKINSUFFDATA)", when that exception gives one.
+            OopsSpiceError: If SPICE cannot evaluate the camera frame at `time`. It is
+                built by ``OopsSpiceError.from_spice_error``, so its message
+                reads "no Cassini ISS NAC pointing at <time> for <filepath>: <code>",
+                with the SPICE error code, such as "SPICE(CKINSUFFDATA)", when SPICE gives
+                one, and its cause is the exception that SPICE raised. An exception of
+                any class other than those that cspyce raises propagates unchanged.
         """
 
         # The SPICE frame, which the C kernels define; the camera frame is fixed to it
@@ -715,39 +791,38 @@ class CassiniISS(oops.Host):
         try:
             frame.transform_at_time(time)
         except (LookupError, OSError, RuntimeError, ValueError) as err:
-            code = _SPICE_ERROR_CODE.search(str(err))
-            suffix = f': {code[0]}' if code else ''
-            iso = julian.iso_from_tai(julian.tai_from_tdb(time), digits=3)
-            raise _NoPointingError(f'no Cassini ISS {camera} pointing at {iso} for '
-                                   f'{source}{suffix}') from err
+            raise oops.OopsSpiceError.from_spice_error(
+                err, description=f'no Cassini ISS {camera} pointing', time=time,
+                filepath=filepath) from err
 
     @staticmethod
     def _get_subfields(dict_):
         """The subfields taken from the metadata of an image.
 
         Parameters:
-            dict_ (dict[str, Any]): The metadata, without PDS3 null values.
+            dict_ (dict[str, Any]): The metadata, without missing values.
 
         Returns:
             dict[str, Any]: The subfields `dict`, `host`, `instrument`, `detector`,
             `texp` and `sampling`, and each of `filter`, `filter1`, `filter2`,
             `gain_mode`, `label_target`, `observation_id`,
             `spacecraft_clock_start_count` and `spacecraft_clock_stop_count` for which
-            `dict_` gives the items.
+            `dict_` gives the items. The filter subfields need both filter names; a
+            FILTER_NAME with a None element gives none of them.
         """
 
         params = {'dict': dict_}
 
-        # Merge filter names, ignoring "CL1" and "CL2"
+        # Merge filter names, ignoring "CL1" and "CL2"; a FILTER_NAME with a missing
+        # element names no filter pair
+        filter1 = filter2 = None
         if 'FILTER_NAME' in dict_:
             filter1, filter2 = dict_['FILTER_NAME']
         elif 'FILTER1_NAME' in dict_ and 'FILTER2_NAME' in dict_:
             filter1 = dict_['FILTER1_NAME']
             filter2 = dict_['FILTER2_NAME']
-        else:
-            filter1 = None
 
-        if filter1 is not None:
+        if filter1 is not None and filter2 is not None:
             if filter1[:2] == 'CL':
                 if filter2[:2] == 'CL':
                     filter_ = 'CLEAR'
@@ -852,26 +927,34 @@ class CassiniISS(oops.Host):
 
         Raises:
             FileNotFoundError: If the file does not exist.
-            VicarHostError: If the VICAR header cannot be parsed.
+            VicarHostError: If the VICAR header cannot be parsed, or the file ends before
+                the array that the header describes.
         """
 
+        # Raised as the host's own error (#12); a file cut short makes the array's
+        # reshape fail with a ValueError (#18)
         try:
             return VicarImage(filepath, strict=False)
-        except VicarError as err:      # raised as the host's own error (#12)
+        except (VicarError, ValueError) as err:
             raise oops.host.VicarHostError(f'{err} in {filepath}') from err
 
     @staticmethod
     def _parse_fileinfo(fileinfo, *, astrometry, pds3_options):
         """The parsed PDS3 label or VICAR header of an ISS image.
 
-        A PDS3 label is parsed with the method in `pds3_options`. If that is "fast", the
-        default, and the fast parser rejects the label or reads a keyword that is not a
-        PDS3 name, the label is parsed again: by the fast parser with each quoted value
-        that starts on the line after its keyword moved up to that line, then by the
-        "strict" parser, then by the "loose" one. A label that every method rejects is
-        parsed once more with that repair and with the unterminated DESCRIPTION value of
-        some calibrated labels closed, by the fast parser and then by the loose one, or
-        with any other method by that method alone.
+        A PDS3 label is parsed with the method in `pds3_options`, and if that parser
+        rejects the label, fails to convert one of its values, or (for the fast parser)
+        reads a keyword that is not a PDS3 name, by each later method in the order
+        "fast", "strict", "loose"; the fast parser is followed by a second fast attempt
+        with each quoted value that starts on the line after its keyword moved up to that
+        line. A label that every one of these rejects is parsed once more with that
+        repair, with the unterminated DESCRIPTION value of some calibrated labels closed,
+        and with the split DESCRIPTION value of others joined, by the requested method
+        and then by the last one. Any `repairs` in `pds3_options`, a list of (pattern,
+        replacement) pairs or a single pair, are applied in every attempt. A method that
+        is not one of the three is tried alone, and then with the repairs.
+
+        Parsed content is not parsed again, but must describe a Cassini ISS image.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
@@ -885,29 +968,68 @@ class CassiniISS(oops.Host):
 
         Raises:
             OSError: If the file cannot be read.
-            PdsHostError: If the PDS3 label cannot be parsed.
-            VicarHostError: If the VICAR header cannot be parsed.
-            WrongHostError: If the file is not a Cassini ISS image.
+            PdsHostError: If the PDS3 label cannot be parsed; the message names the
+                label.
+            VicarHostError: If the VICAR header cannot be parsed, or the image file ends
+                before its array; the message names the file.
+            WrongHostError: If the file or the parsed content is not of a Cassini ISS
+                image.
         """
 
+        # Parsed content is checked as its file would be (#19)
+        if isinstance(fileinfo, Pds3Label):
+            if not CassiniISS._detect_in_pds3(fileinfo):
+                raise oops.Host._no_host_error([CassiniISS], 'PDS3 label',
+                                               fileinfo.filepath)
+            return fileinfo
+        if isinstance(fileinfo, (VicarLabel, VicarImage)):
+            if not CassiniISS._detect_in_vicar(fileinfo):
+                raise oops.Host._no_host_error([CassiniISS], 'VICAR file',
+                                               fileinfo.filepath)
+            return fileinfo
+
+        if FCPath(fileinfo).suffix.lower() != '.lbl':
+            # A VICAR image file, which the PDS3 parsers play no part in reading. A file
+            # cut short makes the array's reshape fail with a plain ValueError (#18).
+            try:
+                return CassiniISS._read_fileinfo(fileinfo, formats='PV',
+                                                 astrometry=astrometry,
+                                                 pds3_options=pds3_options)
+            except oops.host.WrongHostError:
+                raise
+            except ValueError as err:   # including VicarHostError, which names no file
+                raise oops.host.VicarHostError(f'{err} in {fileinfo}') from err
+
         method = pds3_options['method']
-        if method == 'fast':
-            attempts = [('fast', ()), ('fast', (_NEXT_LINE_VALUE,)), ('strict', ()),
-                        ('loose', ()), ('fast', _LABEL_REPAIRS),
-                        ('loose', _LABEL_REPAIRS)]
+        if method in _PARSER_METHODS:
+            methods = _PARSER_METHODS[_PARSER_METHODS.index(method):]
         else:
-            attempts = [(method, ()), (method, _LABEL_REPAIRS)]
+            methods = (method,)
+        attempts = []
+        for method in methods:
+            attempts.append((method, ()))
+            if method == 'fast':
+                attempts.append((method, (_NEXT_LINE_VALUE,)))
+        attempts += [(method, _LABEL_REPAIRS)
+                     for method in dict.fromkeys((methods[0], methods[-1]))]
+
+        given_repairs = pds3_options.get('repairs', [])
+        if (isinstance(given_repairs, tuple) and len(given_repairs) == 2
+                and all(isinstance(item, str) for item in given_repairs)):
+            given_repairs = [given_repairs]     # one (pattern, replacement) pair
 
         misread = None
         error = None
         for (method, repairs) in attempts:
-            repairs = list(pds3_options.get('repairs', [])) + list(repairs)
-            options = pds3_options | {'method': method, 'repairs': repairs}
+            options = pds3_options | {'method': method,
+                                      'repairs': list(given_repairs) + list(repairs)}
             try:
                 parsed = CassiniISS._read_fileinfo(fileinfo, formats='PV',
                                                    astrometry=astrometry,
                                                    pds3_options=options)
-            except oops.host.PdsHostError as err:
+            except (oops.host.PdsHostError, oops.OopsValueError) as err:
+                # An OopsValueError is a value that this parser could not convert, such
+                # as hour 25 in a time, which a later parser may still read (#17)
                 error = err
                 continue
 
@@ -922,145 +1044,232 @@ class CassiniISS(oops.Host):
 
         if misread is not None:
             return misread
-        raise error
+        raise oops.host.PdsHostError(f'{error} in {fileinfo}') from error
+
+    @staticmethod
+    def _label_dict(label):
+        """The content of a parsed PDS3 label, as the `label_dict` subfield gives it.
+
+        This is the label's ``as_dict()``, every key included, except that each date or
+        time is the text that the label gives it (the parser's "_fmt" form, such as
+        "2005-016T13:01:59.864") and each set is the list of its members in label order,
+        so that the dictionary can be written as JSON.
+
+        Parameters:
+            label (Pds3Label): The parsed PDS3 label.
+
+        Returns:
+            dict[str, Any]: The label's content.
+        """
+
+        # Consumers write the metadata out as JSON, which takes no datetime or set (#16)
+        return CassiniISS._json_form(label.as_dict())
+
+    @staticmethod
+    def _json_form(dict_):
+        """A copy of a parsed PDS3 dictionary with its times as text and sets as lists.
+
+        Parameters:
+            dict_ (dict[str, Any]): A dictionary from ``Pds3Label.as_dict()``, or one of
+                the OBJECT or GROUP dictionaries inside it.
+
+        Returns:
+            dict[str, Any]: The dictionary, with each date, time, or date-time value
+            replaced by the text of its "_fmt" key, each set replaced by the list of its
+            "_list" key, and each dictionary inside it converted the same way.
+        """
+
+        result = {}
+        for (key, value) in dict_.items():
+            if isinstance(value, dict):
+                value = CassiniISS._json_form(value)
+            elif isinstance(value, (datetime.date, datetime.time)):  # incl. datetime
+                value = dict_[key + '_fmt']
+            elif isinstance(value, (set, frozenset)):
+                value = dict_[key + '_list']
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _header_dict(header):
+        """The content of a VICAR header, as the `header_dict` subfield gives it.
+
+        Every parameter appears. One that occurs once is keyed by its name; each
+        occurrence of one that repeats, such as TASK in the processing history, is keyed
+        by its name and its occurrence counted from zero, as in "TASK[0]" and "TASK[1]".
+
+        Parameters:
+            header (VicarLabel | VicarImage): The parsed VICAR header.
+
+        Returns:
+            dict[str, Any]: The header's parameters, in header order.
+        """
+
+        # as_dict() keys each occurrence of a repeated parameter by a (name, n) tuple,
+        # which JSON cannot take as a key; as_dict(unique=False) keeps only the first
+        # (#16)
+        return {(f'{key[0]}[{key[1]}]' if isinstance(key, tuple) else key): value
+                for (key, value) in header.as_dict().items()}
 
     @staticmethod
     def _merged_dict(label_dict, header_dict):
         """The metadata of an image, merged from its PDS3 label and its VICAR header.
 
-        The header's keywords are first given their PDS3 names (see
-        :meth:`_pds3_dict_from_vicar`), and PDS3 null values are removed from both. An
-        item that only one source gives takes that source's value. An item that both
-        give takes the value that :meth:`_resolve` chooses. The label's keywords come
-        first, in label order, then the header's other keywords, in header order.
+        The keys that the label parser derives from a keyword (see :meth:`_items`) are
+        left out of the label's keywords. The header's keywords are given their PDS3
+        names and forms (see :meth:`_pds3_dict_from_vicar`). Missing values are removed
+        from both (see :meth:`_without_nulls`). An item that only one source gives takes
+        that source's value. An item that both give takes the value of its source in
+        `_RESOLUTION_RULES`, the label for every item not listed there. The label's
+        keywords come first, in label order, then the header's other keywords, in header
+        order.
 
         Parameters:
-            label_dict (dict[str, Any] | None): The keywords of the PDS3 label; None if it
-                was not read.
-            header_dict (dict[str, Any] | None): The keywords of the VICAR header; None if
-                it was not read.
+            label_dict (dict[str, Any] | None): The `label_dict` of the PDS3 label; None
+                if it was not read.
+            header_dict (dict[str, Any] | None): The `header_dict` of the VICAR header;
+                None if it was not read.
 
         Returns:
             dict[str, Any]: The merged metadata.
         """
 
-        label = {} if label_dict is None else CassiniISS._without_nulls(label_dict)
+        label = {}
+        if label_dict is not None:
+            label = CassiniISS._without_nulls(CassiniISS._items(label_dict))
         header = {}
         if header_dict is not None:
-            header = CassiniISS._pds3_dict_from_vicar(dict(header_dict))
-            header = CassiniISS._without_nulls(header)
+            header = CassiniISS._without_nulls(
+                CassiniISS._pds3_dict_from_vicar(header_dict))
 
         merged = {}
         for (key, value) in label.items():
-            merged[key] = (CassiniISS._resolve(key, value, header[key]) if key in header
-                           else value)
+            if key in header and _RESOLUTION_RULES.get(key, _LABEL) == _HEADER:
+                value = header[key]
+            merged[key] = value
         for (key, value) in header.items():
             if key not in label:
                 merged[key] = value
         return merged
 
     @staticmethod
-    def _resolve(key, label_value, header_value):
-        """The value of an item that the PDS3 label and the VICAR header both give.
-
-        A number, or list of numbers, that the other source gives to more digits loses
-        to it. Otherwise the source named for the item in `_RESOLUTION_RULES` wins, and
-        the label wins every item not named there, including those whose two values are
-        the same value written differently (a time as text or as a datetime, a number as
-        text or as a number).
+    def _items(dict_):
+        """A copy of a parsed PDS3 dictionary without the keys the parser derives.
 
         Parameters:
-            key (str): The PDS3 name of the item.
-            label_value (Any): The label's value, not a PDS3 null value.
-            header_value (Any): The header's value, not a PDS3 null value.
+            dict_ (dict[str, Any]): The content of a PDS3 label, or an OBJECT or GROUP
+                dictionary inside it.
 
         Returns:
-            Any: The chosen value.
+            dict[str, Any]: The keywords of `dict_`, without "objects", "groups", and
+            each key that is another key's name followed by one of the parser's suffixes,
+            such as "START_TIME_fmt" or "DETECTOR_TEMPERATURE_unit". Each dictionary
+            inside is treated the same way.
         """
 
-        if CassiniISS._is_rounding_of(label_value, header_value):
-            return header_value
-        if CassiniISS._is_rounding_of(header_value, label_value):
-            return label_value
-        if _RESOLUTION_RULES.get(key, _LABEL) == _HEADER:
-            return header_value
-        return label_value
+        result = {}
+        for (key, value) in dict_.items():
+            if key in _DERIVED_KEYS:
+                continue
+            (base, _, suffix) = key.rpartition('_')
+            if base in dict_ and '_' + suffix in _DERIVED_SUFFIXES:
+                continue
+            result[key] = CassiniISS._items(value) if isinstance(value, dict) else value
+        return result
 
     @staticmethod
-    def _is_rounding_of(short, precise):
-        """True if a number, or each number of a list, is another rounded to fewer digits.
+    def _row_items(row_dict):
+        """The metadata of one row of an index table, in Python types.
 
         Parameters:
-            short (Any): The value that might be rounded.
-            precise (Any): The value that might be the precise one.
+            row_dict (dict[str, Any]): The row, as the index reader gives it: NumPy values
+                and, for each column, a "_mask" entry that is True where the value is
+                missing.
 
         Returns:
-            bool: True if `short` and `precise` are unequal real numbers and `short` is
-            `precise` rounded to the number of significant digits that `short` is written
-            with; or if they are unequal lists of the same length, each element of which
-            either equals its counterpart or is its rounding in this sense.
+            dict[str, Any]: The row's columns, each value converted to a Python value or,
+            for an array column, a list, and missing values removed as by
+            :meth:`_without_nulls`. A masked value counts as missing; a masked element of
+            an array is None. The "_mask" entries are left out.
         """
 
-        if isinstance(short, list) and isinstance(precise, list):
-            return (len(short) == len(precise) and short != precise
-                    and all(a == b or CassiniISS._is_rounding_of(a, b)
-                            for (a, b) in zip(short, precise, strict=True)))
-
-        if not (isinstance(short, float) and isinstance(precise, float)):
-            return False
-        if short == precise:
-            return False
-
-        # Significant digits of `short`: its zeros after the last nonzero decimal digit
-        # are not counted, and those before the decimal point are. The last of them sets
-        # the decimal place to which `precise` would have been rounded.
-        if short == 0.:
-            return False
-        mantissa = repr(short).lower().partition('e')[0].lstrip('-')
-        (whole, _, fraction) = mantissa.partition('.')
-        digits = len((whole + fraction.rstrip('0')).lstrip('0'))
-        decimals = max(digits, 1) - 1 - math.floor(math.log10(abs(short)))
-
-        # Half a unit in the last digit, widened slightly so that a value which ends in 5
-        # and is rounded either way, as the headers do, still counts
-        return abs(precise - short) <= 0.5 * 10.**(-decimals) * (1. + 1.e-9)
+        items = {}
+        for (key, value) in row_dict.items():
+            if key.endswith('_mask') and key[:-5] in row_dict:
+                continue
+            value = np.asarray(value).tolist()
+            mask = np.asarray(row_dict.get(key + '_mask', False)).tolist()
+            if mask is True:
+                continue
+            if isinstance(mask, list):
+                value = [None if masked else item
+                         for (item, masked) in zip(value, mask, strict=True)]
+            items[key] = value
+        return CassiniISS._without_nulls(items)
 
     @staticmethod
     def _without_nulls(dict_):
-        """A copy of a dictionary without its PDS3 null values.
+        """A copy of a dictionary without its missing values.
 
         Parameters:
             dict_ (dict[str, Any]): The keywords of a label.
 
         Returns:
-            dict[str, Any]: The keywords whose values are not "UNK", "N/A" or "NULL", nor
-            a list or set of nothing but these.
+            dict[str, Any]: The keywords whose values are not missing in the sense of
+            :meth:`_is_null`. In a list some of whose elements are missing, each of them
+            is None: every list in an ISS label is a sequence whose positions carry
+            meaning, such as the front and back temperatures of OPTICS_TEMPERATURE or the
+            two filters of FILTER_NAME. Each dictionary inside is treated the same way.
         """
 
-        return {key: value for (key, value) in dict_.items()
-                if not CassiniISS._is_null(value)}
+        result = {}
+        for (key, value) in dict_.items():
+            if CassiniISS._is_null(value):
+                continue
+            if isinstance(value, dict):
+                value = CassiniISS._without_nulls(value)
+            elif isinstance(value, list):
+                value = [None if CassiniISS._is_null(item) else item for item in value]
+            result[key] = value
+        return result
 
     @staticmethod
     def _is_null(value):
-        """True if a value is a PDS3 null value, or a list or set of nothing but these.
+        """True if a value states nothing.
 
         Parameters:
             value (Any): The value of a keyword.
 
         Returns:
-            bool: True if `value` is "UNK", "N/A" or "NULL", or a non-empty list, tuple or
-            set of nothing but these.
+            bool: True if `value` is None; a PDS3 null constant, "UNK", "N/A" or "NULL",
+            in any case and with any surrounding blanks; the fill value -999; or a
+            non-empty list, tuple or set of nothing but these.
         """
 
+        if value is None:
+            return True
         if isinstance(value, str):
-            return value.strip() in _PDS3_NULLS
+            return value.strip().upper() in _PDS3_NULLS
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return value == _FILL_VALUE
         if isinstance(value, (list, tuple, set, frozenset)) and len(value) > 0:
             return all(CassiniISS._is_null(item) for item in value)
         return False
 
     @staticmethod
     def _pds3_dict_from_vicar(dict_):
-        """The keywords of an ISS VICAR header under their PDS3 label names and meanings.
+        """The keywords of an ISS VICAR header under their PDS3 label names and forms.
+
+        Every header's values are written in the forms of the PDS3 labels:
+
+        * A time loses the "Z" that the headers write at its end.
+        * IMAGE_NUMBER is text, as the labels quote it.
+        * IMAGE_OBSERVATION_TYPE is a list, as the labels' set is given.
+        * OPTICS_TEMPERATURE given as one number, the front temperature, is the pair of it
+          and a missing (None) back temperature.
+        * MISSION_PHASE_NAME has spaces where the headers write underscores.
 
         Most VICAR headers already use the keywords of the PDS3 label. Those of the early
         cruise images, which carry no INSTRUMENT_HOST_NAME, use older names. For these,
@@ -1069,13 +1278,11 @@ class CassiniISS(oops.Host):
 
         * INSTRUMENT_HOST_NAME is "CASSINI ORBITER", and INSTRUMENT_NAME is the name of
           the camera that INSTRUMENT_ID identifies.
-        * FILTER_NAME is the list of FILTER1_NAME and FILTER2_NAME.
+        * FILTER_NAME is the list of FILTER1_NAME and FILTER2_NAME, which are then left
+          out.
         * GAIN_MODE_ID is spelled in full, e.g. "12 ELECTRONS PER DN" for "12 e/DN".
         * START_TIME and STOP_TIME are IMAGE_TIME.
         * SPACECRAFT_CLOCK_STOP_COUNT is IMAGE_NUMBER followed by ".000".
-
-        Each of these is made only when the header gives the keywords it comes from, and
-        SPACECRAFT_CLOCK_STOP_COUNT only when IMAGE_NUMBER is not a PDS3 null value.
         * The VICAR SHUTTER_MODE_ID is SHUTTER_STATE_ID, and SHUTTER_EVENT_TYPE is
           SHUTTER_MODE_ID.
         * BIAS is BIAS_STRIP_MEAN, CALIB_LAMP_STATE_FLAG is CALIBRATION_LAMP_STATE_FLAG,
@@ -1083,39 +1290,69 @@ class CassiniISS(oops.Host):
           ENCODING_TYPE is INST_CMPRS_TYPE, EXTENDED_PIXEL_VALUE is DARK_STRIP_MEAN, and
           SENSOR_HEAD_ELEC_TEMP is SENSOR_HEAD_ELEC_TEMPERATURE.
 
-        Every other keyword keeps its VICAR name and value.
+        Each of these is made only when the header gives the keywords it comes from, and
+        SPACECRAFT_CLOCK_STOP_COUNT only when IMAGE_NUMBER is not missing. Every other
+        keyword keeps its VICAR name and value.
 
         Parameters:
             dict_ (dict[str, Any]): The keywords of the VICAR header.
 
         Returns:
-            dict[str, Any]: `dict_` itself if it already holds INSTRUMENT_HOST_NAME;
-            otherwise a new dictionary of its keywords under their PDS3 names.
+            dict[str, Any]: A new dictionary of its keywords under their PDS3 names.
         """
 
-        if 'INSTRUMENT_HOST_NAME' in dict_:
-            return dict_
+        pds3 = {key: CassiniISS._pds3_form(key, value) for (key, value) in dict_.items()}
+        if 'INSTRUMENT_HOST_NAME' in pds3:
+            return pds3
 
         pds3 = {_EARLY_VICAR_RENAMES.get(key, key): value
-                for (key, value) in dict_.items()}
+                for (key, value) in pds3.items()}
         pds3['INSTRUMENT_HOST_NAME'] = 'CASSINI ORBITER'
-        instrument_id = dict_.get('INSTRUMENT_ID')
+        instrument_id = pds3.get('INSTRUMENT_ID')
         if instrument_id in _EARLY_VICAR_INSTRUMENT_NAMES:
             pds3['INSTRUMENT_NAME'] = _EARLY_VICAR_INSTRUMENT_NAMES[instrument_id]
-        if 'FILTER1_NAME' in dict_ and 'FILTER2_NAME' in dict_:
-            pds3['FILTER_NAME'] = [dict_['FILTER1_NAME'], dict_['FILTER2_NAME']]
-        if isinstance(dict_.get('GAIN_MODE_ID'), str):
-            pds3['GAIN_MODE_ID'] = dict_['GAIN_MODE_ID'].replace(' e/DN',
-                                                                 ' ELECTRONS PER DN')
-        if 'IMAGE_TIME' in dict_:
-            pds3['START_TIME'] = dict_['IMAGE_TIME']
-            pds3['STOP_TIME'] = dict_['IMAGE_TIME']
+        if 'FILTER1_NAME' in pds3 and 'FILTER2_NAME' in pds3:
+            # FILTER_NAME holds the whole of each, so each appears under that name alone
+            pds3['FILTER_NAME'] = [pds3.pop('FILTER1_NAME'), pds3.pop('FILTER2_NAME')]
+        if isinstance(pds3.get('GAIN_MODE_ID'), str):
+            pds3['GAIN_MODE_ID'] = pds3['GAIN_MODE_ID'].replace(' e/DN',
+                                                                ' ELECTRONS PER DN')
+        if 'IMAGE_TIME' in pds3:
+            pds3['START_TIME'] = pds3['IMAGE_TIME']
+            pds3['STOP_TIME'] = pds3['IMAGE_TIME']
 
         # The image number is the whole seconds of the clock count at the shutter's
         # close, which the labels of these images give with zero ticks
-        if 'IMAGE_NUMBER' in dict_ and not CassiniISS._is_null(dict_['IMAGE_NUMBER']):
-            pds3['SPACECRAFT_CLOCK_STOP_COUNT'] = f'{dict_["IMAGE_NUMBER"]}.000'
+        if 'IMAGE_NUMBER' in pds3 and not CassiniISS._is_null(pds3['IMAGE_NUMBER']):
+            pds3['SPACECRAFT_CLOCK_STOP_COUNT'] = f'{pds3["IMAGE_NUMBER"]}.000'
         return pds3
+
+    @staticmethod
+    def _pds3_form(key, value):
+        """A VICAR header value written in the form that the PDS3 labels give its item.
+
+        Parameters:
+            key (str): The keyword.
+            value (Any): The header's value.
+
+        Returns:
+            Any: The value as described in :meth:`_pds3_dict_from_vicar`; any other value
+            unchanged.
+        """
+
+        # The label's forms, so that an item has one value and type from either input
+        # (#16)
+        if isinstance(value, str) and _HEADER_TIME.fullmatch(value):
+            return value[:-1]
+        if key == 'IMAGE_NUMBER' and isinstance(value, int):
+            return str(value)
+        if key == 'IMAGE_OBSERVATION_TYPE' and isinstance(value, str):
+            return [value]
+        if key == 'OPTICS_TEMPERATURE' and isinstance(value, float):
+            return [value, None]
+        if key == 'MISSION_PHASE_NAME' and isinstance(value, str):
+            return value.replace('_', ' ')
+        return value
 
     ######################################################################################
     # Detectors

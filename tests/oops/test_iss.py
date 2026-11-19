@@ -3,6 +3,7 @@
 ##########################################################################################
 """Tests for the Cassini ISS host, host_cassini.oops.iss."""
 
+import json
 import os
 import pathlib
 import subprocess
@@ -62,8 +63,7 @@ def make_snapshot(dict_: dict[str, Any], *, data: Any = None,
     all_overrides = {name: overrides.get(name) for name in OVERRIDE_NAMES}
     obs: oops.observation.Snapshot = CassiniISS._make_snapshot(
         dict_, filepath=INDEX_PATH, data=data, fast_distortion=fast_distortion,
-        return_all_planets=False, overrides=all_overrides, source=INDEX_PATH,
-        check_pointing=True)
+        return_all_planets=False, overrides=all_overrides, check_pointing=True)
     return obs
 
 
@@ -732,6 +732,33 @@ def test_from_file_rejects_other_hosts(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('kind', ['pds3', 'vicar-label', 'vicar-image'])
+def test_from_file_rejects_other_hosts_parsed(tmp_path: pathlib.Path, kind: str) -> None:
+    """Parsed content of another host's file raises WrongHostError, as its file would."""
+
+    path = write_pds3_image(tmp_path, INSTRUMENT_HOST_NAME='GALILEO ORBITER')
+    parsed: Any
+    if kind == 'pds3':
+        parsed = Pds3Label(path, method='fast')
+    elif kind == 'vicar-label':
+        parsed = vicar.VicarLabel(image_path_of(tmp_path))
+    else:
+        parsed = vicar.VicarImage(image_path_of(tmp_path))
+    with pytest.raises(oops.host.WrongHostError, match='not a Cassini ISS '):
+        CassiniISS.from_file(parsed, astrometry=True)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_truncated_image(tmp_path: pathlib.Path) -> None:
+    """An image file that ends before its array does raises VicarHostError."""
+
+    path = write_vicar_image(tmp_path)
+    path.write_bytes(path.read_bytes()[:-1000])
+    with pytest.raises(oops.host.VicarHostError, match=r'N0000000001_1\.IMG'):
+        CassiniISS.from_file(path)
+
+
+@pytest.mark.usefixtures('initialized_iss')
 def test_from_file_rejects_label_naming_no_image_file(tmp_path: pathlib.Path) -> None:
     """A label whose ^IMAGE pointer names no file raises PdsHostError."""
 
@@ -772,11 +799,9 @@ _EARLY_VICAR = {
 _EARLY_PDS3 = {
     'MISSION_NAME'                : 'CASSINI',
     'INSTRUMENT_ID'               : 'ISSWA',
-    'IMAGE_NUMBER'                : 1338928383,
+    'IMAGE_NUMBER'                : '1338928383',
     'IMAGE_TIME'                  : _EARLY_TIME,
     'INSTRUMENT_MODE_ID'          : 'SUM4',
-    'FILTER1_NAME'                : 'CL1',
-    'FILTER2_NAME'                : 'GRN',
     'EXPOSURE_DURATION'           : 500.0,
     'GAIN_MODE_ID'                : '12 ELECTRONS PER DN',
     'TARGET_NAME'                 : 'SATURN',
@@ -834,10 +859,38 @@ def test_early_vicar_header_with_null_image_number() -> None:
     assert 'SPACECRAFT_CLOCK_STOP_COUNT' not in CassiniISS._pds3_dict_from_vicar(header)
 
 
+def test_early_vicar_header_keeps_a_filter_it_cannot_pair() -> None:
+    """A lone FILTER1_NAME makes no FILTER_NAME, so it keeps its own name."""
+
+    header = {key: value for (key, value) in _EARLY_VICAR.items()
+              if key != 'FILTER2_NAME'}
+    assert CassiniISS._pds3_dict_from_vicar(header)['FILTER1_NAME'] == 'CL1'
+
+
 def test_current_vicar_header_is_unchanged() -> None:
-    """A header that already uses the PDS3 keywords is returned unchanged."""
+    """A header that already uses the PDS3 keywords and forms is returned unchanged."""
 
     assert CassiniISS._pds3_dict_from_vicar(label_dict()) == label_dict()
+
+
+@pytest.mark.parametrize(('item', 'header', 'expected'), [
+    ('START_TIME', '2005-016T13:01:59.864Z', '2005-016T13:01:59.864'),
+    ('PRODUCT_CREATION_TIME', '2005-01-17T09:46:41.000Z', '2005-01-17T09:46:41.000'),
+    ('TARGET_DESC', 'Zeta 1Z', 'Zeta 1Z'),
+    ('IMAGE_NUMBER', 1484573295, '1484573295'),
+    ('IMAGE_OBSERVATION_TYPE', 'SCIENCE', ['SCIENCE']),
+    ('IMAGE_OBSERVATION_TYPE', ['SCIENCE', 'SUPPORT'], ['SCIENCE', 'SUPPORT']),
+    ('OPTICS_TEMPERATURE', 0.712693, [0.712693, None]),
+    ('OPTICS_TEMPERATURE', [0.79789, 1.90571], [0.79789, 1.90571]),
+    ('MISSION_PHASE_NAME', 'APPROACH_SCIENCE', 'APPROACH SCIENCE'),
+], ids=['time', 'calendar-time', 'not-a-time', 'image-number', 'observation-type',
+        'observation-types', 'optics-temperature', 'optics-temperatures',
+        'mission-phase'])
+def test_vicar_header_takes_pds3_forms(item: str, header: Any, expected: Any) -> None:
+    """A header value is written in the form that the PDS3 labels give the item."""
+
+    header_dict = label_dict(**{item: header})
+    assert CassiniISS._pds3_dict_from_vicar(header_dict)[item] == expected
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -897,9 +950,91 @@ def test_from_file_label_dict_and_header_dict_are_verbatim(
 
     path = write_pds3_image(tmp_path, header={'TELEMETRY_FORMAT_ID': 'UNK'})
     obs = CassiniISS.from_file(path)
-    assert obs.label_dict == Pds3Label(path, method='fast').as_dict()
-    assert obs.header_dict == vicar.VicarLabel(image_path_of(tmp_path)).as_dict(
-        unique=False)
+    expected = Pds3Label(path, method='fast').as_dict()
+    expected['START_TIME'] = expected['START_TIME_fmt']     # text, not a datetime
+    assert obs.label_dict == expected
+    assert obs.header_dict == vicar.VicarLabel(image_path_of(tmp_path)).as_dict()
+    assert obs.header_dict['TELEMETRY_FORMAT_ID'] == 'UNK'
+
+
+# Label lines in the PDS3 forms that the parser does not give as text: a time, a time
+# written without its milliseconds, a set, and an unquoted -999 fill value
+_PDS3_FORMS = ['IMAGE_TIME = 2005-016T13:02:08.064', 'IMAGE_MID_TIME = 2005-016T13:02:04',
+               'IMAGE_OBSERVATION_TYPE = {"SCIENCE"}', 'FILTER_TEMPERATURE = -999.0']
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_label_dict_writes_times_and_sets_as_the_label_does(
+        tmp_path: pathlib.Path) -> None:
+    """label_dict gives each time as its label text and each set as a list."""
+
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_PDS3_FORMS))
+    assert obs.label_dict['START_TIME'] == START_TIME
+    assert obs.label_dict['IMAGE_TIME'] == '2005-016T13:02:08.064'
+    assert obs.label_dict['IMAGE_MID_TIME'] == '2005-016T13:02:04'
+    assert obs.label_dict['IMAGE_OBSERVATION_TYPE'] == ['SCIENCE']
+    assert obs.label_dict['FILTER_TEMPERATURE'] == -999.
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_header_dict_keeps_repeated_parameters(tmp_path: pathlib.Path) -> None:
+    """A repeated VICAR parameter appears once per occurrence, as NAME[n]."""
+
+    image_path = write_vicar_image(tmp_path)
+    vic = cast(vicar.VicarImage, vicar.VicarImage.from_file(image_path, strict=False))
+    vic.label.append([('TASK', 'COPY'), ('TASK', 'CISSCAL')])
+    vic.write_file(image_path)
+    obs = CassiniISS.from_file(image_path)
+    assert obs.header_dict['TASK[0]'] == 'COPY'
+    assert obs.header_dict['TASK[1]'] == 'CISSCAL'
+    assert obs.dict['TASK[1]'] == 'CISSCAL'
+    assert 'TASK' not in obs.header_dict
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('source', ['label', 'image'])
+@pytest.mark.parametrize('name', ['dict', 'label_dict', 'header_dict'])
+def test_from_file_dicts_are_json_serializable(tmp_path: pathlib.Path, source: str,
+                                               name: str) -> None:
+    write_pds3_image(tmp_path, extra_lines=_PDS3_FORMS)
+    path = label_path_of(tmp_path) if source == 'label' else image_path_of(tmp_path)
+    obs = CassiniISS.from_file(path)
+    if name in obs.subfields:
+        json.dumps(obs.subfields[name])
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize(('item', 'header'), [
+    ('START_TIME', START_TIME + 'Z'),
+    ('IMAGE_TIME', '2005-016T13:02:08.064Z'),
+    ('IMAGE_OBSERVATION_TYPE', 'SCIENCE'),
+    ('IMAGE_NUMBER', 1484573295),
+])
+def test_from_file_gives_an_item_one_form_from_either_input(tmp_path: pathlib.Path,
+                                                            item: str,
+                                                            header: Any) -> None:
+    """An item the two sources agree on has the same value and type from either input."""
+
+    extra_lines = [*_PDS3_FORMS, 'IMAGE_NUMBER = "1484573295"']
+    label_path = write_pds3_image(tmp_path, header={item: header},
+                                  extra_lines=extra_lines)
+    from_label = CassiniISS.from_file(label_path).dict[item]
+    from_image = CassiniISS.from_file(image_path_of(tmp_path)).dict[item]
+    assert from_label == from_image
+    assert type(from_label) is type(from_image)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_dict_holds_only_items(tmp_path: pathlib.Path) -> None:
+    """dict leaves out END and the keys that the label parser derives from a keyword."""
+
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_PDS3_FORMS))
+    assert 'END' in obs.label_dict
+    assert 'IMAGE_TIME_fmt' in obs.label_dict
+    assert {'END', 'objects', 'IMAGE_TIME_fmt', 'IMAGE_TIME_day', 'IMAGE_TIME_sec',
+            'IMAGE_OBSERVATION_TYPE_list'}.isdisjoint(obs.dict)
+    assert 'LINES' in obs.dict['IMAGE']
+    assert all(value is not None for value in obs.dict.values())
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -932,19 +1067,27 @@ def test_from_file_merges_items_from_both_sources(tmp_path: pathlib.Path) -> Non
      'Calibrated using CISSCAL 4.0'),
     ('METHOD_DESC', 'ISSPT2.6.5 STAR:TYPE=A MAG=0.1', 'ISSPT2.6.5;STAR:TYPE=A,MAG=0.1',
      'ISSPT2.6.5;STAR:TYPE=A,MAG=0.1'),
+    ('MISSION_PHASE_NAME', 'SCIENCE CRUISE', 'CHECK_OUT_2', 'CHECK OUT 2'),
     ('BIAS_STRIP_MEAN', 14.950098, 14.9501, 14.950098),
-    ('BIAS_STRIP_MEAN', 14.95, 14.950098, 14.950098),
-    ('OPTICS_TEMPERATURE', [0.712693, 1.905708], [0.712693, 1.90571],
-     [0.712693, 1.905708]),
+    ('BIAS_STRIP_MEAN', 14.95, 14.950098, 14.95),
+    ('EXPECTED_MAXIMUM', [0.072124, 0.079518], [0.0721239, 0.0795176],
+     [0.072124, 0.079518]),
+    ('OPTICS_TEMPERATURE', [0.71269, 'UNK'], 0.712693, [0.71269, None]),
     ('EXPOSURE_DURATION', 6.0, 10.0, 6.0),
     ('TELEMETRY_FORMAT_ID', 'UNK', 'S_N_ER_3', 'S_N_ER_3'),
     ('TELEMETRY_FORMAT_ID', 'S_N_ER_3', 'N/A', 'S_N_ER_3'),
-], ids=['label-by-default', 'label-by-rule', 'header-by-rule', 'header-rounded',
-        'label-rounded', 'list-rounded', 'not-a-rounding',
-        'label-null', 'header-null'])
+    ('MISSION_PHASE_NAME', 'TOUR', ' unk ', 'TOUR'),
+    ('DETECTOR_TEMPERATURE', -999.0, -89.2435, -89.2435),
+], ids=['label-by-default', 'label-by-rule', 'header-by-rule', 'header-phase',
+        'label-more-digits', 'label-fewer-digits', 'label-list', 'label-pair',
+        'label-unlike-header', 'label-null', 'header-null', 'header-padded-null',
+        'label-fill'])
 def test_from_file_resolves_disagreements(tmp_path: pathlib.Path, item: str, label: Any,
                                           header: Any, expected: Any) -> None:
-    """Where the two sources disagree, dict holds the value the item's rule chooses."""
+    """Where the two sources disagree, dict holds the value of the item's fixed source.
+
+    A value missing from that source, as a null or fill value, is taken from the other.
+    """
 
     path = write_pds3_image(tmp_path, header={item: header}, **{item: label})
     assert CassiniISS.from_file(path).dict[item] == expected
@@ -976,17 +1119,33 @@ def test_from_file_takes_items_the_label_lacks_from_the_header(
 def test_from_file_leaves_out_null_items(tmp_path: pathlib.Path, source: str) -> None:
     """An item that is a PDS3 null value in every source read is absent, never None."""
 
-    write_pds3_image(tmp_path, TARGET_NAME='UNK', OBSERVATION_ID='N/A',
-                     GAIN_MODE_ID='NULL', FILTER_NAME=['UNK', 'UNK'])
+    write_pds3_image(tmp_path, TARGET_NAME='unk', OBSERVATION_ID=' N/A ',
+                     GAIN_MODE_ID='NULL', FILTER_NAME=['UNK', 'UNK'],
+                     DETECTOR_TEMPERATURE=-999.0, OPTICS_TEMPERATURE=[-999.0, -999.0])
     path = label_path_of(tmp_path) if source == 'label' else image_path_of(tmp_path)
     obs = CassiniISS.from_file(path)
     absent = {'label_target', 'observation_id', 'gain_mode', 'filter', 'filter1',
               'filter2'}
     assert absent.isdisjoint(obs.subfields)
-    assert {'TARGET_NAME', 'OBSERVATION_ID', 'GAIN_MODE_ID', 'FILTER_NAME'}.isdisjoint(
-        obs.dict)
+    assert {'TARGET_NAME', 'OBSERVATION_ID', 'GAIN_MODE_ID', 'FILTER_NAME',
+            'DETECTOR_TEMPERATURE', 'OPTICS_TEMPERATURE'}.isdisjoint(obs.dict)
     assert all(value is not None for value in obs.subfields.values())
     assert obs.target == 'NONE'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('source', ['label', 'image'])
+def test_from_file_marks_a_missing_list_element_none(tmp_path: pathlib.Path,
+                                                     source: str) -> None:
+    """A null or fill element of a list is None, keeping the others in their places."""
+
+    write_pds3_image(tmp_path, OPTICS_TEMPERATURE=[5.914901, -999.0],
+                     FILTER_NAME=['CL1', 'UNK'])
+    path = label_path_of(tmp_path) if source == 'label' else image_path_of(tmp_path)
+    obs = CassiniISS.from_file(path)
+    assert obs.dict['OPTICS_TEMPERATURE'] == [5.914901, None]
+    assert obs.dict['FILTER_NAME'] == ['CL1', None]
+    assert {'filter', 'filter1', 'filter2'}.isdisjoint(obs.subfields)
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -1006,7 +1165,7 @@ def test_from_file_requires_items(tmp_path: pathlib.Path, item: str,
 
     path = write_pds3_image(tmp_path, **cast(dict[str, Any], {item: value}))
     with pytest.raises(oops.host.HostFormatError,
-                       match=f'{item} is missing from .*N0000000001_1.LBL'):
+                       match=f'{item} is missing from .*N0000000001_1.IMG'):
         CassiniISS.from_file(path)
 
 
@@ -1100,6 +1259,11 @@ _UNQUOTED_NULL = ['NOTE = N/A']
 _UNTERMINATED = ['DESCRIPTION = "', 'Calibrated using CISSCAL 3.6:',
                  '  Gain applied = 30.2700']
 
+# The DESCRIPTION of N1640662528_3_CALIB.LBL in calibrated/COISS_2059, closed on a line of
+# its own and followed by the raw label's next-line description
+_SPLIT = ['DESCRIPTION = "', 'Calibrated using CISSCAL 4.0:', "  UNITS = 'I/F'", '"',
+          '    "Extended header missing.', '    DSN gap truncation." ']
+
 
 @pytest.mark.usefixtures('initialized_iss')
 @pytest.mark.parametrize(('extra_lines', 'key', 'value'), [
@@ -1108,7 +1272,10 @@ _UNTERMINATED = ['DESCRIPTION = "', 'Calibrated using CISSCAL 3.6:',
      'ISSPT2.6.5 STAR:TYPE=A MAG=0.100000\n    ISS_056ST_MONITOR001_PRIME_2'),
     (_UNTERMINATED, 'DESCRIPTION',
      '\nCalibrated using CISSCAL 3.6:\n  Gain applied = 30.2700'),
-], ids=['next-line', 'next-line-misread', 'unterminated'])
+    (_SPLIT, 'DESCRIPTION',
+     "\nCalibrated using CISSCAL 4.0:\n  UNITS = 'I/F'\n    Extended header missing.\n"
+     '    DSN gap truncation.'),
+], ids=['next-line', 'next-line-misread', 'unterminated', 'split'])
 def test_from_file_label_repairs(tmp_path: pathlib.Path, extra_lines: list[str], key: str,
                                  value: str) -> None:
     """A label that the fast parser rejects or misreads is repaired and read in full."""
@@ -1130,71 +1297,185 @@ def test_from_file_parser_fallbacks(tmp_path: pathlib.Path,
     """Without the next-line repair, such a label falls back to a slower parser."""
 
     monkeypatch.setattr(iss, '_NEXT_LINE_VALUE', (r'^\b$', ''))
-    methods = []
-    read_fileinfo = CassiniISS._read_fileinfo
-
-    def recording_read_fileinfo(*args: Any, **kwargs: Any) -> Any:
-        methods.append(kwargs['pds3_options']['method'])
-        return read_fileinfo(*args, **kwargs)
-
-    monkeypatch.setattr(CassiniISS, '_read_fileinfo', recording_read_fileinfo)
+    methods = record_parser_methods(monkeypatch)
     obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=extra_lines),
                                astrometry=True)
     assert obs.label_dict['DESCRIPTION'] == _NEXT_LINE_DESCRIPTION
     assert methods[-1] == method
 
 
-@pytest.mark.usefixtures('initialized_iss')
-def test_from_file_explicit_parser_method_has_no_fallback(tmp_path: pathlib.Path) -> None:
-    """A method other than "fast" is used alone, apart from the DESCRIPTION repair."""
+def record_parser_methods(monkeypatch: pytest.MonkeyPatch, *,
+                          fail: Exception | None = None,
+                          fail_methods: tuple[str, ...] = ('fast',)) -> list[str]:
+    """Record the parser method of each attempt to read a file; return the record.
 
+    With `fail`, each attempt with a method in `fail_methods` raises that exception
+    instead.
+    """
+
+    methods: list[str] = []
+    read_fileinfo = CassiniISS._read_fileinfo
+
+    def recording_read_fileinfo(*args: Any, **kwargs: Any) -> Any:
+        method = kwargs['pds3_options']['method']
+        methods.append(method)
+        if fail is not None and method in fail_methods:
+            raise fail
+        return read_fileinfo(*args, **kwargs)
+
+    monkeypatch.setattr(CassiniISS, '_read_fileinfo', recording_read_fileinfo)
+    return methods
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize(('method', 'expected'), [
+    ('strict', ['strict', 'loose']),
+    ('loose', ['loose']),
+])
+def test_from_file_explicit_parser_method_falls_back_to_later_ones(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, method: str,
+        expected: list[str]) -> None:
+    """A requested method is followed by the methods after it in fast, strict, loose."""
+
+    methods = record_parser_methods(monkeypatch)
     path = write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_VALUE + _UNQUOTED_NULL)
-    with pytest.raises(oops.host.PdsHostError, match="Expected 'END', found 'NOTE'"):
-        CassiniISS.from_file(path, astrometry=True, pds3_options={'method': 'strict'})
+    obs = CassiniISS.from_file(path, astrometry=True, pds3_options={'method': method})
+    assert obs.label_dict['NOTE'] == 'N/A'
+    assert methods == expected
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_falls_back_after_a_value_error(tmp_path: pathlib.Path,
+                                                  monkeypatch: pytest.MonkeyPatch
+                                                  ) -> None:
+    """A label value that the fast parser cannot convert falls back to strict."""
+
+    methods = record_parser_methods(monkeypatch,
+                                    fail=oops.OopsValueError('hour 25 is invalid'))
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True)
+    assert obs.label_dict['TARGET_NAME'] == 'SATURN'
+    assert methods == ['fast', 'fast', 'strict']
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_value_error_in_every_attempt(tmp_path: pathlib.Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    """A label that no attempt can convert raises PdsHostError naming the label."""
+
+    path = write_pds3_image(tmp_path)
+    record_parser_methods(monkeypatch, fail=oops.OopsValueError('hour 25 is invalid'),
+                          fail_methods=('fast', 'strict', 'loose'))
+    with pytest.raises(oops.host.PdsHostError,
+                       match=r'hour 25 is invalid in .*N0000000001_1\.LBL'):
+        CassiniISS.from_file(path, astrometry=True, pds3_options={'method': 'fast'})
 
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_unparsable_label(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, extra_lines=['X = (1, 2'])
-    with pytest.raises(oops.host.PdsHostError, match="found 'X'"):
+    with pytest.raises(oops.host.PdsHostError,
+                       match=r"found 'X'.* in .*N0000000001_1\.LBL"):
         CassiniISS.from_file(path, astrometry=True)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_takes_one_repair_as_a_tuple(tmp_path: pathlib.Path) -> None:
+    """A single repair in pds3_options may be given as one (pattern, replacement)."""
+
+    path = write_pds3_image(tmp_path, TARGET_NAME='TITAN')
+    obs = CassiniISS.from_file(path, astrometry=True,
+                               pds3_options={'repairs': ('"TITAN"', '"RHEA"')})
+    assert obs.label_dict['TARGET_NAME'] == 'RHEA'
 
 ##########################################################################################
 # Pointing
 ##########################################################################################
 
 
-@pytest.mark.usefixtures('initialized_iss')
-def test_from_file_without_pointing(tmp_path: pathlib.Path,
-                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    """An image with no C kernel pointing raises HostError ending in the SPICE code."""
+def remove_pointing(monkeypatch: pytest.MonkeyPatch,
+                    error: Exception | None = None) -> list[float]:
+    """Make the SPICE frame of the NAC raise `error` at every time; return those times.
 
-    def no_pointing(*args: Any, **kwargs: Any) -> None:
-        raise OSError('SPICE(CKINSUFFDATA) -- insufficient C kernel data')
+    By default the error is the OSError that cspyce raises for a time no C kernel covers.
+    """
+
+    times: list[float] = []
+
+    def no_pointing(time: float, *args: Any, **kwargs: Any) -> None:
+        times.append(time)
+        raise error or OSError('SPICE(CKINSUFFDATA) -- insufficient C kernel data')
 
     CassiniISS._define_camera_frames()
     spice_frame = oops.Frame.as_frame('CASSINI_ISS_NAC_FLIPPED')
     monkeypatch.setattr(spice_frame, 'transform_at_time', no_pointing)
-    with pytest.raises(oops.host.HostError,
-                       match=r'no Cassini ISS NAC pointing at 2005-01-01T00:00:00\.500 '
-                             r'for .*N0000000001_1.IMG: SPICE\(CKINSUFFDATA\)$'):
+    return times
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('source', ['label', 'image'])
+def test_from_file_without_pointing(tmp_path: pathlib.Path,
+                                    monkeypatch: pytest.MonkeyPatch, source: str) -> None:
+    """An image with no C kernel pointing raises OopsSpiceError naming the image file."""
+
+    write_pds3_image(tmp_path)
+    path = label_path_of(tmp_path) if source == 'label' else image_path_of(tmp_path)
+    remove_pointing(monkeypatch)
+    with pytest.raises(oops.OopsSpiceError,
+                       match=r'^no Cassini ISS NAC pointing at 2005-01-01T00:00:00\.500 '
+                             r'for .*N0000000001_1\.IMG: SPICE\(CKINSUFFDATA\)$') as info:
+        CassiniISS.from_file(path)
+    assert info.value.spice_code == 'SPICE(CKINSUFFDATA)'
+    assert FCPath(info.value.filepath).name == 'N0000000001_1.IMG'
+    assert isinstance(info.value.__cause__, OSError)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('error', [KeyError('SPICE(FRAMEIDNOTFOUND)'),
+                                   RuntimeError('SPICE(NOFRAMECONNECT)'),
+                                   ValueError('SPICE(INVALIDTIME)')],
+                         ids=['lookup', 'runtime', 'value'])
+def test_from_file_reports_each_spice_error_class(tmp_path: pathlib.Path,
+                                                  monkeypatch: pytest.MonkeyPatch,
+                                                  error: Exception) -> None:
+    remove_pointing(monkeypatch, error)
+    with pytest.raises(oops.OopsSpiceError, match=r'SPICE\([A-Z]+\)$'):
         CassiniISS.from_file(write_vicar_image(tmp_path))
 
 
 @pytest.mark.usefixtures('initialized_iss')
-def test_from_file_with_frame_override_skips_pointing(tmp_path: pathlib.Path,
-                                                      monkeypatch: pytest.MonkeyPatch
-                                                      ) -> None:
-    def no_pointing(*args: Any, **kwargs: Any) -> None:
-        raise OSError('SPICE(CKINSUFFDATA)')
+def test_from_file_lets_other_errors_through(tmp_path: pathlib.Path,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exception of a class that SPICE does not raise is not reported as SPICE's."""
 
-    CassiniISS._define_camera_frames()
-    spice_frame = oops.Frame.as_frame('CASSINI_ISS_NAC_FLIPPED')
-    monkeypatch.setattr(spice_frame, 'transform_at_time', no_pointing)
+    remove_pointing(monkeypatch, TypeError('not a time'))
+    with pytest.raises(TypeError, match='not a time'):
+        CassiniISS.from_file(write_vicar_image(tmp_path))
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_checks_pointing_at_the_cadence_midtime(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a cadence override, the pointing is checked at the override's midtime."""
+
+    times = remove_pointing(monkeypatch)
+    cadence = oops.cadence.SnapCadence(julian.tdb_from_iso('2006-01-01T00:00:00'), 10.)
+    with pytest.raises(oops.OopsSpiceError, match=r' at 2006-01-01T00:00:05\.000 '):
+        CassiniISS.from_file(write_vicar_image(tmp_path), cadence=cadence)
+    assert times == [cadence.midtime]
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('astrometry', [False, True])
+def test_from_file_with_frame_override_skips_pointing(tmp_path: pathlib.Path,
+                                                      monkeypatch: pytest.MonkeyPatch,
+                                                      astrometry: bool) -> None:
+    times = remove_pointing(monkeypatch)
     frame = oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
                                frame_id='TEST_CMATRIX')
-    obs = CassiniISS.from_file(write_vicar_image(tmp_path), frame=frame)
+    obs = CassiniISS.from_file(write_vicar_image(tmp_path), frame=frame,
+                               astrometry=astrometry)
     assert obs.frame == frame.wayframe
+    assert times == []
 
 ##########################################################################################
 # from_index()
@@ -1356,6 +1637,46 @@ def test_from_index_uses_given_rows(tmp_path: pathlib.Path) -> None:
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     snapshots = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1])
     assert [obs.detector for obs in snapshots] == ['NAC']
+
+
+def test_from_index_dict_is_json_serializable(tmp_path: pathlib.Path) -> None:
+    """dict is the row in Python types, without the table's masks or masked values."""
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | {'VALID_MAXIMUM': np.array([4095, 9896]),
+                     'VALID_MAXIMUM_mask': np.array([False, True]),
+                     'SEQUENCE_NUMBER': np.int64(2), 'SEQUENCE_NUMBER_mask': np.False_,
+                     'TARGET_DESC': np.str_('Mimas'), 'TARGET_DESC_mask': np.True_}
+    obs = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=[row])[0]
+    json.dumps(obs.dict)
+    assert obs.dict['VALID_MAXIMUM'] == [4095, None]
+    assert obs.dict['SEQUENCE_NUMBER'] == 2
+    assert {'TARGET_DESC', 'TARGET_DESC_mask', 'SEQUENCE_NUMBER_mask'}.isdisjoint(
+        obs.dict)
+    assert type(obs.label_target) is str
+
+
+def test_from_index_skips_the_pointing_check(tmp_path: pathlib.Path,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row is kept, unchecked, even when the C kernels hold no pointing for it."""
+
+    times = remove_pointing(monkeypatch)
+    snapshots = CassiniISS.from_index(write_index(tmp_path))
+    assert len(snapshots) == 2
+    assert times == []
+
+
+def test_from_index_accepts_select(tmp_path: pathlib.Path) -> None:
+    """select is accepted and ignored, because each row is one observation."""
+
+    snapshots = CassiniISS.from_index(write_index(tmp_path), select=1)
+    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
+
+
+def test_from_index_reads_the_supplement_given(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(FileNotFoundError, match='missing_supplemental_index'):
+        CassiniISS.from_index(write_index(tmp_path),
+                              supplement=tmp_path / 'missing_supplemental_index.lbl')
 
 
 ##########################################################################################

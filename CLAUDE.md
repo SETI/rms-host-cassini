@@ -28,9 +28,11 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   (`-W -n`), codespell and PyMarkdown. `ruff format` is disabled.
   `.github/workflows/run-tests.yml` runs the same set. `scripts/setup-venv.sh` builds the
   `venv/` that the scripts expect; set `VENV` to use another.
-- The `oops.Host` API first appears in rms-oops 0.4.0, the minimum version in
-  `pyproject.toml`. The `ObsArray` entry in `nitpick_ignore_regex` in `docs/conf.py`
-  stays: oops never documents that type alias.
+- The `oops.Host` API first appears in rms-oops 0.4.0, and `oops.OopsSpiceError`, which
+  `CassiniISS` raises for missing pointing, in 0.5.0, the minimum version in
+  `pyproject.toml`. Until 0.5.0 is released, install rms-oops from its
+  `rf_261118_oops_spice_error` branch to develop or test. The `ObsArray` entry in
+  `nitpick_ignore_regex` in `docs/conf.py` stays: oops never documents that type alias.
 - The type information is published in two stubs: `host_cassini/__init__.pyi` declares
   the three hosts in full, and `host_cassini/oops/__init__.pyi` re-exports them. `stubtest`
   checks them against the runtime in the check script and in CI, so adding, renaming or
@@ -77,13 +79,21 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   `_TARGET_NAME_REPAIRS`. Don't merge them into `_cassini.py`.
 - `CassiniISS.from_file()` reads only the VICAR image file when given it, and the PDS3
   label plus the whole image file when given the label (the label alone with
-  `astrometry`). `_merged_dict()` combines the two into `dict`: PDS3 null values count as
-  missing, a rounded number loses to the precise one, and otherwise `_RESOLUTION_RULES`
-  names the winner, the label by default. Each rule's comment gives the survey counts and
-  cites issue #10, which lists every item on which the two disagree; update both together.
-  The array always comes from the VICAR header's layout, never the label's `^IMAGE`
-  offset, which is wrong for calibrated files. Labels the fast parser rejects or misreads
-  go through `_parse_fileinfo()`'s fallbacks and in-memory repairs (#11).
+  `astrometry`). `_merged_dict()` combines the two into `dict`: PDS3 null values (any
+  case) and the fill value -999 count as missing, the header's values are first written
+  in the label's forms (`_pds3_form()`), and `_RESOLUTION_RULES` names each item's one
+  fixed source, the label by default; there is no per-image choice. Each rule's comment
+  gives the evidence and cites issue #10, which lists every item on which the two
+  disagree, with counts and the images on which the fixed source is wrong; update both
+  together. `dict`, `label_dict` and `header_dict` must stay JSON-serializable: times as
+  the label's text, sets as lists, repeated VICAR parameters as `NAME[n]` keys. The array
+  always comes from the VICAR header's layout, never the label's `^IMAGE` offset, which is
+  wrong for calibrated files. Labels the parser rejects, cannot convert, or misreads go
+  through `_parse_fileinfo()`'s fallbacks (from the requested method on through fast,
+  strict, loose) and in-memory repairs (#11).
+- Missing C-kernel pointing raises `oops.OopsSpiceError`, checked only in `from_file`
+  and only when the frame comes from SPICE (no `frame` override); `from_index` never
+  checks.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
   that importing `host_cassini` does not import oops. Keep any import of
   `host_cassini.oops` out of `host_cassini/__init__.py`.

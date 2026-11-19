@@ -129,6 +129,9 @@ nitpick_ignore_regex = [
     # ObsArray is a type alias in oops.host.host_ for an object array of Observations.
     # oops does not document it, so no inventory has an entry to link to.
     (r'py:class', r'ObsArray'),
+    # OopsSpiceError is added by rms-oops 0.5.0, which its published documentation does
+    # not yet describe. Remove this entry once that documentation has it.
+    (r'py:exc', r'(oops\.)?OopsSpiceError'),
 ]
 
 # MyST-Parser settings
@@ -160,6 +163,7 @@ _SHORT_NAMES = {
     'Meshgrid'        : 'oops.Meshgrid',
     'Scalar'          : 'polymath.Scalar',
     'OopsIndexError'  : 'oops.OopsIndexError',
+    'OopsSpiceError'  : 'oops.OopsSpiceError',
     'OopsTypeError'   : 'oops.OopsTypeError',
     'OopsValueError'  : 'oops.OopsValueError',
     'HostError'       : 'oops.host.HostError',

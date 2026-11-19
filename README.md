@@ -79,13 +79,17 @@ The hosts are:
   A raw or calibrated image can be given as its PDS3 label or as the VICAR image file.
   Given the image file, only that file is read. Given the label, the image file beside
   it is read too, unless `astrometry=True`. The metadata comes from whichever of the
-  two were read, and where they disagree a rule for each item chooses one value. The
-  pixels, and every value the two agree on, are the same from either file. Metadata that
-  neither file gives, or gives only as `UNK` or `N/A`, is left out rather than set to
-  None. Each file that was read is also kept as it is: the label in the `label_dict`
-  subfield, present only when the label was read, and the image file's header in
-  `header_dict`, present only when the image file was read. The rules for each item are
-  described with `CassiniISS.from_file()` in the module documentation.
+  two were read. Where they disagree, each item always takes its value from the same
+  file: the label for nearly every item, and the header for the two items on which the
+  header is the more accurate. The pixels, and every value the two agree on, are the same
+  from either file, in the same form. Metadata that neither file gives, or gives only as
+  `UNK`, `N/A`, or the fill value `-999`, is left out rather than set to None. Each file
+  that was read is also kept: the label in the `label_dict` subfield, present only when
+  the label was read, and the image file's header in `header_dict`, present only when
+  the image file was read. All three dictionaries can be written as JSON. If the SPICE
+  kernels hold no pointing for an image, `from_file()` raises `oops.OopsSpiceError`,
+  unless a frame is supplied with `frame=`. The rules for each item are described with
+  `CassiniISS.from_file()` in the module documentation.
 - `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
   one for each window of a QUBE with several windows.
 - `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of

@@ -35,9 +35,9 @@ __all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
 class CassiniISS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
-    # Raises FileNotFoundError, oops.host.HostError (no C kernel pointing; the message
-    # ends with the SPICE error code), HostFormatError (a required item missing or
-    # invalid), PdsHostError, VicarHostError, OSError and WrongHostError.
+    # Raises FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame`
+    # is given; the message ends with the SPICE error code), HostFormatError (a required
+    # item missing or invalid), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
@@ -52,14 +52,17 @@ class CassiniISS(Host):
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any) -> Snapshot: ...
     # Every row is one Snapshot, so the list is typed more narrowly than Host's, which a
-    # list's invariance does not allow.
+    # list's invariance does not allow. The pointing is never checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
+        supplement: str | pathlib.Path | FCPath | None = None,
         row_dicts: list[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None, fast_distortion: bool | None = True,
-        return_all_planets: bool = False, target: str | Body | None = None,
+        return_all_planets: bool = False,
+        select: int | slice | str | tuple[int | slice | str, ...] | None = None,
+        target: str | Body | None = None,
         lightsource: LightSource | None = None, path: str | Path | None = None,
         frame: str | Frame | None = None, cadence: Cadence | None = None,
         fov: FOV | None = None,
