@@ -4,10 +4,16 @@
 # Known shortcomings:
 #
 # For SAMPLING_MODE_ID == "UNDER" (aka Nyquist sampling), the FOV boundary will be
-# be slightly off because an FOV object cannot handle overlapping, double-sized pixels.
+# slightly off because an FOV object cannot handle overlapping, double-sized pixels.
 # The proper boundary is 1/64th larger along the line direction to account for the larger
 # pixel.
 ##########################################################################################
+"""The Cassini VIMS host, which makes a pair of observations from each Visual and
+Infrared Mapping Spectrometer cube.
+
+The :doc:`user guide </user_guide/user_guide>` describes the products it reads, the
+observations it returns, and the errors it raises.
+"""
 
 import re
 

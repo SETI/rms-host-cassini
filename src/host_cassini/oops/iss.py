@@ -1,6 +1,11 @@
 ##########################################################################################
 # host_cassini/oops/iss.py
 ##########################################################################################
+"""The Cassini ISS host, which makes a Snapshot from each narrow or wide angle image.
+
+The :doc:`user guide </user_guide/user_guide>` describes the products it reads, how it
+merges the two labels of each product, and the errors it raises.
+"""
 
 import datetime
 import re

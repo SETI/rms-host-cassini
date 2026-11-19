@@ -1,6 +1,12 @@
 ##########################################################################################
 # host_cassini/oops/uvis.py
 ##########################################################################################
+"""The Cassini UVIS host, which makes observations from Ultraviolet Imaging Spectrograph
+products.
+
+The :doc:`user guide </user_guide/user_guide>` describes the products it reads, the
+observations it returns, and the errors it raises.
+"""
 
 import numbers
 import re
@@ -199,6 +205,8 @@ class CassiniUVIS(oops.Host):
             OopsTypeError: If `select` has an invalid type.
             OopsValueError: If `select` is a string.
             OSError: If `filepath` cannot be read.
+            PdsHostError: If the PDS3 label cannot be parsed.
+            WrongHostError: If the file is not the label of a Cassini UVIS product.
         """
 
         CassiniUVIS.initialize()  # define everything the first time through; use

@@ -30,81 +30,71 @@
 
 `rms-host-cassini` is the Cassini mission host for
 [OOPS](https://github.com/SETI/rms-oops), the Object-Oriented Python SPICE toolkit for
-observation geometry. It turns Cassini ISS, UVIS, and VIMS data products into OOPS
-`Observation` objects, with the frames, fields of view, timing, targets, and light sources
-that each instrument requires. It is a product of the
+observation geometry. It reads data products of three Cassini instruments, the Imaging
+Science Subsystem (ISS) cameras, the Ultraviolet Imaging Spectrograph (UVIS), and the
+Visual and Infrared Mapping Spectrometer (VIMS), as the Planetary Data System (PDS)
+archives them. It turns each product into OOPS observations: the data array, together
+with the time, field of view, pointing, target, and light source that OOPS needs to
+compute its geometry. It is a product of the
 [PDS Ring-Moon Systems Node](https://pds-rings.seti.org).
+
+# Features
+
+- **Either file of an ISS product**: an ISS image can be opened from its VICAR image file
+  or from its PDS3 label, and the pixels are identical either way.
+- **Metadata from both labels**: the values in an ISS image's PDS3 label and in its VICAR
+  header are merged under the PDS3 names, with one fixed choice for each value on which
+  they disagree.
+- **Spectrometer products**: a UVIS product becomes one observation per window, and a
+  VIMS cube becomes a pair of observations, one for each channel.
+- **Whole volumes at once**: a PDS3 index gives the observations of every product in a
+  volume, without opening the products.
+- **Pointing from SPICE**: the pointing comes from the Cassini C kernels, loaded a month
+  of the mission at a time, or from a frame that the caller supplies.
 
 # Installation
 
-The `host_cassini` module is available via the `rms-host-cassini` package on PyPI and can
-be installed with:
+`rms-host-cassini` needs Python 3.11 or later. Install it from PyPI with:
 
 ```sh
 pip install rms-host-cassini
 ```
 
-Geometry calculations need a SPICE kernel database, located through `spicedb` by the
-`SPICE_PATH` environment variable (or `$OOPS_RESOURCES/SPICE`) and `SPICE_SQLITE_DB_NAME`.
-It must contain the kernel sets `CAS-SPK-*`, `CAS-CK-*`, and `CAS-CK-GAPFILL`.
+The host also needs the Cassini SPICE kernels. The
+[setup chapter](https://rms-host-cassini.readthedocs.io/en/latest/user_guide/user_guide_setup.html)
+of the user guide describes the kernels and the environment variables that locate them.
 
-# Getting Started
+# Quick Start
 
-Importing `host_cassini.oops` registers the Cassini hosts with `oops.Host`, which can
-then identify and read any supported Cassini file:
+Importing `host_cassini.oops` registers the hosts with `oops.Host`, which can then open
+any supported Cassini file:
 
 ```python
 import oops
 import host_cassini.oops
 
-obs = oops.Host.from_file('N1454725799_1.IMG')
+obs = oops.Host.from_file('COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG')
 ```
 
-Each instrument also has its own host class:
+Each instrument also has its own host class, for one product or for every product in a
+volume:
 
 ```python
-from host_cassini import CassiniISS, CassiniUVIS, CassiniVIMS
+from host_cassini import CassiniISS, CassiniVIMS
 
-snapshot = CassiniISS.from_file('N1454725799_1.IMG')
+snapshot = CassiniISS.from_file('COISS_2009/data/1484506648_1484573295/N1484506648_1.LBL')
+snapshots = CassiniISS.from_index('COISS_2009/index/index.lbl')
 (vis, ir) = CassiniVIMS.from_file('v1484505000_1.qub')
-ir = CassiniVIMS.from_file('v1484505000_1.qub', select='IR')
 ```
 
-# Features
+Replace each path with the location of the file in your copy of the archive, or with
+its URL.
 
-The hosts are:
+# Documentation
 
-- `CassiniISS`: The Imaging Science Subsystem narrow- and wide-angle cameras. A file
-  becomes a `Snapshot`; an image index can also be read with `CassiniISS.from_index()`.
-  A raw or calibrated image can be given as its PDS3 label or as the VICAR image file.
-  Given the image file, only that file is read. Given the label, the image file beside
-  it is read too, unless `astrometry=True`. The metadata comes from whichever of the
-  two were read. Where they disagree, each item always takes its value from the same
-  file: the label for nearly every item, and the header for the two items on which the
-  header is the more accurate. The pixels, and every value the two agree on, are the same
-  from either file, in the same form. Metadata that neither file gives, or gives only as
-  `UNK`, `N/A`, or the fill value `-999`, is left out rather than set to None. Each file
-  that was read is also kept: the label in the `label_dict` subfield, present only when
-  the label was read, and the image file's header in `header_dict`, present only when
-  the image file was read. All three dictionaries can be written as JSON. For the early
-  cruise images of 1999 and 2000, whose labels give a wrong start clock count and whose
-  headers give none, the start count is computed from the stop count and the exposure
-  with the spacecraft clock kernel, from the label, the image file, or an index. If the
-  SPICE kernels hold no pointing for an image, `from_file()` raises
-  `oops.OopsSpiceError`, unless a frame is supplied with `frame=`. The rules for each
-  item are described with `CassiniISS.from_file()` in the module documentation.
-- `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
-  one for each window of a QUBE with several windows.
-- `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of
-  observations, one for each channel (None for an inactive channel), and `select='VIS'` or
-  `select='IR'` returns just one.
-
-SPICE kernels are loaded only as needed, a month of the mission at a time. A target named
-in the label is repaired where the label is known to be wrong, and an observation of a
-star uses that star as its light source.
-
-Details are available in the
-[module documentation](https://rms-host-cassini.readthedocs.io/en/latest/module.html).
+The [documentation](https://rms-host-cassini.readthedocs.io) holds the user guide and
+the API reference. To build it locally, run `make html` in the `docs` directory after
+installing the package with its `docs` extra.
 
 # Contributing
 

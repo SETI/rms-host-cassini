@@ -1,0 +1,173 @@
+=====================
+Reading an Image File
+=====================
+
+Each host's ``from_file()`` makes the observations of one data product. This chapter
+describes ISS first, then UVIS and VIMS.
+
+ISS images
+==========
+
+:meth:`~host_cassini.oops.iss.CassiniISS.from_file` makes one
+:class:`~oops.observation.Snapshot` from one ISS image, raw or calibrated. It accepts
+either file of the product, the VICAR image file or its PDS3 label:
+
+.. code-block:: python
+
+   from host_cassini import CassiniISS
+
+   snapshot = CassiniISS.from_file('COISS_2009/data/1484573295_1484664788/N1484573295_1.IMG')
+   snapshot = CassiniISS.from_file('COISS_2009/data/1484573295_1484664788/N1484573295_1.LBL')
+
+What is read
+------------
+
+What the host reads depends on the file it is given and on the ``astrometry`` option.
+An astrometry read is for work that needs only the image's time and geometry, so it
+reads no image array.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Input
+     - Normal read
+     - With ``astrometry=True``
+   * - VICAR image file
+     - The image file alone: its header and its array.
+     - The image file's header alone.
+   * - PDS3 label
+     - The label, and the whole image file beside it.
+     - The label alone. The image file need not exist.
+
+The metadata come from whatever was read, as :doc:`user_guide_metadata` describes. The
+``data`` subfield holds the image array except in an astrometry read.
+
+The host always finds the image array through the VICAR file's own header, never
+through the record number in the label's ``^IMAGE`` pointer. That number is one record
+off in every calibrated label and in some raw labels of COISS_1006. Reading the array
+through the header keeps it identical from either input.
+
+Finding the image file
+----------------------
+
+Given a PDS3 label, the host looks in the label's directory for the image file that the
+label's ``^IMAGE`` pointer gives. It tries the name as the label spells it, then in
+upper and in lower case, so that a copy of the archive with renamed files still works.
+A path that ends in ``.lbl``, in any case, is read as a PDS3 label, and any other path
+as a VICAR image file.
+
+The ``filepath``, ``basename``, ``abspath``, and ``image_url`` subfields always give the
+image file, also when the input is the label. After an astrometry read of a remote
+label, the image file has not been retrieved, so ``abspath`` is absent.
+
+Parsed input
+------------
+
+A label or image that has already been parsed can be passed in its place: a
+:class:`~pdsparser.Pds3Label` is read as a PDS3 label, and a :class:`~vicar.VicarLabel`
+or :class:`~vicar.VicarImage` as the image file.
+
+Reading the PDS3 label
+----------------------
+
+The host starts with the parser's fast method and, if that cannot read a label, tries
+the strict method and then the loose one. A method given in ``pds3_options`` starts that
+sequence at the method given. The host also repairs in memory three defects of archive
+labels that every method rejects or misreads:
+
+- A quoted value that starts on the line after its keyword, as in
+  ``N1569827183_4.LBL`` of COISS_2037, is moved up to the keyword's line.
+- The ``DESCRIPTION`` of every label in the first version of the calibrated COISS_1xxx
+  volumes, and of some in the first version of the calibrated COISS_2xxx volumes, opens
+  a quote that it never closes. The quote is closed at the end of the line before the
+  next keyword.
+- The ``DESCRIPTION`` of some other calibrated labels, as in
+  ``N1640662528_3_CALIB.LBL`` of COISS_2059, is split into two quoted strings. The two
+  are joined into one.
+
+``pds3_options`` can add repairs of its own as ``repairs``, a list of (pattern,
+replacement) pairs or a single pair, which the host applies in every attempt.
+
+Options
+-------
+
+These options are particular to the ISS host:
+
+``fast_distortion``
+    How the distortion of the field of view is inverted, as
+    :doc:`user_guide_products` describes. True, the default, uses a polynomial fitted in
+    advance.
+
+``return_all_planets``
+    True lists in the ``spice_kernels`` subfield the kernels of every planet, and not
+    only those of Jupiter or Saturn, whichever the mission was observing at the time.
+
+``pds3_options``
+    Options for the PDS3 label parser, as described above.
+
+``astrometry``
+    True for an astrometry read, as described above.
+
+The standard OOPS overrides, ``target``, ``lightsource``, ``path``, ``frame``,
+``cadence``, ``fov``, ``calibrations``, ``timeshift``, ``navigation``, ``tracker``, and
+``parallel``, replace what the host would otherwise build. They are listed with
+:meth:`~host_cassini.oops.iss.CassiniISS.from_file`. Any other keyword, ``select``
+included, is accepted and ignored.
+
+UVIS products
+=============
+
+:meth:`~host_cassini.oops.uvis.CassiniUVIS.from_file` accepts the PDS3 label of a UVIS
+product, or the label already parsed as a :class:`~pdsparser.Pds3Label`. It reads the
+label, and unless ``astrometry`` is True, it reads the data file that the label's
+``^QUBE``, ``^TIME_SERIES``, or ``^SPECTRUM`` pointer gives, in the label's directory, in
+the label's spelling or else in lower case.
+
+.. code-block:: python
+
+   from host_cassini import CassiniUVIS
+
+   obs = CassiniUVIS.from_file('COUVIS_0009/DATA/D2004_274/EUV2004_274_01_39.LBL')
+
+A QUBE with several windows gives a tuple of observations, one per window, and any other
+product gives a single observation. Two options control this:
+
+``enclose``
+    True returns a single observation covering every window: its lines and bands are
+    the enclosing limits of the windows, and its binning is 1.
+
+``select``
+    An index, a slice, or a tuple of indices and slices that picks from the
+    observations, with a single observation treated as a tuple of one. ``select=1``
+    returns only the observation of the second window.
+
+The ``dict`` subfield holds the PDS3 label, and ``filepath`` and ``basename`` give the
+label. ``pds3_options``, ``astrometry``, and the standard overrides work as they do for
+ISS; the parser uses only the method given, by default the fast one. Any other keyword
+is accepted and ignored.
+
+VIMS cubes
+==========
+
+:meth:`~host_cassini.oops.vims.CassiniVIMS.from_file` accepts a VIMS cube in ISIS format,
+its detached PDS3 label, or the label already parsed as a :class:`~pdsparser.Pds3Label`.
+Given the cube, it reads the cube's own ISIS label and, unless ``astrometry`` is True,
+the cube's data. Given the PDS3 label, it reads the label and, unless ``astrometry`` is
+True, the cube that the label's ``^QUBE`` pointer gives, in the label's directory.
+
+.. code-block:: python
+
+   from host_cassini import CassiniVIMS
+
+   (vis, ir) = CassiniVIMS.from_file('v1484505000_1.qub')
+   ir = CassiniVIMS.from_file('v1484505000_1.qub', select='IR')
+
+The result is the pair (vis, ir), with None for a channel that was off. ``select`` picks
+from the pair by an index, a slice, a tuple of these, or the channel's name, ``'VIS'`` or
+``'IR'`` in any case.
+
+The ``dict`` subfield holds the label that was read, and ``filepath`` and ``basename``
+give the file that was passed in. ``pds3_options``, ``astrometry``, and the standard
+overrides work as they do for ISS; the parser uses only the method given, by default the
+fast one. Override ``fov`` only when ``select`` picks a single channel, because the two
+channels have different fields of view. Any other keyword is accepted and ignored.
