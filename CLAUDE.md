@@ -119,8 +119,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   that a product label has from a row's DATA_OBJECT_TYPE and window, binning and
   LINE_SAMPLES columns (#33). A QUBE whose line window bins to one line has one line;
   every QUBE has 1024 bands. An HSP sampling interval is INTEGRATION_DURATION (ms); an
-  HDAC one is 125 ms times DWELL_TIME, since its INTEGRATION_DURATION is -999. A row
-  gives one window, the enclosing one for a multi-window QUBE.
+  HDAC one is 125 ms times DWELL_TIME, since its INTEGRATION_DURATION is -999 (true of
+  1,555 of 1,559 sampled labels; 4 in COUVIS_0031/0032 give DWELL_TIME 72 and 125 ms). A
+  row gives one window, the enclosing one for a multi-window QUBE, binned by the smallest
+  binning (`from_file(enclose=True)` leaves it unbinned).
 - Every `from_index()` returns an iterator. It checks its arguments and reads and filters
   the tables itself, then returns a generator that builds each row's observation when the
   iteration reaches it, so only an error in one row waits for that row. It must not be a

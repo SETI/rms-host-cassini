@@ -35,8 +35,9 @@ _DETECTOR_LINES = 64
 
 # The length of one HDAC integration in milliseconds. An index row gives the sampling
 # interval of an HDAC time series only as DWELL_TIME, the number of integrations at each
-# filament level; SAMPLING_PARAMETER_INTERVAL in the product labels is 125 ms times
-# DWELL_TIME in every HDAC label compared (#33).
+# filament level. SAMPLING_PARAMETER_INTERVAL in the product labels is 125 ms times
+# DWELL_TIME in 1,555 of 1,559 HDAC labels sampled across all 60 volumes (every 25th HDAC
+# row); the other 4, in COUVIS_0031 and COUVIS_0032, give DWELL_TIME 72 and 125 ms (#33).
 _HDAC_INTEGRATION_MS = 125
 
 # DATA_SET_ID of a Cassini UVIS product: CO-<S, J or X>-UVIS-...
@@ -348,8 +349,9 @@ class CassiniUVIS(oops.Host):
             LINE_SAMPLES; and the sampling interval of an HSP time series from
             INTEGRATION_DURATION, in milliseconds, or of an HDAC time series from
             DWELL_TIME, in integrations of 125 milliseconds. A row gives one window, so
-            for a QUBE with several windows it gives the one window that encloses them
-            all, with the smallest binning, as :meth:`from_file` does with `enclose`.
+            for a QUBE with several windows it gives the window that encloses them all,
+            binned by the smallest of their binnings, where :meth:`from_file` with
+            `enclose` gives the same window unbinned.
             The `dict` subfield is the row, with the QUBE, TIME_SERIES or SPECTRUM object
             built from it.
 

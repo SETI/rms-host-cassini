@@ -164,12 +164,14 @@ Each row gives the observation that
   ``BAND_BINNING_FACTOR``, ``WINDOW_MINIMUM_LINE_NUMBER``,
   ``WINDOW_MAXIMUM_LINE_NUMBER``, and ``LINE_BINNING_FACTOR`` give the window and the
   binning. A row gives a single window, so for a ``QUBE`` with several windows it gives
-  the window that encloses them all, with the smallest binning, as ``enclose=True``
-  does for the product's label.
+  the window that encloses them all, binned by the smallest of their binnings. For the
+  product's label, ``enclose=True`` gives the same window unbinned.
 - For a ``QUBE`` or ``TIME_SERIES``, ``LINE_SAMPLES`` gives the number of samples.
 - For an HSP time series, ``INTEGRATION_DURATION`` gives the sampling interval in
   milliseconds. For an HDAC time series, whose ``INTEGRATION_DURATION`` is a null value,
-  ``DWELL_TIME`` gives it as a number of 125-millisecond integrations.
+  ``DWELL_TIME`` gives it as a number of 125-millisecond integrations. This matches the
+  product labels of nearly all HDAC products; a few in COUVIS_0031 and COUVIS_0032 give
+  a ``DWELL_TIME`` of 72 and an interval of 125 milliseconds.
 
 A row that lacks one of these columns, or gives no positive sampling interval, raises
 :exc:`~oops.host.HostFormatError` when the iteration reaches it. ``select`` applies to
