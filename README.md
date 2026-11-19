@@ -82,9 +82,10 @@ The hosts are:
   two were read, and where they disagree a rule for each item chooses one value. The
   pixels, and every value the two agree on, are the same from either file. Metadata that
   neither file gives, or gives only as `UNK` or `N/A`, is left out rather than set to
-  None. Both originals are kept, in the `label_dict` and `header_dict` subfields.
-  [Issue #10](https://github.com/SETI/rms-host-cassini/issues/10) lists where the two
-  files disagree and which value is used.
+  None. Each file that was read is also kept as it is: the label in the `label_dict`
+  subfield, present only when the label was read, and the image file's header in
+  `header_dict`, present only when the image file was read. The rules for each item are
+  described with `CassiniISS.from_file()` in the module documentation.
 - `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
   one for each window of a QUBE with several windows.
 - `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of

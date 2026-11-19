@@ -1007,15 +1007,18 @@ class CassiniISS(oops.Host):
 
         if not (isinstance(short, float) and isinstance(precise, float)):
             return False
-        if short == precise or precise == 0.:
+        if short == precise:
             return False
 
         # Significant digits of `short`: its zeros after the last nonzero decimal digit
-        # are not counted, and those before the decimal point are
+        # are not counted, and those before the decimal point are. The last of them sets
+        # the decimal place to which `precise` would have been rounded.
+        if short == 0.:
+            return False
         mantissa = repr(short).lower().partition('e')[0].lstrip('-')
         (whole, _, fraction) = mantissa.partition('.')
         digits = len((whole + fraction.rstrip('0')).lstrip('0'))
-        decimals = max(digits, 1) - 1 - math.floor(math.log10(abs(precise)))
+        decimals = max(digits, 1) - 1 - math.floor(math.log10(abs(short)))
 
         # Half a unit in the last digit, widened slightly so that a value which ends in 5
         # and is rounded either way, as the headers do, still counts
@@ -1068,8 +1071,10 @@ class CassiniISS(oops.Host):
         * FILTER_NAME is the list of FILTER1_NAME and FILTER2_NAME.
         * GAIN_MODE_ID is spelled in full, e.g. "12 ELECTRONS PER DN" for "12 e/DN".
         * START_TIME and STOP_TIME are IMAGE_TIME.
-        * SPACECRAFT_CLOCK_STOP_COUNT is IMAGE_NUMBER followed by ".000", if the header
-          gives IMAGE_NUMBER.
+        * SPACECRAFT_CLOCK_STOP_COUNT is IMAGE_NUMBER followed by ".000".
+
+        Each of these is made only when the header gives the keywords it comes from, and
+        SPACECRAFT_CLOCK_STOP_COUNT only when IMAGE_NUMBER is not a PDS3 null value.
         * The VICAR SHUTTER_MODE_ID is SHUTTER_STATE_ID, and SHUTTER_EVENT_TYPE is
           SHUTTER_MODE_ID.
         * BIAS is BIAS_STRIP_MEAN, CALIB_LAMP_STATE_FLAG is CALIBRATION_LAMP_STATE_FLAG,
@@ -1093,16 +1098,21 @@ class CassiniISS(oops.Host):
         pds3 = {_EARLY_VICAR_RENAMES.get(key, key): value
                 for (key, value) in dict_.items()}
         pds3['INSTRUMENT_HOST_NAME'] = 'CASSINI ORBITER'
-        pds3['INSTRUMENT_NAME'] = _EARLY_VICAR_INSTRUMENT_NAMES[dict_['INSTRUMENT_ID']]
-        pds3['FILTER_NAME'] = [dict_['FILTER1_NAME'], dict_['FILTER2_NAME']]
-        pds3['GAIN_MODE_ID'] = dict_['GAIN_MODE_ID'].replace(' e/DN',
-                                                             ' ELECTRONS PER DN')
-        pds3['START_TIME'] = dict_['IMAGE_TIME']
-        pds3['STOP_TIME'] = dict_['IMAGE_TIME']
+        instrument_id = dict_.get('INSTRUMENT_ID')
+        if instrument_id in _EARLY_VICAR_INSTRUMENT_NAMES:
+            pds3['INSTRUMENT_NAME'] = _EARLY_VICAR_INSTRUMENT_NAMES[instrument_id]
+        if 'FILTER1_NAME' in dict_ and 'FILTER2_NAME' in dict_:
+            pds3['FILTER_NAME'] = [dict_['FILTER1_NAME'], dict_['FILTER2_NAME']]
+        if isinstance(dict_.get('GAIN_MODE_ID'), str):
+            pds3['GAIN_MODE_ID'] = dict_['GAIN_MODE_ID'].replace(' e/DN',
+                                                                 ' ELECTRONS PER DN')
+        if 'IMAGE_TIME' in dict_:
+            pds3['START_TIME'] = dict_['IMAGE_TIME']
+            pds3['STOP_TIME'] = dict_['IMAGE_TIME']
 
         # The image number is the whole seconds of the clock count at the shutter's
         # close, which the labels of these images give with zero ticks
-        if 'IMAGE_NUMBER' in dict_:
+        if 'IMAGE_NUMBER' in dict_ and not CassiniISS._is_null(dict_['IMAGE_NUMBER']):
             pds3['SPACECRAFT_CLOCK_STOP_COUNT'] = f'{dict_["IMAGE_NUMBER"]}.000'
         return pds3
 

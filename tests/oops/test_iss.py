@@ -615,7 +615,7 @@ def write_pds3_image(directory: pathlib.Path, *, lines: int = 256, prefix_bytes:
              '  SAMPLE_BITS = 8', '  SAMPLE_TYPE = MSB_UNSIGNED_INTEGER',
              f'  LINE_PREFIX_BYTES = {prefix_bytes}', 'END_OBJECT = IMAGE', 'END', '']
     path = directory / 'N0000000001_1.LBL'
-    path.write_text('\r\n'.join(text))
+    path.write_text('\r\n'.join(text), newline='')
     return path
 
 
@@ -816,6 +816,24 @@ def test_early_vicar_header_takes_pds3_names() -> None:
     assert CassiniISS._pds3_dict_from_vicar(dict(_EARLY_VICAR)) == _EARLY_PDS3
 
 
+@pytest.mark.parametrize(('missing', 'absent'), [
+    ('FILTER1_NAME', 'FILTER_NAME'),
+    ('GAIN_MODE_ID', 'GAIN_MODE_ID'),
+    ('IMAGE_TIME', 'START_TIME'),
+    ('IMAGE_NUMBER', 'SPACECRAFT_CLOCK_STOP_COUNT'),
+])
+def test_early_vicar_header_without_a_keyword(missing: str, absent: str) -> None:
+    """A keyword missing from an early header leaves out what is made from it."""
+
+    header = {key: value for (key, value) in _EARLY_VICAR.items() if key != missing}
+    assert absent not in CassiniISS._pds3_dict_from_vicar(header)
+
+
+def test_early_vicar_header_with_null_image_number() -> None:
+    header = _EARLY_VICAR | {'IMAGE_NUMBER': 'UNK'}
+    assert 'SPACECRAFT_CLOCK_STOP_COUNT' not in CassiniISS._pds3_dict_from_vicar(header)
+
+
 def test_current_vicar_header_is_unchanged() -> None:
     """A header that already uses the PDS3 keywords is returned unchanged."""
 
@@ -918,10 +936,11 @@ def test_from_file_merges_items_from_both_sources(tmp_path: pathlib.Path) -> Non
     ('BIAS_STRIP_MEAN', 14.95, 14.950098, 14.950098),
     ('OPTICS_TEMPERATURE', [0.712693, 1.905708], [0.712693, 1.90571],
      [0.712693, 1.905708]),
+    ('EXPOSURE_DURATION', 6.0, 10.0, 6.0),
     ('TELEMETRY_FORMAT_ID', 'UNK', 'S_N_ER_3', 'S_N_ER_3'),
     ('TELEMETRY_FORMAT_ID', 'S_N_ER_3', 'N/A', 'S_N_ER_3'),
 ], ids=['label-by-default', 'label-by-rule', 'header-by-rule', 'header-rounded',
-        'label-rounded', 'list-rounded',
+        'label-rounded', 'list-rounded', 'not-a-rounding',
         'label-null', 'header-null'])
 def test_from_file_resolves_disagreements(tmp_path: pathlib.Path, item: str, label: Any,
                                           header: Any, expected: Any) -> None:
@@ -1029,8 +1048,9 @@ def test_from_file_finds_image_in_other_case(tmp_path: pathlib.Path) -> None:
 
     path = write_pds3_image(tmp_path, pointer_name='n0000000001_1.img')
     obs = CassiniISS.from_file(path)
-    assert obs.basename == 'N0000000001_1.IMG'
     assert obs.data[1, 2] == 258 % 256
+    # A file system that ignores case finds the label's spelling first
+    assert obs.basename.upper() == 'N0000000001_1.IMG'
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -1056,10 +1076,10 @@ def test_from_file_remote_label_astrometry_has_no_abspath(tmp_path: pathlib.Path
     """With astrometry, a remote label's image is never fetched, so abspath is absent."""
 
     label = Pds3Label(write_pds3_image(tmp_path), method='fast')
-    label.filepath = FCPath('gs://rms-test-bucket/COISS_2001/N0000000001_1.LBL')
+    label.filepath = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.LBL')
     obs = CassiniISS.from_file(label, astrometry=True)
     assert 'abspath' not in obs.subfields
-    assert obs.image_url == 'gs://rms-test-bucket/COISS_2001/N0000000001_1.IMG'
+    assert obs.image_url == 'https://rms-test.invalid/COISS_2001/N0000000001_1.IMG'
 
 ##########################################################################################
 # Parsing the PDS3 label
