@@ -94,6 +94,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - Missing C-kernel pointing raises `oops.OopsSpiceError`, checked only in `from_file`
   and only when the frame comes from SPICE (no `frame` override); `from_index` never
   checks.
+- `from_index()` names each row's image file by its full path or URL:
+  `_image_path_of_row()` takes the volume root from where the index lives (the directory
+  above `index/`, or `volumes/<series>/<VOLUME_ID>` for an index in the `metadata/`
+  tree) and drops `abspath` when a remote image was never fetched.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
   that importing `host_cassini` does not import oops. Keep any import of
   `host_cassini.oops` out of `host_cassini/__init__.py`.

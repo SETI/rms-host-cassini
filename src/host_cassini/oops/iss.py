@@ -586,15 +586,21 @@ class CassiniISS(oops.Host):
         Returns:
             list[Snapshot]: One observation per filtered row of the index, each with
             subfields `dict`, `host`, `instrument`, `detector`, `sampling`, `texp`,
-            `spice_kernels`, `filepath`, `basename`, `spice_to_frame`, `spice_frame_name`
-            and `spice_frame_id` inserted, and `filter`, `filter1`, `filter2`,
-            `gain_mode`, `label_target`, `observation_id`,
+            `spice_kernels`, `filepath`, `basename`, `image_url`, `spice_to_frame`,
+            `spice_frame_name` and `spice_frame_id` inserted; `abspath` when the image
+            file is local or has already been fetched; and `filter`, `filter1`,
+            `filter2`, `gain_mode`, `label_target`, `observation_id`,
             `spacecraft_clock_start_count` and `spacecraft_clock_stop_count` where the
-            row gives their columns. `dict` is the row in Python types (a list for an
-            array column), without the table's "_mask" entries, and without each value
-            that is masked, a PDS3 null constant, or the fill value -999, any of which is
-            treated as missing; a missing element of an array column is None. The
-            pointing is not checked, and every filtered row gives an observation.
+            row gives their columns. `filepath` and `image_url` are the full path or URL
+            of the row's image file: its FILE_SPECIFICATION_NAME within its volume,
+            whose root is the directory above an "index" directory holding the index,
+            the volume named by VOLUME_ID in the "volumes" tree beside a "metadata" tree
+            holding it, or otherwise the index's own directory. `dict` is the row in
+            Python types (a list for an array column), without the table's "_mask"
+            entries, and without each value that is masked, a PDS3 null constant, or
+            the fill value -999, any of which is treated as missing; a missing element
+            of an array column is None. The pointing is not checked, and every filtered
+            row gives an observation.
 
         Raises:
             FileNotFoundError: If `supplement` is given and does not exist.
@@ -632,15 +638,50 @@ class CassiniISS(oops.Host):
         # Create the list of Snapshot objects
         snapshots = []
         for row_dict in row_dicts:
-            fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
+            fpath = CassiniISS._image_path_of_row(FCPath(filepath), row_dict)
             obs = CassiniISS._make_snapshot(CassiniISS._row_items(row_dict),
                                             filepath=fpath, data=None,
                                             fast_distortion=fast_distortion,
                                             return_all_planets=return_all_planets,
                                             overrides=overrides, check_pointing=False)
+            if not (fpath.is_local() or fpath.get_local_path().exists()):
+                # A remote image file that was never fetched has no local path
+                obs.delete_subfield('abspath')
             snapshots.append(obs)
 
         return snapshots
+
+    @staticmethod
+    def _image_path_of_row(index_path, row_dict):
+        """The path to the image file of one row of an ISS index.
+
+        The row's FILE_SPECIFICATION_NAME is relative to the root directory of its
+        volume. An index in a volume's "index" directory (in either case) belongs to that
+        volume, whose root is the directory above it. An index in the "metadata" tree of
+        the holdings, such as metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may
+        list images of any volume of its series, so the root is the row's VOLUME_ID in
+        the "volumes" tree beside it: volumes/COISS_2xxx/<VOLUME_ID>. Any other index is
+        taken to be in its volume's root directory.
+
+        Parameters:
+            index_path (FCPath): The path to the index file or its label.
+            row_dict (dict[str, Any]): The row, which gives VOLUME_ID and
+                FILE_SPECIFICATION_NAME.
+
+        Returns:
+            FCPath: The path or URL of the image file.
+        """
+
+        directory = index_path.parent
+        if directory.name.lower() == 'index':
+            root = directory.parent
+        elif directory.parent.parent.name.lower() == 'metadata':
+            series = directory.parent
+            root = (series.parent.parent / 'volumes' / series.name
+                    / str(row_dict['VOLUME_ID']).strip())
+        else:
+            root = directory
+        return root / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
 
     @staticmethod
     def _make_snapshot(dict_, filepath, data, *, fast_distortion, return_all_planets,

@@ -1557,12 +1557,51 @@ def test_from_index_makes_one_snapshot_per_row(
     assert len(index_snapshots) == 2
 
 
-def test_from_index_filepaths(index_snapshots: list[oops.observation.Snapshot]) -> None:
-    assert [obs.filepath for obs in index_snapshots] == [
-        'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG',
-        'COISS_2009/data/1484506648_1484573295/W1484506649_1.IMG']
-    assert [obs.basename for obs in index_snapshots] == ['N1484506648_1.IMG',
-                                                         'W1484506649_1.IMG']
+def test_from_index_filepaths(tmp_path: pathlib.Path,
+                              index_snapshots: list[oops.observation.Snapshot]) -> None:
+    """With the index beside the data, its directory is the volume root."""
+
+    image_path = tmp_path / 'data/1484506648_1484573295/N1484506648_1.IMG'
+    obs = index_snapshots[0]
+    assert obs.filepath == FCPath(image_path)
+    assert obs.basename == 'N1484506648_1.IMG'
+    assert obs.abspath == image_path.resolve()
+    assert obs.image_url == image_path.as_posix()
+    assert index_snapshots[1].basename == 'W1484506649_1.IMG'
+
+
+@pytest.mark.parametrize(('index_path', 'image_path'), [
+    ('volumes/COISS_2xxx/COISS_2009/index/index.lbl',
+     'volumes/COISS_2xxx/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
+    ('volumes/COISS_2xxx/COISS_2009/INDEX/INDEX.LBL',
+     'volumes/COISS_2xxx/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
+    ('metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl',
+     'volumes/COISS_2xxx/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
+], ids=['volume-index', 'volume-index-upper', 'cumulative-metadata-index'])
+def test_from_index_finds_the_image_from_the_index(tmp_path: pathlib.Path,
+                                                   index_path: str,
+                                                   image_path: str) -> None:
+    """A row's image file is its specification within its volume, wherever the index is.
+
+    An index in a volume's index directory belongs to that volume; one in the metadata
+    tree lists rows of any volume of its series, each found by its VOLUME_ID.
+    """
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    obs = CassiniISS.from_index(tmp_path / index_path, row_dicts=rows[:1])[0]
+    assert obs.filepath == FCPath(tmp_path / image_path)
+
+
+def test_from_index_remote_image_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """A remote image that was never fetched has a URL but no abspath."""
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    index_url = 'https://rms-test.invalid/holdings/volumes/COISS_2xxx/COISS_2009/index'
+    obs = CassiniISS.from_index(index_url + '/index.lbl', row_dicts=rows[:1])[0]
+    assert obs.image_url == ('https://rms-test.invalid/holdings/volumes/COISS_2xxx/'
+                             'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG')
+    assert 'abspath' not in obs.subfields
+    assert obs.basename == 'N1484506648_1.IMG'
 
 
 def test_from_index_rows(index_snapshots: list[oops.observation.Snapshot]) -> None:
