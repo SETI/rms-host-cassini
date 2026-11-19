@@ -401,6 +401,13 @@ def test_star_lightsource_gets_alt_name_from_observation_id(
     assert 'SAO 205839' in oops.lightsource.star_lookup('b Cen').alt_names
 
 
+def test_numeric_observation_id_names_no_star(tmp_path: pathlib.Path) -> None:
+    """The archive labels give OBSERVATION_ID as a number, such as 888."""
+
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, OBSERVATION_ID=888))
+    assert obs.lightsource == 'SUN'
+
+
 @pytest.mark.usefixtures('saturn_path')
 def test_tracker_follows_label_target(tmp_path: pathlib.Path) -> None:
     obs = CassiniUVIS.from_file(write_qube(tmp_path), tracker='midtime')

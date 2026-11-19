@@ -944,6 +944,11 @@ class CassiniUVIS(oops.Host):
         an `alt_name`.
         """
 
+        # The product labels in the archive give OBSERVATION_ID as a number, which names
+        # no star (#36)
+        if not isinstance(obs_id, str):
+            return None
+
         # Extract the code, strip "UR", "OCC", etc.
         obs_code = _cassini_obs_id_code(obs_id)
         match = CassiniUVIS._OBS_CODE_CLEANUP.match(obs_code)
