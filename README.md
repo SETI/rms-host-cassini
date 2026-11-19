@@ -42,9 +42,9 @@ compute its geometry. It is a product of the
 
 - **Either file of an ISS product**: an ISS image can be opened from its VICAR image file
   or from its PDS3 label, and the pixels are identical either way.
-- **Metadata from both labels**: the values in an ISS image's PDS3 label and in its VICAR
-  header are merged under the PDS3 names, with one fixed choice for each value on which
-  they disagree.
+- **Metadata from both labels**: when an ISS image's PDS3 label is read together with
+  its image file, the values in the label and in the VICAR header are merged under the
+  PDS3 names, with one fixed choice for each value on which they disagree.
 - **Spectrometer products**: a UVIS product becomes one observation per window, and a
   VIMS cube becomes a pair of observations, one for each channel.
 - **Whole volumes at once**: a PDS3 index gives the observations of every product in a

@@ -29,6 +29,10 @@ environment variables:
     The SQLite database that lists the kernels. If it is not set, ``SPICE.db`` in the
     ``SPICE_PATH`` directory is used.
 
+The kernels and the database are the ones that OOPS itself uses. The
+`rms-oops README <https://github.com/SETI/rms-oops#environment-variables>`_ describes
+these variables and the ``SPICE`` directory of ``$OOPS_RESOURCES`` that holds them.
+
 The hosts choose the kernels through the database, by kernel set: ``CAS-SPK-*`` for the
 spacecraft's trajectory, ``CAS-CK-*`` for its attitude, and ``CAS-CK-GAPFILL`` for the
 C kernels that fill gaps in the attitude record. The database must hold these sets, and

@@ -6,8 +6,9 @@ Time
 ====
 
 An ISS image's exposure begins at ``START_TIME``, in UTC at the spacecraft, and lasts
-for ``EXPOSURE_DURATION``. The Snapshot's cadence covers exactly that interval. An image
-cannot be read if no label read gives ``START_TIME`` or ``EXPOSURE_DURATION`` (see
+for ``EXPOSURE_DURATION``. The Snapshot's default cadence covers exactly that interval.
+An image cannot
+be read if no label read gives ``START_TIME`` or ``EXPOSURE_DURATION`` (see
 :doc:`user_guide_errors`).
 
 A UVIS observation begins at the label's ``START_TIME``. Each sample of a QUBE or
@@ -38,8 +39,10 @@ check the pointing when they make an observation; if the kernels lack it, the er
 appears only when the observation's frame is evaluated.
 
 A caller that has better pointing can pass it with the ``frame`` override, for example
-as a :class:`~oops.frame.Cmatrix`. The host then uses that frame, does not load or
-consult the C kernels, and raises no error about missing pointing.
+as a :class:`~oops.frame.Cmatrix`. The host then uses that frame, neither loads nor
+checks the C kernels for the observation's time, and raises no error about missing
+pointing. The C kernels that fill gaps in the attitude record are still loaded when the
+hosts are initialized, unless ``initialize()`` is called with ``gapfill=False``.
 
 Targets and light sources
 =========================
@@ -72,7 +75,7 @@ recognizes it by the target code in ``OBSERVATION_ID``, ``RI`` or ``RA`` through
 as in ``ISS_053RI_PHOTOMDRK002_PRIME``. Its target is ``JUPITER_RING_PLANE`` before the
 Saturn tour, and ``SATURN_RING_PLANE`` during it.
 
-The light source is the Sun, except in an observation of a star:
+By default the light source is the Sun, except in an observation of a star:
 
 - When an ISS or VIMS target is ``FOMALHAUT`` or ``SPICA``, that star becomes the light
   source and the target becomes ``NONE``.
