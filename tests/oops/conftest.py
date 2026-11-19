@@ -242,8 +242,13 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     def scs2e(code: int, sclk: str) -> float:
         return float(sclk)
 
+    # The inverse of scs2e, spelled as cspyce spells a count, partition first
+    def sce2s(code: int, et: float) -> str:
+        return f'1/{et:.3f}'
+
     monkeypatch.setattr(cspyce, 'str2et', julian.tdb_from_iso)
     monkeypatch.setattr(cspyce, 'scs2e', scs2e)
+    monkeypatch.setattr(cspyce, 'sce2s', sce2s)
     monkeypatch.setattr(cspyce, 'furnsh', furnsh)
     monkeypatch.setattr(oops.spice, 'load_leap_seconds', load_leap_seconds)
     monkeypatch.setattr(Body, 'define_solar_system', staticmethod(define_solar_system))

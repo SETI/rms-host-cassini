@@ -52,11 +52,13 @@ class CassiniISS(Host):
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any) -> Snapshot: ...
     # Every row is one Snapshot, so the list is typed more narrowly than Host's, which a
-    # list's invariance does not allow. The pointing is never checked.
+    # list's invariance does not allow. The pointing is never checked. select must be
+    # None (oops.OopsValueError), and any other keyword raises oops.OopsTypeError.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
-        supplement: str | pathlib.Path | FCPath | None = None,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
+        label: Pds3Label | None = None,
         row_dicts: list[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None, fast_distortion: bool | None = True,
@@ -93,11 +95,13 @@ class CassiniUVIS(Host):
         parallel: Observation | None = None,
         **kwargs: Any) -> Observation | tuple[Observation, ...]: ...
     # `select` accepts no channel name, and the list is typed more narrowly than Host's,
-    # which a list's invariance does not allow.
+    # which a list's invariance does not allow. The supplement is required: None raises
+    # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
+    # oops.OopsTypeError.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
-        supplement: str | pathlib.Path | FCPath | object | None = None,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None,
@@ -132,11 +136,13 @@ class CassiniVIMS(Host):
         parallel: Observation | None = None, **kwargs: Any
         ) -> tuple[Observation | None, Observation | None] | Observation | None: ...
     # Every row is a (vis, ir) pair or a selection from one, so the list is typed more
-    # narrowly than Host's, which a list's invariance does not allow.
+    # narrowly than Host's, which a list's invariance does not allow. The supplement is
+    # required: None raises oops.host.HostIndexError unless row_dicts is given. Any other
+    # keyword raises oops.OopsTypeError.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
-        supplement: str | pathlib.Path | FCPath | object | None = None,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None,

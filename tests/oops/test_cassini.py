@@ -472,7 +472,7 @@ def test_no_kernels_reach_cspyce() -> None:
 @pytest.mark.parametrize(('options', 'expected'), [
     (None, {'method': 'fast', 'sources': False}),
     ({}, {'method': 'fast', 'sources': False}),
-    ({'method': 'strict', 'sources': True}, {'method': 'strict', 'sources': True}),
+    ({'method': 'strict', 'sources': True}, {'method': 'strict', 'sources': False}),
     ({'other': 1}, {'other': 1, 'method': 'fast', 'sources': False}),
 ], ids=['none', 'empty', 'given', 'other-option'])
 def test_pds3_options_with_defaults(options: dict[str, Any] | None,

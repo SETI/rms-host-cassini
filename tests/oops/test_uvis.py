@@ -7,6 +7,7 @@ import pathlib
 from collections.abc import Callable
 from typing import Any
 
+from filecache import FCPath
 import julian
 import numpy as np
 import oops
@@ -490,5 +491,68 @@ def test_detection_in_row(data_set_id: str, expected: bool) -> None:
 
 def test_detection_in_row_without_data_set_id() -> None:
     assert CassiniUVIS._detect_in_row({}) is False
+
+##########################################################################################
+# from_index
+##########################################################################################
+
+_UVIS_SPEC = 'DATA/D2005_001/FUV2005_001_00_00.LBL'
+
+
+def qube_row(directory: pathlib.Path) -> dict[str, Any]:
+    """A merged index and supplement row describing the QUBE of `write_qube()`."""
+
+    row: dict[str, Any] = Pds3Label(write_qube(directory)).as_dict()
+    row.update({'VOLUME_ID': 'COUVIS_0001', 'FILE_SPECIFICATION_NAME': _UVIS_SPEC})
+    return row
+
+
+# The supplement is required, so None is refused rather than taken as "search for it"
+def test_from_index_refuses_no_supplement() -> None:
+    with pytest.raises(oops.host.HostIndexError,
+                       match='Cassini UVIS index needs its supplemental index: '
+                             r'INDEX\.LBL'):
+        CassiniUVIS.from_index('INDEX.LBL', supplement=None)
+
+
+def test_from_index_rows_need_no_supplement(tmp_path: pathlib.Path) -> None:
+    assert len(CassiniUVIS.from_index(tmp_path / 'INDEX.LBL', supplement=None,
+                                      row_dicts=[qube_row(tmp_path)])) == 1
+
+
+def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    label = Pds3Label(['PDS_VERSION_ID = PDS3', 'END'])
+    labels: list[Any] = []
+
+    def spy(filepath: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        labels.append(kwargs['label'])
+        return []
+
+    monkeypatch.setattr(CassiniUVIS, '_read_index_rows', spy)
+    CassiniUVIS.from_index('INDEX.LBL', label=label)
+    assert labels == [label]
+
+
+def test_from_index_rejects_an_unknown_keyword() -> None:
+    with pytest.raises(oops.OopsTypeError,
+                       match=r"unexpected keyword argument for CassiniUVIS\.from_index: "
+                             r"'supplementary'"):
+        CassiniUVIS.from_index('INDEX.LBL', supplementary=None)
+
+
+def test_from_index_names_the_file_in_full(tmp_path: pathlib.Path) -> None:
+    """A row's file is its specification within its volume, found from the index."""
+
+    index = tmp_path / 'metadata/COUVIS_0xxx/COUVIS_0001/COUVIS_0001_index.lbl'
+    [obs] = CassiniUVIS.from_index(index, row_dicts=[qube_row(tmp_path)])
+    path = tmp_path / 'volumes/COUVIS_0xxx/COUVIS_0001' / _UVIS_SPEC
+    assert obs.filepath == FCPath(path)
+
+
+def test_from_index_unfetched_file_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    index = ('https://rms-test.invalid/holdings/metadata/COUVIS_0xxx/COUVIS_0001/'
+             'COUVIS_0001_index.lbl')
+    [obs] = CassiniUVIS.from_index(index, row_dicts=[qube_row(tmp_path)])
+    assert 'abspath' not in obs.subfields
 
 ##########################################################################################

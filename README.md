@@ -86,10 +86,13 @@ The hosts are:
   `UNK`, `N/A`, or the fill value `-999`, is left out rather than set to None. Each file
   that was read is also kept: the label in the `label_dict` subfield, present only when
   the label was read, and the image file's header in `header_dict`, present only when
-  the image file was read. All three dictionaries can be written as JSON. If the SPICE
-  kernels hold no pointing for an image, `from_file()` raises `oops.OopsSpiceError`,
-  unless a frame is supplied with `frame=`. The rules for each item are described with
-  `CassiniISS.from_file()` in the module documentation.
+  the image file was read. All three dictionaries can be written as JSON. For the early
+  cruise images of 1999 and 2000, whose labels give a wrong start clock count and whose
+  headers give none, the start count is computed from the stop count and the exposure
+  with the spacecraft clock kernel, from the label, the image file, or an index. If the
+  SPICE kernels hold no pointing for an image, `from_file()` raises
+  `oops.OopsSpiceError`, unless a frame is supplied with `frame=`. The rules for each
+  item are described with `CassiniISS.from_file()` in the module documentation.
 - `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
   one for each window of a QUBE with several windows.
 - `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of

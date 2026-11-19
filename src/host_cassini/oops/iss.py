@@ -6,6 +6,7 @@ import datetime
 import re
 
 import numpy as np
+import cspyce
 import julian
 
 from filecache import FCPath
@@ -13,7 +14,8 @@ from pdsparser import Pds3Label
 from vicar     import VicarError, VicarImage, VicarLabel
 
 import oops
-from ._cassini import (_Cassini, _CMATRIX_ROTATION, _fix_cassini_ring_target,
+from ._cassini import (_Cassini, _CMATRIX_ROTATION, _drop_unfetched_abspath,
+                       _fix_cassini_ring_target, _index_file_path,
                        _pds3_options_with_defaults)
 
 __all__ = ['CassiniISS']
@@ -179,6 +181,49 @@ _PDS3_NULLS = {'UNK', 'N/A', 'NULL'}
 # header" (#10).
 _FILL_VALUE = -999.
 
+# The fill values of the index tables, besides the PDS3 null constants and -999. The index
+# tables in the metadata tree declare these as null constants, and the image labels give
+# their items as UNK or N/A; the tables in the volumes' index directories write the same
+# values but declare no null constants. The masks that the table reader builds from the
+# declared constants are not used, because those labels also declare 0 the null constant
+# of BIAS_STRIP_MEAN and DARK_STRIP_MEAN, which the image labels give as the value
+# (38,006 rows). 1e32 and -1e32 are missing in every column (#28).
+_INDEX_FILL_BOUND = 1.e32
+_INDEX_FILL_VALUES = {
+    'COMMAND_SEQUENCE_NUMBER'     : 65534,
+    'ELECTRONICS_BIAS'            : 65534,
+    'EXPECTED_PACKETS'            : 65534,
+    'ORDER_NUMBER'                : 65534,
+    'PARALLEL_CLOCK_VOLTAGE_INDEX': 65534,
+    'RECEIVED_PACKETS'            : 65534,
+    'SEQUENCE_NUMBER'             : 65534,
+    'VALID_MAXIMUM'               : 65534,
+    'INST_CMPRS_PARAM'            : -2147483648,
+    'MISSING_LINES'               : -2147483648,
+    # Written only for images whose rows have no target geometry (PHASE_ANGLE -1e32):
+    # 8,464 rows each, and 10,558 for CENTER_LONGITUDE
+    'EMISSION_ANGLE'              : 0.,
+    'INCIDENCE_ANGLE'             : 0.,
+    'CENTER_LATITUDE'             : 0.,
+    'CENTER_LONGITUDE'            : 0.,
+}
+
+# The clock counts of the index rows, which the tables write with their trailing zeros
+# dropped, such as "1473199010.12" for the label's "1473199010.120" (#27)
+_INDEX_CLOCK_COUNTS = ('SPACECRAFT_CLOCK_START_COUNT', 'SPACECRAFT_CLOCK_STOP_COUNT')
+_CLOCK_COUNT = re.compile(r'(\d+)(?:\.(\d{0,3}))?')
+
+# The last of the early cruise images, the first 1250 images of COISS_1001, from
+# W1294561143_1 (1999-01-09) to N1343357427_1 (2000-07-27), whose VICAR headers predate
+# the PDS3 keywords. Their labels give START_TIME equal to STOP_TIME, and a start count
+# that is the stop count less the exposure in milliseconds counted as seconds; the
+# headers give no start count. The next image, N1347928997_3 (2000-09-18), gives both
+# counts correctly (#10, #27).
+_LAST_EARLY_CRUISE_IMAGE = 1343357427
+
+# The NAIF ID of the Cassini spacecraft clock
+_CASSINI_SCLK = -82
+
 # Items without which no Snapshot can be built.
 _REQUIRED_ITEMS = ('START_TIME', 'EXPOSURE_DURATION', 'INSTRUMENT_MODE_ID',
                    'INSTRUMENT_NAME')
@@ -251,14 +296,6 @@ _RESOLUTION_RULES = {
 
 # A time as the VICAR headers write it, ending in a "Z" that the PDS3 labels leave out
 _HEADER_TIME = re.compile(r'\d{4}-(?:\d{3}|\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d*)?Z')
-
-# The keys that the PDS3 label parser derives from a keyword, named by the keyword plus
-# one of these suffixes, such as "START_TIME_fmt", and the lists of OBJECT and GROUP names
-# that it adds. They state nothing of their own, and the VICAR header has none, so the
-# merged metadata leaves them out; label_dict keeps them.
-_DERIVED_SUFFIXES = ('_day', '_detail', '_digits', '_fmt', '_list', '_offset', '_radix',
-                     '_sec', '_source', '_type', '_unit', '_unwrap')
-_DERIVED_KEYS = ('groups', 'objects')
 
 # The order in which the PDS3 label parsers are tried, from the one requested onward
 _PARSER_METHODS = ('fast', 'strict', 'loose')
@@ -402,7 +439,12 @@ class CassiniISS(oops.Host):
               `observation_id`; and `spacecraft_clock_start_count` and
               `spacecraft_clock_stop_count`, each when the metadata gives its item.
               The clock counts are text, as the label spells them, such as
-              "1459509269.122".
+              "1459509269.122". For an early cruise image, one of the first 1250 of
+              COISS_1001, whose label gives a start count that is the stop count less the
+              exposure in milliseconds counted as seconds, and whose header gives none,
+              the stop count is IMAGE_NUMBER with zero ticks, and the start count is
+              computed from it and EXPOSURE_DURATION with the Cassini spacecraft clock
+              kernel; `dict` holds the same counts.
             * `dict`: the merged metadata, keyed by the PDS3 names. It holds every item
               of each source read, except those whose value is missing, and in a list a
               missing element is None. The VICAR headers of the early cruise images,
@@ -413,9 +455,10 @@ class CassiniISS(oops.Host):
               out. An item has the same value and type from either input wherever the
               two sources agree: times are text, as the label writes them, and sets are
               lists.
-            * `label_dict`: the PDS3 label as its parser gives it, every key included,
-              except that times are the label's text and sets are lists; when the label
-              was read.
+            * `label_dict`: every keyword of the PDS3 label as its parser gives it, with
+              times as the label's text and sets as lists; only the upper-case keywords,
+              without END or the keys that the parser adds, such as "START_TIME_fmt",
+              "^IMAGE_offset" and "objects"; when the label was read.
             * `header_dict`: every parameter of the VICAR header, keyed by its name, or,
               for one that occurs more than once, by its name and occurrence counted
               from zero, such as "TASK[1]"; when the header was read.
@@ -484,7 +527,8 @@ class CassiniISS(oops.Host):
 
         label_dict = None if label is None else CassiniISS._label_dict(label)
         header_dict = None if header is None else CassiniISS._header_dict(header)
-        dict_ = CassiniISS._merged_dict(label_dict, header_dict)
+        dict_ = CassiniISS._early_cruise_counts(
+            CassiniISS._merged_dict(label_dict, header_dict))
 
         overrides = {
             'target'      : target,
@@ -515,23 +559,30 @@ class CassiniISS(oops.Host):
         return snapshot
 
     @staticmethod
-    def from_index(filepath, *, supplement=None, row_dicts=None, pds3_options=None,
-                   filter=None, fast_distortion=True, return_all_planets=False,
-                   select=None, target=None, lightsource=None, path=None, frame=None,
-                   cadence=None, fov=None, calibrations=None, timeshift=None,
-                   navigation=None, tracker=None, parallel=None, **kwargs):
+    def from_index(filepath, *, supplement=oops.Host.SUPPLEMENT, label=None,
+                   row_dicts=None, pds3_options=None, filter=None, fast_distortion=True,
+                   return_all_planets=False, select=None, target=None, lightsource=None,
+                   path=None, frame=None, cadence=None, fov=None, calibrations=None,
+                   timeshift=None, navigation=None, tracker=None, parallel=None,
+                   **kwargs):
         """A list of Snapshot objects, one for each row of a Cassini ISS index file.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
-            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file, whose columns are merged into each row. Its
-                rows must name the same files in the same order as the index. If not
-                specified, no supplement is read; the archive has none for ISS.
+            supplement (str | pathlib.Path | FCPath | object | None, optional): The path
+                to the PDS label of a supplemental index file, whose columns are merged
+                into each row. Its rows must name the same files in the same order as the
+                index; where both tables give a column, the index value is kept. The
+                default, `oops.Host.SUPPLEMENT`, reads the file in the directory of
+                `filepath` whose name matches except that "_index" is replaced by
+                "_supplemental_index" in upper or lower case, if there is one; the
+                archive has none for ISS. None reads no supplement.
+            label (Pds3Label, optional): The PDS label of `filepath` if it has already
+                been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
                 row of the index. Include if `filepath` has already been read. If
-                provided, `supplement` is ignored.
+                provided, `supplement` and `label` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -544,9 +595,8 @@ class CassiniISS(oops.Host):
                 :class:`~oops.fov.FlatFOV`.
             return_all_planets (bool, optional): Include kernels for all planets, not just
                 Jupiter or Saturn.
-            select (int | slice | str | tuple[int | slice | str, ...], optional):
-                Accepted for compatibility with :meth:`oops.host.Host.from_index` and
-                ignored, because each row describes a single observation.
+            select (None): Must be None. Each row describes a single observation, so
+                there is nothing to select from; any other value raises an error.
             target (str | oops.Body, optional): Override for the default target Body of
                 every observation. Use "NONE" for inertial pointing, indicating that no
                 Solar System body was tracked.
@@ -581,7 +631,7 @@ class CassiniISS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments; they are accepted and ignored.
+            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             list[Snapshot]: One observation per filtered row of the index, each with
@@ -595,30 +645,55 @@ class CassiniISS(oops.Host):
             of the row's image file: its FILE_SPECIFICATION_NAME within its volume,
             whose root is the directory above an "index" directory holding the index,
             the volume named by VOLUME_ID in the "volumes" tree beside a "metadata" tree
-            holding it, or otherwise the index's own directory. `dict` is the row in
-            Python types (a list for an array column), without the table's "_mask"
-            entries, and without each value that is masked, a PDS3 null constant, or
-            the fill value -999, any of which is treated as missing; a missing element
-            of an array column is None. The pointing is not checked, and every filtered
-            row gives an observation.
+            holding it, or otherwise the index's own directory.
+
+            `dict` is the row in Python types (a list for an array column), with its
+            text stripped of padding and without the table's "_mask" entries. The
+            masks are not applied, because the metadata indexes declare real values as
+            null constants (a BIAS_STRIP_MEAN or DARK_STRIP_MEAN of 0, which the image
+            labels give). Instead these are missing: a PDS3 null constant, such as UNK
+            or NULL; the fill values -999, 1e32 and -1e32; 65534 and -2147483648 in the
+            columns whose labels give UNK or N/A for them; and an EMISSION_ANGLE,
+            INCIDENCE_ANGLE, CENTER_LATITUDE or CENTER_LONGITUDE of 0, written for an
+            image with no target geometry. A
+            missing element of an array column is None. The clock counts are spelled
+            as the labels spell them, with three digits after the point, where the
+            tables drop trailing zeros. Those of an early cruise image are computed as
+            :meth:`from_file` describes. The pointing is not checked, and every
+            filtered row gives an observation.
 
         Raises:
-            FileNotFoundError: If `supplement` is given and does not exist.
+            FileNotFoundError: If `supplement` names a file that does not exist.
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID.
-            HostIndexError: If `supplement` does not have the same rows as the index.
+            HostIndexError: If the supplement does not have the same rows as the index.
+            OopsTypeError: If a keyword argument is not one of those listed.
+            OopsValueError: If `select` is not None.
             PdsHostError: If the PDS3 label cannot be parsed.
             OSError: If `filepath` cannot be read.
             WrongHostError: If `filepath` is not a Cassini ISS index file.
         """
 
+        # A mistaken keyword, such as "supplementary", must not be dropped silently (#20)
+        if kwargs:
+            raise oops.OopsTypeError(f'unexpected keyword argument for '
+                                     f'CassiniISS.from_index: {next(iter(kwargs))!r}')
+        if select is not None:
+            raise oops.OopsValueError(f'each row of a Cassini ISS index is one '
+                                      f'observation; select must be None, not '
+                                      f'{select!r}')
+
         CassiniISS.initialize()
 
-        # Read and filter the index table
+        # Read and filter the index table. ISS needs no supplement, so the default looks
+        # for one without requiring it, while one that is named must exist.
         if row_dicts is None:
+            require = supplement is not oops.Host.SUPPLEMENT
             row_dicts = CassiniISS._read_index_rows(filepath, supplement=supplement,
-                                                    pds3_options=pds3_options)
+                                                    require_supplement=require,
+                                                    pds3_options=pds3_options,
+                                                    label=label)
         row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
 
         overrides = {
@@ -638,50 +713,15 @@ class CassiniISS(oops.Host):
         # Create the list of Snapshot objects
         snapshots = []
         for row_dict in row_dicts:
-            fpath = CassiniISS._image_path_of_row(FCPath(filepath), row_dict)
-            obs = CassiniISS._make_snapshot(CassiniISS._row_items(row_dict),
-                                            filepath=fpath, data=None,
+            fpath = _index_file_path(filepath, row_dict)
+            items = CassiniISS._early_cruise_counts(CassiniISS._row_items(row_dict))
+            obs = CassiniISS._make_snapshot(items, filepath=fpath, data=None,
                                             fast_distortion=fast_distortion,
                                             return_all_planets=return_all_planets,
                                             overrides=overrides, check_pointing=False)
-            if not (fpath.is_local() or fpath.get_local_path().exists()):
-                # A remote image file that was never fetched has no local path
-                obs.delete_subfield('abspath')
-            snapshots.append(obs)
+            snapshots.append(_drop_unfetched_abspath(obs, fpath))
 
         return snapshots
-
-    @staticmethod
-    def _image_path_of_row(index_path, row_dict):
-        """The path to the image file of one row of an ISS index.
-
-        The row's FILE_SPECIFICATION_NAME is relative to the root directory of its
-        volume. An index in a volume's "index" directory (in either case) belongs to that
-        volume, whose root is the directory above it. An index in the "metadata" tree of
-        the holdings, such as metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may
-        list images of any volume of its series, so the root is the row's VOLUME_ID in
-        the "volumes" tree beside it: volumes/COISS_2xxx/<VOLUME_ID>. Any other index is
-        taken to be in its volume's root directory.
-
-        Parameters:
-            index_path (FCPath): The path to the index file or its label.
-            row_dict (dict[str, Any]): The row, which gives VOLUME_ID and
-                FILE_SPECIFICATION_NAME.
-
-        Returns:
-            FCPath: The path or URL of the image file.
-        """
-
-        directory = index_path.parent
-        if directory.name.lower() == 'index':
-            root = directory.parent
-        elif directory.parent.parent.name.lower() == 'metadata':
-            series = directory.parent
-            root = (series.parent.parent / 'volumes' / series.name
-                    / str(row_dict['VOLUME_ID']).strip())
-        else:
-            root = directory
-        return root / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
 
     @staticmethod
     def _make_snapshot(dict_, filepath, data, *, fast_distortion, return_all_planets,
@@ -1091,10 +1131,12 @@ class CassiniISS(oops.Host):
     def _label_dict(label):
         """The content of a parsed PDS3 label, as the `label_dict` subfield gives it.
 
-        This is the label's ``as_dict()``, every key included, except that each date or
-        time is the text that the label gives it (the parser's "_fmt" form, such as
-        "2005-016T13:01:59.864") and each set is the list of its members in label order,
-        so that the dictionary can be written as JSON.
+        This is every keyword of the label's ``as_dict()``, in label order, with each
+        date or time as the text that the label gives it (the parser's "_fmt" form, such
+        as "2005-016T13:01:59.864") and each set as the list of its members in label
+        order, so that the dictionary can be written as JSON. END, any other key whose
+        value is None, and the lower-case keys that the parser adds (see :meth:`_items`)
+        are left out.
 
         Parameters:
             label (Pds3Label): The parsed PDS3 label.
@@ -1103,8 +1145,9 @@ class CassiniISS(oops.Host):
             dict[str, Any]: The label's content.
         """
 
-        # Consumers write the metadata out as JSON, which takes no datetime or set (#16)
-        return CassiniISS._json_form(label.as_dict())
+        # Consumers write the metadata out as JSON, which takes no datetime or set (#16);
+        # the derived keys are dropped only after the times and sets are read from them
+        return CassiniISS._items(CassiniISS._json_form(label.as_dict()))
 
     @staticmethod
     def _json_form(dict_):
@@ -1150,7 +1193,7 @@ class CassiniISS(oops.Host):
         # which JSON cannot take as a key; as_dict(unique=False) keeps only the first
         # (#16)
         return {(f'{key[0]}[{key[1]}]' if isinstance(key, tuple) else key): value
-                for (key, value) in header.as_dict().items()}
+                for (key, value) in header.as_dict(unique=True).items()}
 
     @staticmethod
     def _merged_dict(label_dict, header_dict):
@@ -1195,25 +1238,26 @@ class CassiniISS(oops.Host):
 
     @staticmethod
     def _items(dict_):
-        """A copy of a parsed PDS3 dictionary without the keys the parser derives.
+        """A copy of a parsed PDS3 dictionary without the keys the parser adds.
+
+        The PDS3 keywords are upper case. The keys that the parser adds are not: those it
+        derives from a keyword, named by the keyword plus a lower-case suffix, such as
+        "START_TIME_fmt", "DETECTOR_TEMPERATURE_unit" or "^IMAGE_offset", and its
+        "objects" and "groups" lists. They state nothing of their own, and the VICAR
+        header has none.
 
         Parameters:
             dict_ (dict[str, Any]): The content of a PDS3 label, or an OBJECT or GROUP
                 dictionary inside it.
 
         Returns:
-            dict[str, Any]: The keywords of `dict_`, without "objects", "groups", and
-            each key that is another key's name followed by one of the parser's suffixes,
-            such as "START_TIME_fmt" or "DETECTOR_TEMPERATURE_unit". Each dictionary
-            inside is treated the same way.
+            dict[str, Any]: The upper-case keywords of `dict_`, without any whose value
+            is None, such as END. Each dictionary inside is treated the same way.
         """
 
         result = {}
         for (key, value) in dict_.items():
-            if key in _DERIVED_KEYS:
-                continue
-            (base, _, suffix) = key.rpartition('_')
-            if base in dict_ and '_' + suffix in _DERIVED_SUFFIXES:
+            if key != key.upper() or value is None:
                 continue
             result[key] = CassiniISS._items(value) if isinstance(value, dict) else value
         return result
@@ -1224,29 +1268,103 @@ class CassiniISS(oops.Host):
 
         Parameters:
             row_dict (dict[str, Any]): The row, as the index reader gives it: NumPy values
-                and, for each column, a "_mask" entry that is True where the value is
-                missing.
+                and, for each column, a "_mask" entry.
 
         Returns:
             dict[str, Any]: The row's columns, each value converted to a Python value or,
-            for an array column, a list, and missing values removed as by
-            :meth:`_without_nulls`. A masked value counts as missing; a masked element of
-            an array is None. The "_mask" entries are left out.
+            for an array column, a list, and text stripped of its padding. A fill value
+            of the index tables (see `_INDEX_FILL_VALUES`) and every missing value in the
+            sense of :meth:`_without_nulls` is removed; such an element of an array is
+            None. The clock counts are given three digits after the point. The "_mask"
+            entries are left out and the masks are not applied.
         """
 
+        # The masks are not applied, because the metadata index labels declare real
+        # values as null constants (see _INDEX_FILL_VALUES)
         items = {}
         for (key, value) in row_dict.items():
             if key.endswith('_mask') and key[:-5] in row_dict:
                 continue
             value = np.asarray(value).tolist()
-            mask = np.asarray(row_dict.get(key + '_mask', False)).tolist()
-            if mask is True:
-                continue
-            if isinstance(mask, list):
-                value = [None if masked else item
-                         for (item, masked) in zip(value, mask, strict=True)]
+            if isinstance(value, list):
+                value = [CassiniISS._index_value(key, item) for item in value]
+            else:
+                value = CassiniISS._index_value(key, value)
             items[key] = value
+
+        # The tables drop a count's trailing zeros, which also changes the number of
+        # clock ticks it reads as: "1473199010.12" for the label's "1473199010.120"
+        for key in _INDEX_CLOCK_COUNTS:
+            match = (_CLOCK_COUNT.fullmatch(items[key]) if isinstance(items.get(key), str)
+                     else None)
+            if match:
+                items[key] = f'{match[1]}.{(match[2] or "").ljust(3, "0")}'
+
         return CassiniISS._without_nulls(items)
+
+    @staticmethod
+    def _index_value(key, value):
+        """A value of an index row, or None if it is one of the tables' fill values.
+
+        Parameters:
+            key (str): The column name.
+            value (Any): The value, or one element of an array column's value, as a
+                Python value.
+
+        Returns:
+            Any: None for 1e32 or -1e32, or for the fill value of the column in
+            `_INDEX_FILL_VALUES`; text stripped of its padding; any other value
+            unchanged.
+        """
+
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and (abs(value) == _INDEX_FILL_BOUND
+                                                or value == _INDEX_FILL_VALUES.get(key)):
+            return None
+        return value
+
+    @staticmethod
+    def _early_cruise_counts(dict_):
+        """The metadata of an image with the clock counts of an early cruise image fixed.
+
+        The labels of the early cruise images give a start count that is the stop count
+        less the exposure in milliseconds counted as seconds, and their headers give no
+        start count. The ISS index tables of COISS_1001 in the volumes' index directories
+        give the image number as the start count, and as the stop count the image number
+        less the exposure in centiseconds counted as seconds. For an image whose
+        IMAGE_NUMBER is no later than that of the last early cruise image, the stop count
+        is its IMAGE_NUMBER, the whole seconds of the clock at the shutter's close, with
+        zero ticks, as the labels give it; the start count is the clock count that the
+        Cassini spacecraft clock kernel gives for the time EXPOSURE_DURATION milliseconds
+        earlier. Without an EXPOSURE_DURATION, no start count is given.
+
+        Parameters:
+            dict_ (dict[str, Any]): The metadata, without missing values; modified in
+                place.
+
+        Returns:
+            dict[str, Any]: `dict_`.
+        """
+
+        number = dict_.get('IMAGE_NUMBER')
+        if (not isinstance(number, str) or not number.isdigit()
+                or int(number) > _LAST_EARLY_CRUISE_IMAGE):
+            return dict_
+
+        # The clock kernel names the partition, "1/1294562649.000"; the labels do not
+        stop = number + '.000'
+        dict_['SPACECRAFT_CLOCK_STOP_COUNT'] = stop
+        if 'EXPOSURE_DURATION' not in dict_:
+            dict_.pop('SPACECRAFT_CLOCK_START_COUNT', None)
+            return dict_
+
+        tdb = cspyce.scs2e(_CASSINI_SCLK, stop) - dict_['EXPOSURE_DURATION'] / 1000.
+        start = cspyce.sce2s(_CASSINI_SCLK, tdb)
+        dict_['SPACECRAFT_CLOCK_START_COUNT'] = start.rpartition('/')[2]
+        return dict_
 
     @staticmethod
     def _without_nulls(dict_):

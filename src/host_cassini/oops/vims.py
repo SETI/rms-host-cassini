@@ -22,7 +22,8 @@ from pdsparser import Pds3Label
 
 import oops
 from oops.host import HostFormatError, HostIndexError, WrongHostError
-from ._cassini import (_Cassini, _cassini_obs_id_code, _fix_cassini_ring_target,
+from ._cassini import (_Cassini, _cassini_obs_id_code, _drop_unfetched_abspath,
+                       _fix_cassini_ring_target, _index_file_path,
                        _pds3_options_with_defaults, _CMATRIX_ROTATION)
 
 __all__ = ['CassiniVIMS']
@@ -362,11 +363,11 @@ class CassiniVIMS(oops.Host):
         return oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
 
     @staticmethod
-    def from_index(filepath, *, supplement=None, label=None, row_dicts=None,
-                   pds3_options=None, filter=None, select=None, target=None,
-                   lightsource=None, path=None, frame=None, cadence=None, fov=None,
-                   calibrations=None, timeshift=None, navigation=None, tracker=None,
-                   parallel=None, **kwargs):
+    def from_index(filepath, *, supplement=oops.Host.SUPPLEMENT, label=None,
+                   row_dicts=None, pds3_options=None, filter=None, select=None,
+                   target=None, lightsource=None, path=None, frame=None, cadence=None,
+                   fov=None, calibrations=None, timeshift=None, navigation=None,
+                   tracker=None, parallel=None, **kwargs):
         """A list of Observations, one for each row of a data file index.
 
         The observations are for astrometry only and have no `data`.
@@ -390,17 +391,19 @@ class CassiniVIMS(oops.Host):
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
                 data file index.
-            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file. This file must have the same records in the
-                same order as the table described by `filepath`. If not specified, the
-                directory of `filepath` will be searched for a file whose name matches
-                except that "_index" is replaced by "_supplemental_index" in upper or
-                lower case.
+            supplement (str | pathlib.Path | FCPath | object, optional): The path to the
+                PDS label of the supplemental index file, whose columns are merged into
+                each row; a Cassini VIMS index needs its supplement. This file must
+                have the same records in the same order as the table described by
+                `filepath`. The default, `oops.Host.SUPPLEMENT`, reads the file in the
+                directory of `filepath` whose name matches except that "_index" is
+                replaced by "_supplemental_index" in upper or lower case. None raises an
+                error unless `row_dicts` is given.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
                 row of the index, if `filepath` and `supplement` have already been read.
-                If provided, `supplement` is ignored.
+                If provided, `supplement` and `label` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -447,7 +450,7 @@ class CassiniVIMS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments, ignored here except as noted below.
+            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             list[tuple[Observation | None, Observation | None] | Observation | None]:
@@ -455,24 +458,42 @@ class CassiniVIMS(oops.Host):
             channel that is off is None, or the observation or tuple of observations
             chosen by `select`.
 
+            `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
+            as a full path or URL within its volume, whose root is the directory above
+            an "index" directory holding the index, the volume named by VOLUME_ID in the
+            "volumes" tree beside a "metadata" tree holding it, or otherwise the index's
+            own directory; `abspath` is given only when that file is local or has
+            already been fetched.
+
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
                 unsupported option.
-            HostIndexError: If the supplement does not match the index row for row, or
-                if `row_dicts` has no supplemental index merged in.
+            HostIndexError: If `supplement` is None while `row_dicts` is not given, if
+                the supplement does not match the index row for row, or if `row_dicts`
+                has no supplemental index merged in.
+            OopsTypeError: If a keyword argument is not one of those listed.
             PdsHostError: If the PDS3 label cannot be parsed.
             OSError: If `filepath` or `supplement` cannot be read.
             WrongHostError: If `filepath` is not a Cassini VIMS index file.
         """
 
+        # A mistaken keyword, such as "supplementary", must not be dropped silently (#20)
+        if kwargs:
+            raise oops.OopsTypeError(f'unexpected keyword argument for '
+                                     f'CassiniVIMS.from_index: {next(iter(kwargs))!r}')
+
         CassiniVIMS.initialize()
 
-        # Read and filter the index table
+        # Read and filter the index table. The supplement is required, so None is refused
+        # rather than taken to mean "search for it" (#20).
         if row_dicts is None:
-            supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
+            if supplement is None:
+                raise HostIndexError(f'Cassini VIMS index needs its supplemental '
+                                     f'index: {filepath}')
             row_dicts = CassiniVIMS._read_index_rows(filepath, supplement=supplement,
                                                      validate=CassiniVIMS._validate_index,
-                                                     pds3_options=pds3_options)
+                                                     pds3_options=pds3_options,
+                                                     label=label)
 
         # The file path and most of the observation's parameters come from the supplement
         if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
@@ -497,12 +518,12 @@ class CassiniVIMS(oops.Host):
         # Create the list of Observations
         obslist = []
         for row_dict in row_dicts:
-            fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
+            fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
             label = CassiniVIMS._label_from_index_row(row_dict)
             pair = CassiniVIMS._make_observations(label, fpath, astrometry=True,
                                                   overrides=overrides)
             item = oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
-            obslist.append(item)
+            obslist.append(_drop_unfetched_abspath(item, fpath))
 
         return obslist
 

@@ -7,6 +7,7 @@ import pathlib
 import re
 from typing import Any
 
+from filecache import FCPath
 import julian
 import numpy as np
 import oops
@@ -387,6 +388,39 @@ def test_from_index_requires_supplement() -> None:
         CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
 
 
+# The supplement is required, so None is refused rather than taken as "search for it"
+def test_from_index_refuses_no_supplement() -> None:
+    with pytest.raises(HostIndexError,
+                       match='Cassini VIMS index needs its supplemental index: '
+                             r'INDEX\.LBL'):
+        CassiniVIMS.from_index('INDEX.LBL', supplement=None)
+
+
+def test_from_index_rows_need_no_supplement() -> None:
+    assert len(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()],
+                                      supplement=None)) == 1
+
+
+def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    label = Pds3Label(['PDS_VERSION_ID = PDS3', 'END'])
+    labels: list[Any] = []
+
+    def spy(filepath: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        labels.append(kwargs['label'])
+        return []
+
+    monkeypatch.setattr(CassiniVIMS, '_read_index_rows', spy)
+    CassiniVIMS.from_index('INDEX.LBL', label=label)
+    assert labels == [label]
+
+
+def test_from_index_rejects_an_unknown_keyword() -> None:
+    with pytest.raises(oops.OopsTypeError,
+                       match=r"unexpected keyword argument for CassiniVIMS\.from_index: "
+                             r"'supplementary'"):
+        CassiniVIMS.from_index('INDEX.LBL', supplementary=None)
+
+
 @pytest.mark.parametrize(('key', 'expected'), [
     ('POWER_STATE_FLAG', ('ON', 'ON')),
     ('EXPOSURE_DURATION', (100., 1000.)),
@@ -455,10 +489,21 @@ def test_from_index_image_matches_from_file(image_pair: Observations) -> None:
         assert tuple(from_index.fov.uv_shape.vals) == tuple(from_file.fov.uv_shape.vals)
 
 
-def test_from_index_filepath_and_no_data() -> None:
-    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()])
-    assert ir.filepath == 'COVIMS_0001/data/2005001T000000/v0000000001_1.lbl'
+def test_from_index_filepath_and_no_data(tmp_path: pathlib.Path) -> None:
+    """A row's file is its specification within its volume, found from the index."""
+
+    index = tmp_path / 'metadata/COVIMS_0xxx/COVIMS_0001/COVIMS_0001_index.lbl'
+    [(_, ir)] = CassiniVIMS.from_index(index, row_dicts=[index_row()])
+    path = tmp_path / 'volumes/COVIMS_0xxx/COVIMS_0001/data/2005001T000000'
+    assert ir.filepath == FCPath(path / 'v0000000001_1.lbl')
     assert not hasattr(ir, 'data')
+
+
+def test_from_index_unfetched_file_has_no_abspath() -> None:
+    index = ('https://rms-test.invalid/holdings/metadata/COVIMS_0xxx/COVIMS_0001/'
+             'COVIMS_0001_index.lbl')
+    [(_, ir)] = CassiniVIMS.from_index(index, row_dicts=[index_row()])
+    assert 'abspath' not in ir.subfields
 
 
 @pytest.mark.parametrize(('mode', 'steps'), [('POINT', 64), ('OCCULTATION', 4096)])

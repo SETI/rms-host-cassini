@@ -9,8 +9,10 @@ import numpy as np
 import julian
 import spicedb
 import cspyce
-import oops
 
+from filecache import FCPath
+
+import oops
 from oops.body import Body
 
 
@@ -507,12 +509,74 @@ def _fix_cassini_ring_target(target, dict_, tstart):
 def _pds3_options_with_defaults(options):
     """The PDS3 option dictionary with defaults.
 
-    Specifying sources=False prevents the Host module from overriding with sources=True.
+    Parameters:
+        options (dict[str, Any] | None): The options given by the caller, if any; not
+            modified.
+
+    Returns:
+        dict[str, Any]: A copy of `options` whose method is "fast" unless it names
+        another, and whose `sources` is False: the label text that the parser can keep for
+        each keyword is never wanted, in `label_dict` or anywhere else.
     """
 
     options = {} if options is None else options.copy()
     options.setdefault('method', 'fast')
-    options.setdefault('sources', False)
+    options['sources'] = False
     return options
+
+
+def _index_file_path(index_path, row_dict):
+    """The path to the file that one row of an index describes.
+
+    The row's FILE_SPECIFICATION_NAME is relative to the root directory of its volume. An
+    index in a volume's "index" directory (in either case) belongs to that volume, whose
+    root is the directory above it. An index in the "metadata" tree of the holdings, such
+    as metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may list files of any volume
+    of its series, so the root is the row's VOLUME_ID in the "volumes" tree beside it:
+    volumes/COISS_2xxx/<VOLUME_ID>. Any other index is taken to be in its volume's root
+    directory.
+
+    Parameters:
+        index_path (str | pathlib.Path | FCPath): The path to the index file or its label.
+        row_dict (dict[str, Any]): The row, which gives VOLUME_ID and
+            FILE_SPECIFICATION_NAME.
+
+    Returns:
+        FCPath: The path or URL of the file.
+    """
+
+    directory = FCPath(index_path).parent
+    if directory.name.lower() == 'index':
+        root = directory.parent
+    elif directory.parent.parent.name.lower() == 'metadata':
+        series = directory.parent
+        root = (series.parent.parent / 'volumes' / series.name
+                / str(row_dict['VOLUME_ID']).strip())
+    else:
+        root = directory
+    return root / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
+
+
+def _drop_unfetched_abspath(item, filepath):
+    """Remove `abspath` from the observations of an index row whose file is not local.
+
+    The local cache path of a remote file that was never fetched holds nothing, so it is
+    not given.
+
+    Parameters:
+        item (Observation | tuple | None): The observation of the row, a tuple of them
+            (each possibly None), or None.
+        filepath (FCPath): The path or URL of the row's file.
+
+    Returns:
+        Observation | tuple | None: `item`, modified in place.
+    """
+
+    if filepath.is_local() or filepath.get_local_path().exists():
+        return item
+    for obs in (item if isinstance(item, tuple) else (item,)):
+        if obs is not None and 'abspath' in obs.subfields:
+            obs.delete_subfield('abspath')
+    return item
 
 ##########################################################################################

@@ -907,6 +907,75 @@ def test_from_file_early_vicar_header(tmp_path: pathlib.Path) -> None:
     assert obs.spacecraft_clock_stop_count == '1338928383.000'
 
 ##########################################################################################
+# Clock counts of the early cruise images
+##########################################################################################
+
+# The counts of an early cruise image as its label gives them: the start count is the
+# stop count minus the exposure of 2000 ms counted as 2000 seconds. The test SCLK reads a
+# count as seconds, so the start count computed from the stop count and the exposure is
+# two seconds before it.
+_EARLY_COUNTS: dict[str, Any] = {'IMAGE_NUMBER': '1294562651',
+                                 'EXPOSURE_DURATION': 2000.,
+                                 'SPACECRAFT_CLOCK_START_COUNT': '1294560651.000',
+                                 'SPACECRAFT_CLOCK_STOP_COUNT': '1294562651.000'}
+_EARLY_START_COUNT = '1294562649.000'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_computes_the_early_cruise_start_count(tmp_path: pathlib.Path) -> None:
+    """The start count is computed from the stop count and the exposure."""
+
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, **_EARLY_COUNTS))
+    assert obs.spacecraft_clock_start_count == _EARLY_START_COUNT
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_label_dict_keeps_the_archived_start_count(
+        tmp_path: pathlib.Path) -> None:
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, **_EARLY_COUNTS))
+    assert obs.label_dict['SPACECRAFT_CLOCK_START_COUNT'] == '1294560651.000'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_early_vicar_header_gets_a_start_count(tmp_path: pathlib.Path) -> None:
+    """An early header gives no start count; it is computed from its stop count."""
+
+    obs = CassiniISS.from_file(write_vicar_image(tmp_path, keywords=_EARLY_VICAR))
+    assert obs.spacecraft_clock_start_count == '1338928382.500'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_keeps_a_later_start_count(tmp_path: pathlib.Path) -> None:
+    """An image after the early cruise keeps the start count that its label gives."""
+
+    counts = _EARLY_COUNTS | {'IMAGE_NUMBER': '1347928997',
+                              'SPACECRAFT_CLOCK_START_COUNT': '1347928994.223',
+                              'SPACECRAFT_CLOCK_STOP_COUNT': '1347928997.123'}
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, **counts))
+    assert obs.spacecraft_clock_start_count == '1347928994.223'
+
+
+@pytest.mark.parametrize(('start', 'stop'), [
+    ('1294560651.000', '1294562651.000'),
+    ('1294562651.000', '1294562631.000'),
+], ids=['metadata-index', 'volume-index'])
+def test_from_index_computes_the_early_cruise_counts(tmp_path: pathlib.Path, start: str,
+                                                     stop: str) -> None:
+    """Both counts of an early cruise row follow from its image number and exposure.
+
+    The metadata index gives the label's counts; the volume index gives the image number
+    as the start count and the image number less the exposure in centiseconds as the stop
+    count.
+    """
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | _EARLY_COUNTS | {'SPACECRAFT_CLOCK_START_COUNT': start,
+                                     'SPACECRAFT_CLOCK_STOP_COUNT': stop}
+    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    assert obs.spacecraft_clock_stop_count == '1294562651.000'
+    assert obs.spacecraft_clock_start_count == _EARLY_START_COUNT
+
+##########################################################################################
 # Metadata from the PDS3 label and the VICAR header
 ##########################################################################################
 
@@ -944,17 +1013,37 @@ def test_from_file_reads_the_sources_of_its_input(tmp_path: pathlib.Path, source
 
 
 @pytest.mark.usefixtures('initialized_iss')
-def test_from_file_label_dict_and_header_dict_are_verbatim(
-        tmp_path: pathlib.Path) -> None:
-    """label_dict and header_dict hold the two sources as their parsers give them."""
+def test_from_file_label_dict_holds_the_label_keywords(tmp_path: pathlib.Path) -> None:
+    """label_dict holds every keyword of the label, with its time as the label's text."""
 
+    path = write_pds3_image(tmp_path)
+    obs = CassiniISS.from_file(path)
+    parsed = Pds3Label(path, method='fast').as_dict()
+    keywords = [key for key in parsed
+                if key.upper() == key and parsed[key] is not None]
+    assert list(obs.label_dict) == keywords
+    assert obs.label_dict['START_TIME'] == START_TIME
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_header_dict_is_verbatim(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, header={'TELEMETRY_FORMAT_ID': 'UNK'})
     obs = CassiniISS.from_file(path)
-    expected = Pds3Label(path, method='fast').as_dict()
-    expected['START_TIME'] = expected['START_TIME_fmt']     # text, not a datetime
-    assert obs.label_dict == expected
     assert obs.header_dict == vicar.VicarLabel(image_path_of(tmp_path)).as_dict()
     assert obs.header_dict['TELEMETRY_FORMAT_ID'] == 'UNK'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('key', ['END', 'objects', 'IMAGE_TIME_fmt', 'IMAGE_TIME_day',
+                                 'IMAGE_OBSERVATION_TYPE_list', 'IMAGE_TIME_source',
+                                 '^IMAGE_offset'])
+def test_from_file_label_dict_leaves_out_parser_keys(tmp_path: pathlib.Path,
+                                                     key: str) -> None:
+    """label_dict leaves out END and the keys the parser derives from a keyword."""
+
+    path = write_pds3_image(tmp_path, extra_lines=_PDS3_FORMS)
+    obs = CassiniISS.from_file(path, pds3_options={'sources': True})
+    assert key not in obs.label_dict
 
 
 # Label lines in the PDS3 forms that the parser does not give as text: a time, a time
@@ -1029,8 +1118,6 @@ def test_from_file_dict_holds_only_items(tmp_path: pathlib.Path) -> None:
     """dict leaves out END and the keys that the label parser derives from a keyword."""
 
     obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_PDS3_FORMS))
-    assert 'END' in obs.label_dict
-    assert 'IMAGE_TIME_fmt' in obs.label_dict
     assert {'END', 'objects', 'IMAGE_TIME_fmt', 'IMAGE_TIME_day', 'IMAGE_TIME_sec',
             'IMAGE_OBSERVATION_TYPE_list'}.isdisjoint(obs.dict)
     assert 'LINES' in obs.dict['IMAGE']
@@ -1679,20 +1766,86 @@ def test_from_index_uses_given_rows(tmp_path: pathlib.Path) -> None:
 
 
 def test_from_index_dict_is_json_serializable(tmp_path: pathlib.Path) -> None:
-    """dict is the row in Python types, without the table's masks or masked values."""
+    """dict is the row in Python types, without the table's "_mask" entries."""
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     row = rows[0] | {'VALID_MAXIMUM': np.array([4095, 9896]),
-                     'VALID_MAXIMUM_mask': np.array([False, True]),
+                     'VALID_MAXIMUM_mask': np.array([False, False]),
                      'SEQUENCE_NUMBER': np.int64(2), 'SEQUENCE_NUMBER_mask': np.False_,
-                     'TARGET_DESC': np.str_('Mimas'), 'TARGET_DESC_mask': np.True_}
+                     'TARGET_DESC': np.str_('Mimas  '), 'TARGET_DESC_mask': np.False_}
     obs = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=[row])[0]
     json.dumps(obs.dict)
-    assert obs.dict['VALID_MAXIMUM'] == [4095, None]
+    assert obs.dict['VALID_MAXIMUM'] == [4095, 9896]
     assert obs.dict['SEQUENCE_NUMBER'] == 2
-    assert {'TARGET_DESC', 'TARGET_DESC_mask', 'SEQUENCE_NUMBER_mask'}.isdisjoint(
-        obs.dict)
+    assert obs.dict['TARGET_DESC'] == 'Mimas'
+    assert {'TARGET_DESC_mask', 'SEQUENCE_NUMBER_mask'}.isdisjoint(obs.dict)
     assert type(obs.label_target) is str
+
+
+@pytest.mark.parametrize(('column', 'value'), [
+    ('BIAS_STRIP_MEAN', 0.),
+    ('DARK_STRIP_MEAN', 0.),
+], ids=['bias', 'dark'])
+def test_from_index_keeps_a_value_declared_null(tmp_path: pathlib.Path, column: str,
+                                                value: float) -> None:
+    """A real value that an index label declares as its null constant is kept.
+
+    The metadata indexes declare 0 the null constant of these columns, which the image
+    labels give as the value.
+    """
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | {column: np.float64(value), column + '_mask': np.True_}
+    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    assert obs.dict[column] == value
+
+
+@pytest.mark.parametrize(('column', 'value'), [
+    ('SEQUENCE_NUMBER', 65534),
+    ('MISSING_LINES', -2147483648),
+    ('EXPECTED_MAXIMUM', 1.e32),
+    ('PHASE_ANGLE', -1.e32),
+    ('EMISSION_ANGLE', 0.),
+    ('INCIDENCE_ANGLE', 0.),
+    ('CENTER_LATITUDE', 0.),
+    ('CENTER_LONGITUDE', 0.),
+    ('CENTRAL_BODY_DISTANCE', 'NULL'),
+], ids=['65534', 'int32-min', '1e32', 'minus-1e32', 'emission-0', 'incidence-0',
+        'center-latitude-0', 'center-longitude-0', 'null-text'])
+def test_from_index_leaves_out_fill_values(tmp_path: pathlib.Path, column: str,
+                                           value: Any) -> None:
+    """A fill value of the index tables is missing, whether or not the label declares it.
+
+    The image labels give these items as UNK or N/A, or the row has no target geometry.
+    """
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    obs = CassiniISS.from_index(tmp_path / 'index.lbl',
+                                row_dicts=[rows[0] | {column: value}])[0]
+    assert column not in obs.dict
+
+
+def test_from_index_marks_a_fill_element_none(tmp_path: pathlib.Path) -> None:
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | {'VALID_MAXIMUM': np.array([4095, 65534])}
+    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    assert obs.dict['VALID_MAXIMUM'] == [4095, None]
+
+
+@pytest.mark.parametrize(('count', 'expected'), [
+    ('1473199010.12', '1473199010.120'),
+    ('1357765134.2', '1357765134.200'),
+    ('1877634636', '1877634636.000'),
+    ('1473199010.122', '1473199010.122'),
+], ids=['two-digits', 'one-digit', 'no-digits', 'three-digits'])
+def test_from_index_spells_clock_counts_as_the_labels(tmp_path: pathlib.Path, count: str,
+                                                      expected: str) -> None:
+    """The indexes drop a count's trailing zeros; the labels write three digits."""
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | {'SPACECRAFT_CLOCK_STOP_COUNT': count}
+    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    assert obs.spacecraft_clock_stop_count == expected
 
 
 def test_from_index_skips_the_pointing_check(tmp_path: pathlib.Path,
@@ -1705,11 +1858,45 @@ def test_from_index_skips_the_pointing_check(tmp_path: pathlib.Path,
     assert times == []
 
 
-def test_from_index_accepts_select(tmp_path: pathlib.Path) -> None:
-    """select is accepted and ignored, because each row is one observation."""
+@pytest.mark.parametrize('select', [0, slice(None), 'NAC'])
+def test_from_index_refuses_select(tmp_path: pathlib.Path, select: Any) -> None:
+    with pytest.raises(oops.OopsValueError,
+                       match='each row of a Cassini ISS index is one observation'):
+        CassiniISS.from_index(write_index(tmp_path), select=select)
 
-    snapshots = CassiniISS.from_index(write_index(tmp_path), select=1)
-    assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
+
+def test_from_index_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(oops.OopsTypeError,
+                       match=r"unexpected keyword argument for CassiniISS\.from_index: "
+                             r"'supplementary'"):
+        CassiniISS.from_index(write_index(tmp_path), supplementary=None)
+
+
+def test_from_index_uses_a_given_label(tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    index = write_index(tmp_path)
+    label = Pds3Label(index)
+    labels: list[Any] = []
+    read_index_rows = CassiniISS._read_index_rows
+
+    def spy(filepath: Any, **kwargs: Any) -> Any:
+        labels.append(kwargs['label'])
+        return read_index_rows(filepath, **kwargs)
+
+    monkeypatch.setattr(CassiniISS, '_read_index_rows', spy)
+    CassiniISS.from_index(index, label=label)
+    assert labels == [label]
+
+
+def test_from_index_needs_no_supplement(tmp_path: pathlib.Path) -> None:
+    """The default looks beside the index for a supplement, which ISS need not have."""
+
+    index = write_index(tmp_path).rename(tmp_path / 'COISS_2009_index.lbl')
+    assert len(CassiniISS.from_index(index)) == 2
+
+
+def test_from_index_without_a_supplement(tmp_path: pathlib.Path) -> None:
+    assert len(CassiniISS.from_index(write_index(tmp_path), supplement=None)) == 2
 
 
 def test_from_index_reads_the_supplement_given(tmp_path: pathlib.Path) -> None:

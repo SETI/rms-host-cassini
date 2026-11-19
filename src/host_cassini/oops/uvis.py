@@ -13,6 +13,7 @@ from filecache import FCPath
 import oops
 from oops.host import HostFormatError, HostIndexError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
+                       _drop_unfetched_abspath, _index_file_path,
                        _pds3_options_with_defaults)
 
 __all__ = ['CassiniUVIS']
@@ -233,11 +234,11 @@ class CassiniUVIS(oops.Host):
                                               select=select)
 
     @staticmethod
-    def from_index(filepath, *, enclose=False, supplement=None, label=None,
-                   row_dicts=None, pds3_options=None, filter=None, select=None,
-                   target=None, lightsource=None, path=None, frame=None, cadence=None,
-                   fov=None, calibrations=None, timeshift=None, navigation=None,
-                   tracker=None, parallel=None, **kwargs):
+    def from_index(filepath, *, enclose=False, supplement=oops.Host.SUPPLEMENT,
+                   label=None, row_dicts=None, pds3_options=None, filter=None,
+                   select=None, target=None, lightsource=None, path=None, frame=None,
+                   cadence=None, fov=None, calibrations=None, timeshift=None,
+                   navigation=None, tracker=None, parallel=None, **kwargs):
         """A list of Observations, one for each row of a data file index.
 
         Parameters:
@@ -249,17 +250,19 @@ class CassiniUVIS(oops.Host):
                 enclosing limits in line and band, and the binning is assumed to be 1. If
                 False and multiple windows are used, the function returns a tuple of
                 observations rather than a single observation.
-            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file. This file must have the same records in the
-                same order as the table described by `filepath`. If not specified, the
-                directory of `filepath` will be searched for a file whose name matches
-                except that "_index" is replaced by "_supplemental_index" in upper or
-                lower case.
+            supplement (str | pathlib.Path | FCPath | object, optional): The path to the
+                PDS label of the supplemental index file, whose columns are merged into
+                each row; a Cassini UVIS index needs its supplement. This file must
+                have the same records in the same order as the table described by
+                `filepath`. The default, `oops.Host.SUPPLEMENT`, reads the file in the
+                directory of `filepath` whose name matches except that "_index" is
+                replaced by "_supplemental_index" in upper or lower case. None raises an
+                error unless `row_dicts` is given.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
                 row of the index, if `filepath` and `supplement` have already been read.
-                If provided, `supplement` is ignored.
+                If provided, `supplement` and `label` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -305,30 +308,48 @@ class CassiniUVIS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments, ignored here except as noted below.
+            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             list[Observation | ObsArray]: The list of Observations or arrays of
             Observations, one for each filtered row of the index file.
 
+            `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
+            as a full path or URL within its volume, whose root is the directory above
+            an "index" directory holding the index, the volume named by VOLUME_ID in the
+            "volumes" tree beside a "metadata" tree holding it, or otherwise the index's
+            own directory; `abspath` is given only when that file is local or has
+            already been fetched.
+
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
                 unsupported option.
-            HostIndexError: If the supplement does not match the index row for row, or
-                if `row_dicts` has no supplemental index merged in.
+            HostIndexError: If `supplement` is None while `row_dicts` is not given, if
+                the supplement does not match the index row for row, or if `row_dicts`
+                has no supplemental index merged in.
+            OopsTypeError: If a keyword argument is not one of those listed.
             PdsHostError: If the PDS3 label cannot be parsed.
             OSError: If `filepath` or `supplement` cannot be read.
             WrongHostError: If `filepath` is not a Cassini UVIS index file.
         """
 
+        # A mistaken keyword, such as "supplementary", must not be dropped silently (#20)
+        if kwargs:
+            raise oops.OopsTypeError(f'unexpected keyword argument for '
+                                     f'CassiniUVIS.from_index: {next(iter(kwargs))!r}')
+
         CassiniUVIS.initialize()
 
-        # Read and filter the index table
+        # Read and filter the index table. The supplement is required, so None is refused
+        # rather than taken to mean "search for it" (#20).
         if row_dicts is None:
-            supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
+            if supplement is None:
+                raise HostIndexError(f'Cassini UVIS index needs its supplemental '
+                                     f'index: {filepath}')
             row_dicts = CassiniUVIS._read_index_rows(filepath, supplement=supplement,
                                                      validate=CassiniUVIS._validate_index,
-                                                     pds3_options=pds3_options)
+                                                     pds3_options=pds3_options,
+                                                     label=label)
 
         # The file path and most of the observation's parameters come from the supplement
         if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
@@ -353,11 +374,11 @@ class CassiniUVIS(oops.Host):
         # Create the list of Observations
         obslist = []
         for row_dict in row_dicts:
-            fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
+            fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
             item = CassiniUVIS._make_observations(row_dict, fpath, astrometry=True,
                                                   enclose=enclose, overrides=overrides,
                                                   select=select)
-            obslist.append(item)
+            obslist.append(_drop_unfetched_abspath(item, fpath))
 
         return obslist
 

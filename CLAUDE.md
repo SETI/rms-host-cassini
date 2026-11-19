@@ -86,18 +86,36 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   gives the evidence and cites issue #10, which lists every item on which the two
   disagree, with counts and the images on which the fixed source is wrong; update both
   together. `dict`, `label_dict` and `header_dict` must stay JSON-serializable: times as
-  the label's text, sets as lists, repeated VICAR parameters as `NAME[n]` keys. The array
-  always comes from the VICAR header's layout, never the label's `^IMAGE` offset, which is
-  wrong for calibrated files. Labels the parser rejects, cannot convert, or misreads go
+  the label's text, sets as lists, repeated VICAR parameters as `NAME[n]` keys. Labels
+  are always parsed with `sources=False`, and `label_dict` keeps only the upper-case
+  keywords whose values are not None: no END and none of the lower-case keys the parser
+  adds (`START_TIME_fmt`, `^IMAGE_offset`, `objects`, ...). The array always comes from
+  the VICAR header's layout, never the label's `^IMAGE` offset, which is wrong for
+  calibrated files. Labels the parser rejects, cannot convert, or misreads go
   through `_parse_fileinfo()`'s fallbacks (from the requested method on through fast,
   strict, loose) and in-memory repairs (#11).
 - Missing C-kernel pointing raises `oops.OopsSpiceError`, checked only in `from_file`
   and only when the frame comes from SPICE (no `frame` override); `from_index` never
   checks.
-- `from_index()` names each row's image file by its full path or URL:
-  `_image_path_of_row()` takes the volume root from where the index lives (the directory
-  above `index/`, or `volumes/<series>/<VOLUME_ID>` for an index in the `metadata/`
-  tree) and drops `abspath` when a remote image was never fetched.
+- Every `from_index()` names each row's file by its full path or URL:
+  `_index_file_path()` in `_cassini.py` takes the volume root from where the index
+  lives (the directory above `index/`, or `volumes/<series>/<VOLUME_ID>` for an index
+  in the `metadata/` tree), and `_drop_unfetched_abspath()` drops `abspath` when a
+  remote file was never fetched. All three follow the `oops.Host.from_index` contract
+  (#20): `supplement` defaults to `oops.Host.SUPPLEMENT` (UVIS and VIMS require it, so
+  None raises `HostIndexError` unless `row_dicts` is given; ISS has none and ignores a
+  missing one), `label=` reaches `_read_index_rows()`, and an unknown keyword raises
+  `OopsTypeError`. ISS refuses `select`, since each row is one observation; UVIS and VIMS
+  apply it, since a row gives several windows or a (vis, ir) pair.
+- `CassiniISS._row_items()` does not apply the table reader's masks: the metadata index
+  labels declare 0 the null constant of BIAS_STRIP_MEAN and DARK_STRIP_MEAN, real values
+  in the image labels. `_INDEX_FILL_VALUES` and the bound 1e32 list the fill values
+  instead, for the volume indexes (which declare none) and the metadata indexes alike. It
+  also writes the clock counts with three digits after the point, which the tables drop.
+- `CassiniISS._early_cruise_counts()` fixes the clock counts of the first 1250 images of
+  COISS_1001 (through `_LAST_EARLY_CRUISE_IMAGE`): the stop count is IMAGE_NUMBER, the
+  start count is computed from it and the exposure with the SCLK kernel (operator,
+  2026-11-19). The tests' fake `cspyce.scs2e`/`sce2s` read a count as seconds.
 - `host_cassini/__init__.py` imports the hosts lazily, through a PEP 562 `__getattr__`, so
   that importing `host_cassini` does not import oops. Keep any import of
   `host_cassini.oops` out of `host_cassini/__init__.py`.
