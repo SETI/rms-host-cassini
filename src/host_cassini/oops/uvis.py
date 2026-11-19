@@ -247,7 +247,10 @@ class CassiniUVIS(oops.Host):
                    select=None, target=None, lightsource=None, path=None, frame=None,
                    cadence=None, fov=None, calibrations=None, timeshift=None,
                    navigation=None, tracker=None, parallel=None, **kwargs):
-        """A list of Observations, one for each row of a data file index.
+        """An iterator over Observations, one entry for each row of a data file index.
+
+        The arguments are checked, and the index is read and filtered, when this method is
+        called; each row's observations are built when the iteration reaches that row.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
@@ -277,7 +280,7 @@ class CassiniUVIS(oops.Host):
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
                 values, or falls in a range defined by a tuple of two values, will be
-                included in the returned list.
+                included.
             select (int | slice | tuple[int | slice, ...], optional): An index, a slice,
                 or a tuple of indices and slices to apply to the observations of each row,
                 treating a single observation as a tuple of one. For example, if a row
@@ -319,8 +322,8 @@ class CassiniUVIS(oops.Host):
             **kwargs: Any other keyword argument raises an error.
 
         Returns:
-            list[Observation | ObsArray]: The list of Observations or arrays of
-            Observations, one for each filtered row of the index file.
+            collections.abc.Iterator[Observation | ObsArray]: The Observation or tuple
+            of Observations for each filtered row of the index file, in index order.
 
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within its volume, whose root is the directory above
@@ -379,16 +382,16 @@ class CassiniUVIS(oops.Host):
             'parallel'    : parallel,
         }
 
-        # Create the list of Observations
-        obslist = []
-        for row_dict in row_dicts:
-            fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
-            item = CassiniUVIS._make_observations(row_dict, fpath, astrometry=True,
-                                                  enclose=enclose, overrides=overrides,
-                                                  select=select)
-            obslist.append(_drop_unfetched_abspath(item, fpath))
+        # Build each row's observations when the iteration reaches it
+        def observations():
+            for row_dict in row_dicts:
+                fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
+                item = CassiniUVIS._make_observations(row_dict, fpath, astrometry=True,
+                                                      enclose=enclose,
+                                                      overrides=overrides, select=select)
+                yield _drop_unfetched_abspath(item, fpath)
 
-        return obslist
+        return observations()
 
     @staticmethod
     def _validate_index(indx_dict, supp_dict):

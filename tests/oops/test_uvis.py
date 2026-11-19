@@ -516,8 +516,8 @@ def test_from_index_refuses_no_supplement() -> None:
 
 
 def test_from_index_rows_need_no_supplement(tmp_path: pathlib.Path) -> None:
-    assert len(CassiniUVIS.from_index(tmp_path / 'INDEX.LBL', supplement=None,
-                                      row_dicts=[qube_row(tmp_path)])) == 1
+    assert len(list(CassiniUVIS.from_index(tmp_path / 'INDEX.LBL', supplement=None,
+                                           row_dicts=[qube_row(tmp_path)]))) == 1
 
 
 def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:

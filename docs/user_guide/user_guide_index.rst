@@ -7,6 +7,12 @@ reads only the index tables and opens none of the products, which makes it much 
 than opening a volume's products one at a time. Its observations have no ``data``. This
 chapter describes ISS first, then UVIS and VIMS.
 
+``from_index()`` returns an iterator, which gives the observations row by row, in the
+order of the index. The call itself checks the arguments and reads the index, so a wrong
+argument or an index that cannot be read raises an error at once. Each row's observation
+is built only when the iteration reaches that row, so an error in a row is raised there,
+after the rows before it. To build every row at once, pass the iterator to ``list()``.
+
 ISS indexes
 ===========
 
@@ -17,7 +23,10 @@ ISS indexes
 
    from host_cassini import CassiniISS
 
-   snapshots = CassiniISS.from_index('COISS_2009/index/index.lbl')
+   for snapshot in CassiniISS.from_index('COISS_2009/index/index.lbl'):
+       print(snapshot.basename, snapshot.time)
+
+   snapshots = list(CassiniISS.from_index('COISS_2009/index/index.lbl'))
 
 The index and its supplement
 ----------------------------

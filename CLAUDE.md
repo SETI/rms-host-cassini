@@ -40,8 +40,7 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   The `[tool.mypy] exclude`, the override list in `pyproject.toml` and
   `.stubtest-allowlist` keep it off the stub-less modules. Each `type: ignore[override]`
   marks a real mismatch with `oops.Host`: every `from_file` names its first parameter
-  `fileinfo`, every `from_index` returns a list narrower than the base class's, and
-  CassiniUVIS's `select` accepts no channel name.
+  `fileinfo`, and CassiniUVIS's `select` accepts no channel name.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
@@ -107,6 +106,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   missing one), `label=` reaches `_read_index_rows()`, and an unknown keyword raises
   `OopsTypeError`. ISS refuses `select`, since each row is one observation; UVIS and VIMS
   apply it, since a row gives several windows or a (vis, ir) pair.
+- Every `from_index()` returns an iterator. It checks its arguments and reads and filters
+  the tables itself, then returns a generator that builds each row's observation when the
+  iteration reaches it, so only an error in one row waits for that row. It must not be a
+  generator function, which would defer every error to the first `next()`.
 - `CassiniISS._row_items()` does not apply the table reader's masks: the metadata index
   labels declare 0 the null constant of BIAS_STRIP_MEAN and DARK_STRIP_MEAN, real values
   in the image labels. `_INDEX_FILL_VALUES` and the bound 1e32 list the fill values

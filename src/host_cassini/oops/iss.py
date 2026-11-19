@@ -570,7 +570,10 @@ class CassiniISS(oops.Host):
                    path=None, frame=None, cadence=None, fov=None, calibrations=None,
                    timeshift=None, navigation=None, tracker=None, parallel=None,
                    **kwargs):
-        """A list of Snapshot objects, one for each row of a Cassini ISS index file.
+        """An iterator over Snapshots, one for each row of a Cassini ISS index file.
+
+        The arguments are checked, and the index is read and filtered, when this method is
+        called; each row's Snapshot is built when the iteration reaches that row.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
@@ -594,7 +597,7 @@ class CassiniISS(oops.Host):
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
                 values, or falls in a range defined by a tuple of two values, will be
-                included in the returned list.
+                included.
             fast_distortion (bool | None, optional): True to use a pre-inverted
                 polynomial; False to use a dynamically solved polynomial; None to use a
                 :class:`~oops.fov.FlatFOV`.
@@ -639,18 +642,19 @@ class CassiniISS(oops.Host):
             **kwargs: Any other keyword argument raises an error.
 
         Returns:
-            list[Snapshot]: One observation per filtered row of the index, each with
-            subfields `dict`, `host`, `instrument`, `detector`, `sampling`, `texp`,
-            `spice_kernels`, `filepath`, `basename`, `image_url`, `spice_to_frame`,
-            `spice_frame_name` and `spice_frame_id` inserted; `abspath` when the image
-            file is local or has already been fetched; and `filter`, `filter1`,
-            `filter2`, `gain_mode`, `label_target`, `observation_id`,
-            `spacecraft_clock_start_count` and `spacecraft_clock_stop_count` where the
-            row gives their columns. `filepath` and `image_url` are the full path or URL
-            of the row's image file: its FILE_SPECIFICATION_NAME within its volume,
-            whose root is the directory above an "index" directory holding the index,
-            the volume named by VOLUME_ID in the "volumes" tree beside a "metadata" tree
-            holding it, or otherwise the index's own directory.
+            collections.abc.Iterator[Snapshot]: One observation per filtered row of the
+            index, in index order, each with subfields `dict`, `host`, `instrument`,
+            `detector`, `sampling`, `texp`, `spice_kernels`, `filepath`, `basename`,
+            `image_url`, `spice_to_frame`, `spice_frame_name` and `spice_frame_id`
+            inserted; `abspath` when the image file is local or has already been fetched;
+            and `filter`, `filter1`, `filter2`, `gain_mode`, `label_target`,
+            `observation_id`, `spacecraft_clock_start_count` and
+            `spacecraft_clock_stop_count` where the row gives their columns. `filepath`
+            and `image_url` are the full path or URL of the row's image file: its
+            FILE_SPECIFICATION_NAME within its volume, whose root is the directory above
+            an "index" directory holding the index, the volume named by VOLUME_ID in the
+            "volumes" tree beside a "metadata" tree holding it, or otherwise the index's
+            own directory.
 
             `dict` is the row in Python types (a list for an array column), with its
             text stripped of padding and without the table's "_mask" entries. The
@@ -671,7 +675,7 @@ class CassiniISS(oops.Host):
             FileNotFoundError: If `supplement` names a file that does not exist.
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
-                INSTRUMENT_MODE_ID.
+                INSTRUMENT_MODE_ID; raised when the iteration reaches that row.
             HostIndexError: If the supplement does not have the same rows as the index.
             OopsTypeError: If a keyword argument is not one of those listed.
             OopsValueError: If `select` is not None.
@@ -715,18 +719,19 @@ class CassiniISS(oops.Host):
             'parallel'    : parallel,
         }
 
-        # Create the list of Snapshot objects
-        snapshots = []
-        for row_dict in row_dicts:
-            fpath = _index_file_path(filepath, row_dict)
-            items = CassiniISS._early_cruise_counts(CassiniISS._row_items(row_dict))
-            obs = CassiniISS._make_snapshot(items, filepath=fpath, data=None,
-                                            fast_distortion=fast_distortion,
-                                            return_all_planets=return_all_planets,
-                                            overrides=overrides, check_pointing=False)
-            snapshots.append(_drop_unfetched_abspath(obs, fpath))
+        # Build each row's Snapshot when the iteration reaches it
+        def snapshots():
+            for row_dict in row_dicts:
+                fpath = _index_file_path(filepath, row_dict)
+                items = CassiniISS._early_cruise_counts(CassiniISS._row_items(row_dict))
+                obs = CassiniISS._make_snapshot(items, filepath=fpath, data=None,
+                                                fast_distortion=fast_distortion,
+                                                return_all_planets=return_all_planets,
+                                                overrides=overrides,
+                                                check_pointing=False)
+                yield _drop_unfetched_abspath(obs, fpath)
 
-        return snapshots
+        return snapshots()
 
     @staticmethod
     def _make_snapshot(dict_, filepath, data, *, fast_distortion, return_all_planets,

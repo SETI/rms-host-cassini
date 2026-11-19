@@ -374,7 +374,10 @@ class CassiniVIMS(oops.Host):
                    target=None, lightsource=None, path=None, frame=None, cadence=None,
                    fov=None, calibrations=None, timeshift=None, navigation=None,
                    tracker=None, parallel=None, **kwargs):
-        """A list of Observations, one for each row of a data file index.
+        """An iterator over Observations, one entry for each row of a data file index.
+
+        The arguments are checked, and the index is read and filtered, when this method is
+        called; each row's observations are built when the iteration reaches that row.
 
         The observations are for astrometry only and have no `data`.
 
@@ -416,7 +419,7 @@ class CassiniVIMS(oops.Host):
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
                 values, or falls in a range defined by a tuple of two values, will be
-                included in the returned list.
+                included.
             select (int | slice | str | tuple[int | slice | str, ...]): An index, slice,
                 or tuple of indices and slices to apply to the returned array of
                 Observation objects. For example, if the file contains two Observations
@@ -459,10 +462,10 @@ class CassiniVIMS(oops.Host):
             **kwargs: Any other keyword argument raises an error.
 
         Returns:
-            list[tuple[Observation | None, Observation | None] | Observation | None]:
-            One entry per filtered row of the index: the (vis, ir) pair, in which a
-            channel that is off is None, or the observation or tuple of observations
-            chosen by `select`.
+            collections.abc.Iterator[tuple[Observation | None, Observation | None]
+            | Observation | None]: One entry per filtered row of the index, in index
+            order: the (vis, ir) pair, in which a channel that is off is None, or the
+            observation or tuple of observations chosen by `select`.
 
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within its volume, whose root is the directory above
@@ -521,17 +524,17 @@ class CassiniVIMS(oops.Host):
             'parallel'    : parallel,
         }
 
-        # Create the list of Observations
-        obslist = []
-        for row_dict in row_dicts:
-            fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
-            label = CassiniVIMS._label_from_index_row(row_dict)
-            pair = CassiniVIMS._make_observations(label, fpath, astrometry=True,
-                                                  overrides=overrides)
-            item = oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
-            obslist.append(_drop_unfetched_abspath(item, fpath))
+        # Build each row's observations when the iteration reaches it
+        def observations():
+            for row_dict in row_dicts:
+                fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
+                row_label = CassiniVIMS._label_from_index_row(row_dict)
+                pair = CassiniVIMS._make_observations(row_label, fpath, astrometry=True,
+                                                      overrides=overrides)
+                item = oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
+                yield _drop_unfetched_abspath(item, fpath)
 
-        return obslist
+        return observations()
 
     @staticmethod
     def _validate_index(indx_dict, supp_dict):

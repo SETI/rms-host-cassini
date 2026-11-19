@@ -50,7 +50,7 @@ Reading an ISS index
 :exc:`~oops.host.HostFormatError`
     A row lacks ``START_TIME``, ``EXPOSURE_DURATION``, ``INSTRUMENT_MODE_ID``, or
     ``INSTRUMENT_NAME``, or gives a ``START_TIME`` or ``INSTRUMENT_MODE_ID`` that is not
-    valid.
+    valid. This error is raised when the iteration reaches that row.
 
 :exc:`~oops.host.HostIndexError`
     A supplement that was given does not have the same rows as the index.
@@ -105,7 +105,8 @@ UVIS and VIMS
     the index row for row; or ``row_dicts`` does not include the supplement's columns.
 
 :exc:`~oops.host.HostFormatError`
-    A row is not valid, or it describes an option that the host does not support.
+    A row is not valid, or it describes an option that the host does not support. This
+    error is raised when the iteration reaches that row.
 
 :exc:`~oops.OopsTypeError`
     A keyword argument is not one that the method accepts.

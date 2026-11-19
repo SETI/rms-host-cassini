@@ -83,7 +83,7 @@ volume:
 from host_cassini import CassiniISS, CassiniVIMS
 
 snapshot = CassiniISS.from_file('COISS_2009/data/1484506648_1484573295/N1484506648_1.LBL')
-snapshots = CassiniISS.from_index('COISS_2009/index/index.lbl')
+snapshots = list(CassiniISS.from_index('COISS_2009/index/index.lbl'))
 (vis, ir) = CassiniVIMS.from_file('v1484505000_1.qub')
 ```
 

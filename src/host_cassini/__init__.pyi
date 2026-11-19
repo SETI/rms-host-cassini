@@ -15,6 +15,7 @@ The detectors and support methods that a Host subclass overrides or calls, such 
 """
 
 import pathlib
+from collections.abc import Iterator
 from typing import Any
 
 from filecache import FCPath
@@ -51,11 +52,11 @@ class CassiniISS(Host):
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any) -> Snapshot: ...
-    # Every row is one Snapshot, so the list is typed more narrowly than Host's, which a
-    # list's invariance does not allow. The pointing is never checked. select must be
-    # None (oops.OopsValueError), and any other keyword raises oops.OopsTypeError.
+    # Every row is one Snapshot. The pointing is never checked. select must be None
+    # (oops.OopsValueError), and any other keyword raises oops.OopsTypeError. The
+    # iterator builds each row's Snapshot when it reaches the row.
     @staticmethod
-    def from_index(  # type: ignore[override]
+    def from_index(
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None,
@@ -71,7 +72,7 @@ class CassiniISS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any) -> list[Snapshot]: ...
+        parallel: Observation | None = None, **kwargs: Any) -> Iterator[Snapshot]: ...
     @staticmethod
     def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
         asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
@@ -94,10 +95,10 @@ class CassiniUVIS(Host):
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None,
         **kwargs: Any) -> Observation | tuple[Observation, ...]: ...
-    # `select` accepts no channel name, and the list is typed more narrowly than Host's,
-    # which a list's invariance does not allow. The supplement is required: None raises
+    # `select` accepts no channel name. The supplement is required: None raises
     # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
-    # oops.OopsTypeError.
+    # oops.OopsTypeError. The iterator builds each row's observations when it reaches
+    # the row.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
@@ -113,7 +114,7 @@ class CassiniUVIS(Host):
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None,
-        **kwargs: Any) -> list[Observation | ObsArray]: ...
+        **kwargs: Any) -> Iterator[Observation | ObsArray]: ...
     @staticmethod
     def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
         asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
@@ -135,12 +136,12 @@ class CassiniVIMS(Host):
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any
         ) -> tuple[Observation | None, Observation | None] | Observation | None: ...
-    # Every row is a (vis, ir) pair or a selection from one, so the list is typed more
-    # narrowly than Host's, which a list's invariance does not allow. The supplement is
-    # required: None raises oops.host.HostIndexError unless row_dicts is given. Any other
-    # keyword raises oops.OopsTypeError.
+    # Every row is a (vis, ir) pair or a selection from one. The supplement is required:
+    # None raises oops.host.HostIndexError unless row_dicts is given. Any other keyword
+    # raises oops.OopsTypeError. The iterator builds each row's observations when it
+    # reaches the row.
     @staticmethod
-    def from_index(  # type: ignore[override]
+    def from_index(
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
@@ -154,8 +155,8 @@ class CassiniVIMS(Host):
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any
-        ) -> list[tuple[Observation | None, Observation | None] | Observation
-                  | None]: ...
+        ) -> Iterator[tuple[Observation | None, Observation | None] | Observation
+                      | None]: ...
     @staticmethod
     def meshgrid_and_times(obs: Observation, *, oversample: float = 6,
         extend: float = 1.5) -> tuple[Meshgrid, Scalar]: ...

@@ -397,8 +397,8 @@ def test_from_index_refuses_no_supplement() -> None:
 
 
 def test_from_index_rows_need_no_supplement() -> None:
-    assert len(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()],
-                                      supplement=None)) == 1
+    assert len(list(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()],
+                                           supplement=None))) == 1
 
 
 def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:

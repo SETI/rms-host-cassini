@@ -3,6 +3,7 @@
 ##########################################################################################
 """Tests for the Cassini ISS host, host_cassini.oops.iss."""
 
+from collections.abc import Iterator
 import json
 import os
 import pathlib
@@ -971,7 +972,7 @@ def test_from_index_computes_the_early_cruise_counts(tmp_path: pathlib.Path, sta
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     row = rows[0] | _EARLY_COUNTS | {'SPACECRAFT_CLOCK_START_COUNT': start,
                                      'SPACECRAFT_CLOCK_STOP_COUNT': stop}
-    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
     assert obs.spacecraft_clock_stop_count == '1294562651.000'
     assert obs.spacecraft_clock_start_count == _EARLY_START_COUNT
 
@@ -1634,14 +1635,47 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def index_snapshots(tmp_path: pathlib.Path) -> list[oops.observation.Snapshot]:
-    snapshots: list[oops.observation.Snapshot] = CassiniISS.from_index(
-        write_index(tmp_path))
-    return snapshots
+    return list(CassiniISS.from_index(write_index(tmp_path)))
 
 
 def test_from_index_makes_one_snapshot_per_row(
         index_snapshots: list[oops.observation.Snapshot]) -> None:
     assert len(index_snapshots) == 2
+
+
+def test_from_index_builds_each_row_when_reached(tmp_path: pathlib.Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """The result is an iterator that builds each row's Snapshot when it reaches the row
+    and yields the rows in index order."""
+
+    built: list[Any] = []
+    make_snapshot = CassiniISS._make_snapshot
+
+    def spy(dict_: dict[str, Any], **kwargs: Any) -> Any:
+        built.append(kwargs['filepath'])
+        return make_snapshot(dict_, **kwargs)
+
+    monkeypatch.setattr(CassiniISS, '_make_snapshot', spy)
+    snapshots = CassiniISS.from_index(write_index(tmp_path))
+    assert isinstance(snapshots, Iterator)
+    assert built == []
+    first = next(snapshots)
+    assert len(built) == 1
+    assert [first.basename] + [obs.basename for obs in snapshots] == [
+        'N1484506648_1.IMG', 'W1484506649_1.IMG']
+
+
+def test_from_index_raises_a_row_error_when_reached(tmp_path: pathlib.Path) -> None:
+    """A row that cannot give a Snapshot raises when the iteration reaches it, after the
+    rows before it have been yielded."""
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    del rows[1]['START_TIME']
+    snapshots = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=rows)
+    assert next(snapshots).basename == 'N1484506648_1.IMG'
+    with pytest.raises(oops.host.HostFormatError,
+                       match=r'START_TIME is missing from .*W1484506649_1\.IMG'):
+        next(snapshots)
 
 
 def test_from_index_filepaths(tmp_path: pathlib.Path,
@@ -1675,7 +1709,7 @@ def test_from_index_finds_the_image_from_the_index(tmp_path: pathlib.Path,
     """
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
-    obs = CassiniISS.from_index(tmp_path / index_path, row_dicts=rows[:1])[0]
+    obs = next(CassiniISS.from_index(tmp_path / index_path, row_dicts=rows[:1]))
     assert obs.filepath == FCPath(tmp_path / image_path)
 
 
@@ -1684,7 +1718,7 @@ def test_from_index_remote_image_has_no_abspath(tmp_path: pathlib.Path) -> None:
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     index_url = 'https://rms-test.invalid/holdings/volumes/COISS_2xxx/COISS_2009/index'
-    obs = CassiniISS.from_index(index_url + '/index.lbl', row_dicts=rows[:1])[0]
+    obs = next(CassiniISS.from_index(index_url + '/index.lbl', row_dicts=rows[:1]))
     assert obs.image_url == ('https://rms-test.invalid/holdings/volumes/COISS_2xxx/'
                              'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG')
     assert 'abspath' not in obs.subfields
@@ -1754,7 +1788,7 @@ def test_from_index_filter(tmp_path: pathlib.Path) -> None:
 def test_from_index_leaves_out_null_items(tmp_path: pathlib.Path) -> None:
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     rows[0]['TARGET_NAME'] = 'UNK'
-    obs = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1]))
     assert 'label_target' not in obs.subfields
     assert obs.target == 'NONE'
 
@@ -1773,7 +1807,7 @@ def test_from_index_dict_is_json_serializable(tmp_path: pathlib.Path) -> None:
                      'VALID_MAXIMUM_mask': np.array([False, False]),
                      'SEQUENCE_NUMBER': np.int64(2), 'SEQUENCE_NUMBER_mask': np.False_,
                      'TARGET_DESC': np.str_('Mimas  '), 'TARGET_DESC_mask': np.False_}
-    obs = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=[row])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=[row]))
     json.dumps(obs.dict)
     assert obs.dict['VALID_MAXIMUM'] == [4095, 9896]
     assert obs.dict['SEQUENCE_NUMBER'] == 2
@@ -1796,7 +1830,7 @@ def test_from_index_keeps_a_value_declared_null(tmp_path: pathlib.Path, column: 
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     row = rows[0] | {column: np.float64(value), column + '_mask': np.True_}
-    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
     assert obs.dict[column] == value
 
 
@@ -1820,15 +1854,15 @@ def test_from_index_leaves_out_fill_values(tmp_path: pathlib.Path, column: str,
     """
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
-    obs = CassiniISS.from_index(tmp_path / 'index.lbl',
-                                row_dicts=[rows[0] | {column: value}])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl',
+                                     row_dicts=[rows[0] | {column: value}]))
     assert column not in obs.dict
 
 
 def test_from_index_marks_a_fill_element_none(tmp_path: pathlib.Path) -> None:
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     row = rows[0] | {'VALID_MAXIMUM': np.array([4095, 65534])}
-    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
     assert obs.dict['VALID_MAXIMUM'] == [4095, None]
 
 
@@ -1844,7 +1878,7 @@ def test_from_index_spells_clock_counts_as_the_labels(tmp_path: pathlib.Path, co
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
     row = rows[0] | {'SPACECRAFT_CLOCK_STOP_COUNT': count}
-    obs = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row])[0]
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
     assert obs.spacecraft_clock_stop_count == expected
 
 
@@ -1853,13 +1887,15 @@ def test_from_index_skips_the_pointing_check(tmp_path: pathlib.Path,
     """A row is kept, unchecked, even when the C kernels hold no pointing for it."""
 
     times = remove_pointing(monkeypatch)
-    snapshots = CassiniISS.from_index(write_index(tmp_path))
+    snapshots = list(CassiniISS.from_index(write_index(tmp_path)))
     assert len(snapshots) == 2
     assert times == []
 
 
 @pytest.mark.parametrize('select', [0, slice(None), 'NAC'])
 def test_from_index_refuses_select(tmp_path: pathlib.Path, select: Any) -> None:
+    """The call itself raises, before any iteration."""
+
     with pytest.raises(oops.OopsValueError,
                        match='each row of a Cassini ISS index is one observation'):
         CassiniISS.from_index(write_index(tmp_path), select=select)
@@ -1892,11 +1928,11 @@ def test_from_index_needs_no_supplement(tmp_path: pathlib.Path) -> None:
     """The default looks beside the index for a supplement, which ISS need not have."""
 
     index = write_index(tmp_path).rename(tmp_path / 'COISS_2009_index.lbl')
-    assert len(CassiniISS.from_index(index)) == 2
+    assert len(list(CassiniISS.from_index(index))) == 2
 
 
 def test_from_index_without_a_supplement(tmp_path: pathlib.Path) -> None:
-    assert len(CassiniISS.from_index(write_index(tmp_path), supplement=None)) == 2
+    assert len(list(CassiniISS.from_index(write_index(tmp_path), supplement=None))) == 2
 
 
 def test_from_index_reads_the_supplement_given(tmp_path: pathlib.Path) -> None:
