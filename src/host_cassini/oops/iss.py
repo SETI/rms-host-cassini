@@ -280,10 +280,11 @@ class CassiniISS(oops.Host):
         that a source gives as a PDS3 null value ("UNK", "N/A" or "NULL") counts as
         missing from it, and an item missing from every source read is left out: its
         subfield is absent, never None. Where the label and the header give different
-        values for an item, a rule for that item chooses one; the label wins unless the
-        header's value is the more precise number or the item's rule names the header.
-        Times, field of view, pointing, target and light source are computed from the
-        merged metadata.
+        values for an item, a rule for that item chooses one. A value that is the other
+        rounded to fewer digits loses to it. Otherwise the label wins, except for
+        METHOD_DESC, where the header's value keeps the semicolons, commas and "@" that
+        the labels replace. Times, field of view, pointing, target and light source are
+        computed from the merged metadata.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
