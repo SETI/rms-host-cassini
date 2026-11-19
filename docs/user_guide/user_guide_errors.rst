@@ -53,7 +53,8 @@ Reading an ISS index
     valid. This error is raised when the iteration reaches that row.
 
 :exc:`~oops.host.HostIndexError`
-    A supplement that was given does not have the same rows as the index.
+    A supplement that was given does not list the same images as the index, or, when
+    the two tables list the images in different orders, one of them lists an image twice.
 
 :exc:`FileNotFoundError`
     A supplement that was given does not exist.
@@ -101,12 +102,16 @@ UVIS and VIMS
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise:
 
 :exc:`~oops.host.HostIndexError`
-    ``supplement`` is None and ``row_dicts`` is not given; the supplement does not match
-    the index row for row; or ``row_dicts`` does not include the supplement's columns.
+    ``supplement`` is None and ``row_dicts`` is not given; a product appears in only one
+    of the index and the supplement; the two tables list the products in different orders
+    and one of them lists a product twice; a pair of rows names different files; or
+    ``row_dicts`` does not include the supplement's columns.
 
 :exc:`~oops.host.HostFormatError`
-    A row is not valid, or it describes an option that the host does not support. This
-    error is raised when the iteration reaches that row.
+    A row is not valid, it describes an option that the host does not support, or, for
+    UVIS, it lacks a column that its observation needs or gives no positive sampling
+    interval for a time series. This error is raised when the iteration reaches that
+    row.
 
 :exc:`~oops.OopsTypeError`
     A keyword argument is not one that the method accepts.

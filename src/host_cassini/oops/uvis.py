@@ -28,6 +28,17 @@ _DEBUG = False      # True to assert that the data array must have null values o
                     # active windows
 _ARRAY_NULL = 65535  # Incorrectly -1 in many labels
 
+# The bands and lines of the EUV and FUV detectors, which are the full extent of every
+# QUBE; an index row gives only the window within them
+_DETECTOR_BANDS = 1024
+_DETECTOR_LINES = 64
+
+# The length of one HDAC integration in milliseconds. An index row gives the sampling
+# interval of an HDAC time series only as DWELL_TIME, the number of integrations at each
+# filament level; SAMPLING_PARAMETER_INTERVAL in the product labels is 125 ms times
+# DWELL_TIME in every HDAC label compared (#33).
+_HDAC_INTEGRATION_MS = 125
+
 # DATA_SET_ID of a Cassini UVIS product: CO-<S, J or X>-UVIS-...
 _UVIS_DATA_SET_ID = re.compile(r'CO-[A-Z]-UVIS-')
 
@@ -263,12 +274,15 @@ class CassiniUVIS(oops.Host):
                 observations rather than a single observation.
             supplement (str | pathlib.Path | FCPath | object, optional): The path to the
                 PDS label of the supplemental index file, whose columns are merged into
-                each row; a Cassini UVIS index needs its supplement. This file must
-                have the same records in the same order as the table described by
-                `filepath`. The default, `oops.Host.SUPPLEMENT`, reads the file in the
-                directory of `filepath` whose name matches except that "_index" is
-                replaced by "_supplemental_index" in upper or lower case. None raises an
-                error unless `row_dicts` is given.
+                each row; a Cassini UVIS index needs its supplement. Its rows must name
+                the same products as the index's: they are paired by position where the
+                two tables list the products in the same order, and otherwise by the
+                product that each names, the index's FILE_NAME and the supplement's
+                VOLUME_ID and FILE_SPECIFICATION_NAME. The default,
+                `oops.Host.SUPPLEMENT`, reads the file in the directory of `filepath`
+                whose name matches except that "_index" is replaced by
+                "_supplemental_index" in upper or lower case. None raises an error
+                unless `row_dicts` is given.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
@@ -325,6 +339,20 @@ class CassiniUVIS(oops.Host):
             collections.abc.Iterator[Observation | ObsArray]: The Observation or tuple
             of Observations for each filtered row of the index file, in index order.
 
+            Each row's observation is the one that :meth:`from_file` gives for the
+            product with `astrometry` True, built from the row's columns: the kind of
+            product from DATA_OBJECT_TYPE; the window and binning of a QUBE or SPECTRUM
+            from MINIMUM_BAND_NUMBER, MAXIMUM_BAND_NUMBER, BAND_BINNING_FACTOR,
+            WINDOW_MINIMUM_LINE_NUMBER, WINDOW_MAXIMUM_LINE_NUMBER and
+            LINE_BINNING_FACTOR; the number of samples of a QUBE or TIME_SERIES from
+            LINE_SAMPLES; and the sampling interval of an HSP time series from
+            INTEGRATION_DURATION, in milliseconds, or of an HDAC time series from
+            DWELL_TIME, in integrations of 125 milliseconds. A row gives one window, so
+            for a QUBE with several windows it gives the one window that encloses them
+            all, with the smallest binning, as :meth:`from_file` does with `enclose`.
+            The `dict` subfield is the row, with the QUBE, TIME_SERIES or SPECTRUM object
+            built from it.
+
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within its volume, whose root is the directory above
             an "index" directory holding the index, the volume named by VOLUME_ID in the
@@ -334,10 +362,16 @@ class CassiniUVIS(oops.Host):
 
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
-                unsupported option.
-            HostIndexError: If `supplement` is None while `row_dicts` is not given, if
-                the supplement does not match the index row for row, or if `row_dicts`
-                has no supplemental index merged in.
+                unsupported option, if it lacks a column that its observation needs, or
+                if it gives no positive sampling interval for a time series; raised when
+                the iteration reaches that row.
+            HostIndexError: If `supplement` is None while `row_dicts` is not given; if an
+                index row has no supplement row or a supplement row belongs to no index
+                row; if, where the two tables list the products in different orders,
+                either lists a product twice; if a pair of rows fails the check that the
+                index's FILE_NAME contains the supplement's VOLUME_ID and
+                FILE_SPECIFICATION_NAME; or if `row_dicts` has no supplemental index
+                merged in.
             OopsTypeError: If a keyword argument is not one of those listed.
             PdsHostError: If the PDS3 label cannot be parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -357,10 +391,14 @@ class CassiniUVIS(oops.Host):
             if supplement is None:
                 raise HostIndexError(f'Cassini UVIS index needs its supplemental '
                                      f'index: {filepath}')
-            row_dicts = CassiniUVIS._read_index_rows(filepath, supplement=supplement,
-                                                     validate=CassiniUVIS._validate_index,
-                                                     pds3_options=pds3_options,
-                                                     label=label)
+            # The index names each product as "/COUVIS_0001/DATA/.../X.LBL" and the
+            # supplement by its volume and "DATA/.../X.LBL". The supplements of 54 of
+            # the 60 volumes list the products in another order (#30).
+            row_dicts = CassiniUVIS._read_index_rows(
+                filepath, supplement=supplement, validate=CassiniUVIS._validate_index,
+                file_key='FILE_NAME', supplement_key=('VOLUME_ID',
+                                                      'FILE_SPECIFICATION_NAME'),
+                pds3_options=pds3_options, label=label)
 
         # The file path and most of the observation's parameters come from the supplement
         if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
@@ -386,7 +424,8 @@ class CassiniUVIS(oops.Host):
         def observations():
             for row_dict in row_dicts:
                 fpath = _index_file_path(filepath, row_dict)     # full path or URL (#29)
-                item = CassiniUVIS._make_observations(row_dict, fpath, astrometry=True,
+                row_label = CassiniUVIS._label_from_index_row(row_dict, fpath)
+                item = CassiniUVIS._make_observations(row_label, fpath, astrometry=True,
                                                       enclose=enclose,
                                                       overrides=overrides, select=select)
                 yield _drop_unfetched_abspath(item, fpath)
@@ -414,6 +453,91 @@ class CassiniUVIS(oops.Host):
                                  f'"{full_path}"')
 
         return True
+
+    @staticmethod
+    def _label_from_index_row(row_dict, filepath):
+        """A UVIS label dictionary built from one row of an index merged with its
+        supplemental index.
+
+        A row names the kind of product in DATA_OBJECT_TYPE, where a product label has
+        a QUBE, TIME_SERIES or SPECTRUM object, so the object is built from the row's
+        columns (#33).
+
+        Parameters:
+            row_dict (dict[str, Any]): The merged row. It is not modified.
+            filepath (FCPath): The product's PDS3 label, for error messages.
+
+        Returns:
+            dict[str, Any]: A copy of `row_dict`, plus the object that DATA_OBJECT_TYPE
+            names, with the keywords of that object that :meth:`_make_observations`
+            reads, as :meth:`from_index` describes.
+
+        Raises:
+            HostFormatError: If the row lacks a column that its object needs, names
+                another kind of product, or gives no positive sampling interval for a
+                time series.
+        """
+
+        def column(name):
+            if name not in row_dict:
+                raise HostFormatError(f'Cassini UVIS index row has no {name}: {filepath}')
+            return row_dict[name]
+
+        kind = column('DATA_OBJECT_TYPE')
+        label = dict(row_dict)
+
+        if kind == 'TIME_SERIES':
+            if column('PRODUCT_ID').startswith('HDAC'):
+                interval = _HDAC_INTEGRATION_MS * int(column('DWELL_TIME'))
+            else:
+                interval = float(column('INTEGRATION_DURATION'))
+            if interval <= 0:
+                raise HostFormatError(f'Cassini UVIS index row gives no sampling '
+                                      f'interval: {filepath}')
+            label['TIME_SERIES'] = {
+                'ROWS'                       : int(column('LINE_SAMPLES')),
+                'COLUMNS'                    : 1,
+                'SAMPLING_PARAMETER_UNIT'    : 'MILLISECOND',
+                'SAMPLING_PARAMETER_INTERVAL': interval,
+            }
+            return label
+
+        if kind not in ('QUBE', 'SPECTRUM'):
+            raise HostFormatError(f'unsupported Cassini UVIS DATA_OBJECT_TYPE {kind!r}: '
+                                  f'{filepath}')
+
+        line0 = int(column('WINDOW_MINIMUM_LINE_NUMBER'))
+        line1 = int(column('WINDOW_MAXIMUM_LINE_NUMBER'))
+        line_bin = int(column('LINE_BINNING_FACTOR'))
+        band0 = int(column('MINIMUM_BAND_NUMBER'))
+        band1 = int(column('MAXIMUM_BAND_NUMBER'))
+        band_bin = int(column('BAND_BINNING_FACTOR'))
+
+        if kind == 'SPECTRUM':
+            label['SPECTRUM'] = {
+                'ROWS'              : (band1 - band0 + 1) // band_bin,
+                'COLUMNS'           : 1,
+                'UL_CORNER_SPATIAL' : line0,
+                'LR_CORNER_SPATIAL' : line1,
+                'BIN_SPATIAL'       : line_bin,
+                'UL_CORNER_SPECTRAL': band0,
+                'LR_CORNER_SPECTRAL': band1,
+                'BIN_SPECTRAL'      : band_bin,
+            }
+            return label
+
+        # A qube whose line window bins to a single line was stored with one line
+        lines = 1 if line1 - line0 + 1 == line_bin else _DETECTOR_LINES
+        label['QUBE'] = {
+            'CORE_ITEMS'    : [_DETECTOR_BANDS, lines, int(column('LINE_SAMPLES'))],
+            'UL_CORNER_LINE': line0,
+            'LR_CORNER_LINE': line1,
+            'LINE_BIN'      : line_bin,
+            'UL_CORNER_BAND': band0,
+            'LR_CORNER_BAND': band1,
+            'BAND_BIN'      : band_bin,
+        }
+        return label
 
     @staticmethod
     def _make_observations(label, filepath, *, astrometry, enclose, overrides,

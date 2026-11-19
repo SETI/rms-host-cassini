@@ -106,6 +106,21 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   missing one), `label=` reaches `_read_index_rows()`, and an unknown keyword raises
   `OopsTypeError`. ISS refuses `select`, since each row is one observation; UVIS and VIMS
   apply it, since a row gives several windows or a (vis, ir) pair.
+- `oops.Host._read_index_rows()` pairs index and supplement rows by position when the two
+  tables list the same files in the same order, and otherwise by file. UVIS passes
+  `file_key='FILE_NAME'` and `supplement_key=('VOLUME_ID', 'FILE_SPECIFICATION_NAME')`
+  (54 of 60 volumes are out of order, #30); VIMS passes `file_key=('VOLUME_ID',
+  'PATH_NAME', 'FILE_NAME')` and the same `supplement_key` (24 of 94 volumes and
+  COVIMS_0999, #34; the index names the `.qub`, the supplement the `.lbl`, and the
+  comparison ignores the extension). Each host's `_validate_index` still checks every
+  pair. `oops.Host.from_index()` identifies the host from the index label (or the first
+  row) and passes the call to the host's `from_index()`, which reads the rows.
+- `CassiniUVIS._label_from_index_row()` builds the QUBE, TIME_SERIES or SPECTRUM object
+  that a product label has from a row's DATA_OBJECT_TYPE and window, binning and
+  LINE_SAMPLES columns (#33). A QUBE whose line window bins to one line has one line;
+  every QUBE has 1024 bands. An HSP sampling interval is INTEGRATION_DURATION (ms); an
+  HDAC one is 125 ms times DWELL_TIME, since its INTEGRATION_DURATION is -999. A row
+  gives one window, the enclosing one for a multi-window QUBE.
 - Every `from_index()` returns an iterator. It checks its arguments and reads and filters
   the tables itself, then returns a generator that builds each row's observation when the
   iteration reaches it, so only an error in one row waits for that row. It must not be a

@@ -402,12 +402,15 @@ class CassiniVIMS(oops.Host):
                 data file index.
             supplement (str | pathlib.Path | FCPath | object, optional): The path to the
                 PDS label of the supplemental index file, whose columns are merged into
-                each row; a Cassini VIMS index needs its supplement. This file must
-                have the same records in the same order as the table described by
-                `filepath`. The default, `oops.Host.SUPPLEMENT`, reads the file in the
-                directory of `filepath` whose name matches except that "_index" is
-                replaced by "_supplemental_index" in upper or lower case. None raises an
-                error unless `row_dicts` is given.
+                each row; a Cassini VIMS index needs its supplement. Its rows must name
+                the same cubes as the index's: they are paired by position where the two
+                tables list the cubes in the same order, and otherwise by the cube that
+                each names, the index's VOLUME_ID, PATH_NAME and FILE_NAME and the
+                supplement's VOLUME_ID and FILE_SPECIFICATION_NAME, compared without the
+                file name's extension. The default, `oops.Host.SUPPLEMENT`, reads the
+                file in the directory of `filepath` whose name matches except that
+                "_index" is replaced by "_supplemental_index" in upper or lower case.
+                None raises an error unless `row_dicts` is given.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
@@ -477,9 +480,11 @@ class CassiniVIMS(oops.Host):
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
                 unsupported option.
-            HostIndexError: If `supplement` is None while `row_dicts` is not given, if
-                the supplement does not match the index row for row, or if `row_dicts`
-                has no supplemental index merged in.
+            HostIndexError: If `supplement` is None while `row_dicts` is not given; if an
+                index row has no supplement row or a supplement row belongs to no index
+                row; if, where the two tables list the cubes in different orders, either
+                lists a cube twice; if a pair of rows gives different VOLUME_IDs or file
+                names; or if `row_dicts` has no supplemental index merged in.
             OopsTypeError: If a keyword argument is not one of those listed.
             PdsHostError: If the PDS3 label cannot be parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -499,10 +504,15 @@ class CassiniVIMS(oops.Host):
             if supplement is None:
                 raise HostIndexError(f'Cassini VIMS index needs its supplemental '
                                      f'index: {filepath}')
-            row_dicts = CassiniVIMS._read_index_rows(filepath, supplement=supplement,
-                                                     validate=CassiniVIMS._validate_index,
-                                                     pds3_options=pds3_options,
-                                                     label=label)
+            # The index names each cube by PATH_NAME and FILE_NAME, its data file, as
+            # "/data/.../v1294638283_1.qub", and the supplement by its label,
+            # "data/.../v1294638283_1.lbl". The supplements of 24 of the 94 volumes and
+            # of COVIMS_0999 list the cubes in another order (#34).
+            row_dicts = CassiniVIMS._read_index_rows(
+                filepath, supplement=supplement, validate=CassiniVIMS._validate_index,
+                file_key=('VOLUME_ID', 'PATH_NAME', 'FILE_NAME'),
+                supplement_key=('VOLUME_ID', 'FILE_SPECIFICATION_NAME'),
+                pds3_options=pds3_options, label=label)
 
         # The file path and most of the observation's parameters come from the supplement
         if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:

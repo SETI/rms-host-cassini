@@ -44,8 +44,9 @@ The archive has no supplemental index for ISS, so the host needs none. The
   ``_supplemental_index`` in place of ``_index``, in upper or lower case, if there is
   one.
 - A path or URL reads that file instead, and the file must exist. Its rows must list
-  the same images in the same order as the index, and where both tables give a column,
-  the index's value is kept.
+  the same images as the index, in the same order or paired by ``VOLUME_ID`` and
+  ``FILE_SPECIFICATION_NAME`` as described for UVIS below, and where both tables give a
+  column, the index's value is kept.
 - None reads no supplement.
 
 Other arguments
@@ -140,13 +141,39 @@ and most of each observation's values come from it:
 - None raises :exc:`~oops.host.HostIndexError`, unless ``row_dicts`` is given. Rows
   given in ``row_dicts`` must include the supplement's columns.
 
-The two tables must list the same products in the same order. For each pair of rows,
-the index's ``FILE_NAME`` must contain the supplement's ``VOLUME_ID`` and
-``FILE_SPECIFICATION_NAME``.
+The two tables must list the same products, but in most volumes the supplement lists
+them in another order. When the two tables list the products in the same order, each
+index row is merged with the supplement row in the same position. Otherwise, each index
+row is merged with the supplement row for the same product: the index names it by
+``FILE_NAME``, as in ``/COUVIS_0001/DATA/D1999_007/HSP1999_007_16_53.LBL``, and the
+supplement by ``VOLUME_ID`` and ``FILE_SPECIFICATION_NAME``, as in ``COUVIS_0001`` and
+``DATA/D1999_007/HSP1999_007_16_53.LBL``. The paths are compared without regard to
+case or a leading slash. The host raises :exc:`~oops.host.HostIndexError` if a product
+appears in only one of the tables, or if, when the orders differ, either table lists a
+product twice; the error names the first few such products and both tables. For each
+pair of rows, the index's ``FILE_NAME`` must also contain the supplement's ``VOLUME_ID``
+and ``FILE_SPECIFICATION_NAME``.
 
-Each row gives the observation, or the tuple of observations, that
+Each row gives the observation that
 :meth:`~host_cassini.oops.uvis.CassiniUVIS.from_file` would give for the product with
-``astrometry=True``. ``enclose`` and ``select`` apply to each row as they do there. The
+``astrometry=True``, built from the row's columns:
+
+- ``DATA_OBJECT_TYPE`` gives the kind of product: ``QUBE``, ``TIME_SERIES``, or
+  ``SPECTRUM``.
+- For a ``QUBE`` or ``SPECTRUM``, ``MINIMUM_BAND_NUMBER``, ``MAXIMUM_BAND_NUMBER``,
+  ``BAND_BINNING_FACTOR``, ``WINDOW_MINIMUM_LINE_NUMBER``,
+  ``WINDOW_MAXIMUM_LINE_NUMBER``, and ``LINE_BINNING_FACTOR`` give the window and the
+  binning. A row gives a single window, so for a ``QUBE`` with several windows it gives
+  the window that encloses them all, with the smallest binning, as ``enclose=True``
+  does for the product's label.
+- For a ``QUBE`` or ``TIME_SERIES``, ``LINE_SAMPLES`` gives the number of samples.
+- For an HSP time series, ``INTEGRATION_DURATION`` gives the sampling interval in
+  milliseconds. For an HDAC time series, whose ``INTEGRATION_DURATION`` is a null value,
+  ``DWELL_TIME`` gives it as a number of 125-millisecond integrations.
+
+A row that lacks one of these columns, or gives no positive sampling interval, raises
+:exc:`~oops.host.HostFormatError` when the iteration reaches it. ``select`` applies to
+each row as it does for the product's label. The
 ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from the
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
 ``label``, ``row_dicts``, ``filter``, ``pds3_options``, and the standard overrides work
@@ -158,9 +185,17 @@ VIMS indexes
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` reads a COVIMS index together
 with its supplemental index, such as ``COVIMS_0009_index.lbl`` and
 ``COVIMS_0009_supplemental_index.lbl``. The supplement is required, and the
-``supplement`` argument works as it does for UVIS. For each pair of rows, the two tables
-must give the same ``VOLUME_ID``, and the index's ``FILE_NAME`` and the supplement's
-``FILE_SPECIFICATION_NAME`` must give the same file name apart from its extension.
+``supplement`` argument works as it does for UVIS. The supplements of 24 volumes and of
+``COVIMS_0999`` list the cubes in another order than their indexes. When the orders
+differ, each index row is merged with the supplement row for the same cube: the index
+names the cube's data file by ``VOLUME_ID``, ``PATH_NAME``, and ``FILE_NAME``, as in
+``/data/1999010T054026_1999010T060958`` and ``v1294638283_1.qub``, and the supplement
+names its label by ``VOLUME_ID`` and ``FILE_SPECIFICATION_NAME``, as in
+``data/1999010T054026_1999010T060958/v1294638283_1.lbl``. The paths are compared without
+regard to case, a leading slash, or the extension. The errors are those described for
+UVIS. For each pair of rows, the two tables must also give the same ``VOLUME_ID``, and
+the index's ``FILE_NAME`` and the supplement's ``FILE_SPECIFICATION_NAME`` must give the
+same file name apart from its extension.
 
 Each row gives the (vis, ir) pair of observations that
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_file` would give for the cube with

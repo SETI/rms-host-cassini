@@ -580,9 +580,11 @@ class CassiniISS(oops.Host):
                 file or its PDS label.
             supplement (str | pathlib.Path | FCPath | object | None, optional): The path
                 to the PDS label of a supplemental index file, whose columns are merged
-                into each row. Its rows must name the same files in the same order as the
-                index; where both tables give a column, the index value is kept. The
-                default, `oops.Host.SUPPLEMENT`, reads the file in the directory of
+                into each row. Its rows must name the same files as the index's: they are
+                paired by position where the two tables list the files in the same order,
+                and otherwise by VOLUME_ID and FILE_SPECIFICATION_NAME. Where both tables
+                give a column, the index value is kept. The default,
+                `oops.Host.SUPPLEMENT`, reads the file in the directory of
                 `filepath` whose name matches except that "_index" is replaced by
                 "_supplemental_index" in upper or lower case, if there is one; the
                 archive has none for ISS. None reads no supplement.
@@ -676,7 +678,9 @@ class CassiniISS(oops.Host):
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID; raised when the iteration reaches that row.
-            HostIndexError: If the supplement does not have the same rows as the index.
+            HostIndexError: If the supplement does not list the same files as the index,
+                or, where the two tables list the files in different orders, either lists
+                a file twice.
             OopsTypeError: If a keyword argument is not one of those listed.
             OopsValueError: If `select` is not None.
             PdsHostError: If the PDS3 label cannot be parsed.

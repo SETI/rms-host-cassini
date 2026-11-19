@@ -12,7 +12,7 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines
+from conftest import FakeSpice, FakeSpiceDB, pds3_lines, write_table
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from pdsparser import Pds3Label
 
@@ -428,6 +428,28 @@ def test_from_index_rejects_an_unknown_keyword() -> None:
 ])
 def test_label_from_index_row_pairs_channels(key: str, expected: tuple[Any, Any]) -> None:
     assert CassiniVIMS._label_from_index_row(index_row())[key] == expected
+
+
+def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) -> None:
+    """The index names each cube's data file by VOLUME_ID, PATH_NAME and FILE_NAME, and
+    the supplement names its label by VOLUME_ID and FILE_SPECIFICATION_NAME."""
+
+    rows = [index_row(), index_row(FILE_NAME='v0000000002_1.qub',
+                                   OBSERVATION_ID='VIMS_000SA_TEST002_PRIME')]
+    columns = {name: [row[name] for row in rows] for name in rows[0]
+               if name != 'FILE_SPECIFICATION_NAME'}
+    columns['PATH_NAME'] = ['/data/2005001T000000'] * 2
+    index = write_table(tmp_path, 'COVIMS_0001_index', columns)
+    write_table(tmp_path, 'COVIMS_0001_supplemental_index', {
+        'VOLUME_ID'              : ['COVIMS_0001'] * 2,
+        'FILE_SPECIFICATION_NAME': ['data/2005001T000000/v0000000002_1.lbl',
+                                    'data/2005001T000000/v0000000001_1.lbl'],
+        'PRODUCT_CREATION_TIME'  : ['2005-01-02', '2005-01-01'],
+    })
+    pairs = CassiniVIMS.from_index(index)
+    assert [(ir.dict['OBSERVATION_ID'], ir.dict['PRODUCT_CREATION_TIME'])
+            for (_, ir) in pairs] == [('VIMS_000SA_TEST001_PRIME', '2005-01-01'),
+                                      ('VIMS_000SA_TEST002_PRIME', '2005-01-02')]
 
 
 def test_label_from_index_row_core_items() -> None:

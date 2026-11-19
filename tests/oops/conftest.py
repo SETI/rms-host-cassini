@@ -8,6 +8,7 @@ oops and cspyce calls that would read SPICE kernels directly are replaced by
 kernel-free equivalents. Everything else, including oops itself, runs for real.
 """
 
+import pathlib
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,6 +49,48 @@ def pds3_lines(keywords: dict[str, Any], indent: str = '') -> list[str]:
     """PDS3 label lines assigning each keyword its formatted value."""
 
     return [f'{indent}{key} = {pds3_value(value)}' for (key, value) in keywords.items()]
+
+
+def write_table(directory: pathlib.Path, stem: str,
+                columns: dict[str, list[Any]]) -> pathlib.Path:
+    """Write an ASCII table and its detached PDS3 label; return the label's path.
+
+    Parameters:
+        directory: The directory to write into.
+        stem: The file name of the table and label, without the extension.
+        columns: The values of each column, by name: str values make a CHARACTER
+            column, int an ASCII_INTEGER column, and float an ASCII_REAL column.
+    """
+
+    formats = {str: ('CHARACTER', '{!s}'), int: ('ASCII_INTEGER', '{:d}'),
+               float: ('ASCII_REAL', '{:.4f}')}
+    names = list(columns)
+    texts = {name: [formats[type(value)][1].format(value) for value in columns[name]]
+             for name in names}
+    widths = [max(len(text) for text in texts[name]) for name in names]
+    nrows = len(columns[names[0]])
+    row_bytes = sum(widths) + len(widths) - 1 + 2
+    lines = [','.join(texts[name][i].ljust(width)
+                      for (name, width) in zip(names, widths, strict=True)) + '\r\n'
+             for i in range(nrows)]
+    (directory / f'{stem}.tab').write_text(''.join(lines), newline='')
+
+    label = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
+             f'RECORD_BYTES = {row_bytes}', f'FILE_RECORDS = {nrows}',
+             f'^INDEX_TABLE = "{stem}.tab"', 'OBJECT = INDEX_TABLE',
+             '  INTERCHANGE_FORMAT = ASCII', f'  ROWS = {nrows}',
+             f'  ROW_BYTES = {row_bytes}', f'  COLUMNS = {len(names)}']
+    start = 1
+    for (name, width) in zip(names, widths, strict=True):
+        label += ['  OBJECT = COLUMN', f'    NAME = {name}',
+                  f'    DATA_TYPE = {formats[type(columns[name][0])][0]}',
+                  f'    START_BYTE = {start}', f'    BYTES = {width}',
+                  '  END_OBJECT = COLUMN']
+        start += width + 1
+    label += ['END_OBJECT = INDEX_TABLE', 'END', '']
+    path = directory / f'{stem}.lbl'
+    path.write_text('\r\n'.join(label))
+    return path
 
 
 def iso_from_tdb(tdb: float) -> str:
