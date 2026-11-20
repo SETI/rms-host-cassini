@@ -465,9 +465,9 @@ class CassiniISS(oops.Host):
             `fileinfo` is its PDS3 label.
 
         Raises:
-            FileNotFoundError: If the file, or the image file of a PDS3 label read without
-                `astrometry`, does not exist in the case spelled or in upper or lower
-                case.
+            FileNotFoundError: If the file does not exist, or if the image file of a PDS3
+                label read without `astrometry` exists neither in the case that the
+                label spells nor in upper or lower case.
             HostFormatError: If START_TIME, EXPOSURE_DURATION, INSTRUMENT_MODE_ID or
                 INSTRUMENT_NAME is missing from every source read, or START_TIME or
                 INSTRUMENT_MODE_ID is invalid; the message names the item and the image

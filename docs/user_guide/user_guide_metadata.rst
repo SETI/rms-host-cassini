@@ -73,8 +73,9 @@ If the chosen label gives no value for an item, the other label's value is used.
 Missing values
 ==============
 
-A value that no label read gives is left out: there is no ``dict`` key and no subfield
-for it, and never a None or a placeholder in its place. These count as no value:
+A value that neither label that was read gives is left out: there is no ``dict`` key and
+no subfield for it, and never a None or a placeholder in its place. These count as no
+value:
 
 - the text that the archive writes for no value, ``UNK``, ``UNKNOWN``, ``N/A``,
   ``NULL``, ``---``, or an empty string, in any case;
