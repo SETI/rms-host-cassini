@@ -10,6 +10,7 @@ kernel-free equivalents. Everything else, including oops itself, runs for real.
 
 import pathlib
 import re
+import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -342,7 +343,7 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
     # Every fake SPICE frame is the same Cmatrix, so without a pool of its own a test's
     # frame would share the wayframe, and the evaluation, of one an earlier test made
-    monkeypatch.setattr(oops.frame.Cmatrix, '_WAYFRAMES', {})
+    monkeypatch.setattr(oops.frame.Cmatrix, '_WAYFRAMES', weakref.WeakValueDictionary())
     monkeypatch.setattr(Body, 'BODY_REGISTRY', dict(Body.BODY_REGISTRY))
     return fake
 

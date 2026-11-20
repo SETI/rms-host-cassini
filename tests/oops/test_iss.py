@@ -2260,6 +2260,16 @@ def test_from_index_probes_pointing_after_a_time_shift(
     assert spice_check_times == [pytest.approx(obs.midtime + after, abs=1.e-3)]
 
 
+@pytest.mark.usefixtures('initialized_iss', 'saturn_path')
+def test_from_file_checks_pointing_where_a_tracker_evaluates_it(
+        tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
+    """A tracker evaluates the frame once, at the time it selects."""
+
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True,
+                               tracker='start')
+    assert spice_check_times == [pytest.approx(obs.time[0], abs=1.e-3)]
+
+
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_checks_pointing_where_a_frame_shift_evaluates_it(
         tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
