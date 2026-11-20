@@ -186,12 +186,14 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   which masks apply: those of columns that declare a null constant other than 0 (the
   metadata labels declare 0 for BIAS_STRIP_MEAN and DARK_STRIP_MEAN, real values in the
   image labels, and for EMISSION_ANGLE and INCIDENCE_ANGLE). `_UNDECLARED_FILL_VALUES`
-  (65534, -2147483648) apply only to columns whose label declares no constant
-  (COISS_2115 and COISS_2116 declare none); -999 in `_FILL_KEYWORDS` always. With
-  `row_dicts` the label comes from `label`, if given; otherwise nothing is declared. A
-  0 angle (`_ZERO_WITHOUT_GEOMETRY`) is missing only in a row without PHASE_ANGLE, so a
-  corrected table keeps a real 0. `_row_items()` also writes the clock counts with three
-  digits after the point, which the tables drop.
+  (65534, -2147483648) apply only to columns whose label does not declare a constant
+  (the labels of COISS_2115 and COISS_2116 do not declare any); -999 in `_FILL_KEYWORDS`
+  always. With `row_dicts` the label comes from `label`, if given, and otherwise from
+  `filepath`, because `oops.Host.from_index` passes only the caller's `label`, often
+  None, to a host that corrects label text. A 0 angle (`_ZERO_WITHOUT_GEOMETRY`) is
+  missing only in a row without PHASE_ANGLE, so a corrected table keeps a real 0.
+  `_row_items()` also writes the clock counts with three digits after the point, which
+  the tables drop.
 - `CassiniISS._early_cruise_counts()` fixes the clock counts of the first 1250 images of
   COISS_1001 (through `_LAST_EARLY_CRUISE_IMAGE`): the stop count is IMAGE_NUMBER, the
   start count is computed from it and the exposure with the SCLK kernel (operator,

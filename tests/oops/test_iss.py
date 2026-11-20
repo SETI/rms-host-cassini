@@ -989,7 +989,7 @@ def test_from_index_computes_the_early_cruise_counts(tmp_path: pathlib.Path, sta
     rows = index_rows(tmp_path)
     row = rows[0] | _EARLY_COUNTS | {'SPACECRAFT_CLOCK_START_COUNT': start,
                                      'SPACECRAFT_CLOCK_STOP_COUNT': stop}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.spacecraft_clock_stop_count == '1294562651.000'
     assert obs.spacecraft_clock_start_count == _EARLY_START_COUNT
 
@@ -1711,6 +1711,13 @@ def index_rows(directory: pathlib.Path) -> list[dict[str, Any]]:
     return list(CassiniISS._index_rows(write_index(directory), supplement=None))
 
 
+def index_label(directory: pathlib.Path) -> Pds3Label:
+    """The parsed label of the index that write_index has written in `directory`, for
+    rows given with the path of an index whose label is elsewhere."""
+
+    return Pds3Label(directory / 'INDEX.LBL', method='fast')
+
+
 @pytest.fixture
 def index_snapshots(tmp_path: pathlib.Path) -> list[oops.observation.Snapshot]:
     return list(CassiniISS.from_index(write_index(tmp_path)))
@@ -1749,7 +1756,7 @@ def test_from_index_raises_a_row_error_when_reached(tmp_path: pathlib.Path) -> N
 
     rows = index_rows(tmp_path)
     del rows[1]['START_TIME']
-    snapshots = CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=rows)
+    snapshots = CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=rows)
     assert next(snapshots).basename == 'N1484506648_1.IMG'
     with pytest.raises(oops.host.HostFormatError,
                        match=r'START_TIME is missing from .*W1484506649_1\.IMG'):
@@ -1788,7 +1795,7 @@ def test_from_index_creates_no_directories(tmp_path: pathlib.Path) -> None:
     index.parent.mkdir(parents=True)
     rows = index_rows(tmp_path)
     before = sorted(tmp_path.rglob('*'))
-    list(CassiniISS.from_index(index, row_dicts=rows))
+    list(CassiniISS.from_index(index, row_dicts=rows, label=index_label(tmp_path)))
     assert sorted(tmp_path.rglob('*')) == before
 
 
@@ -1809,7 +1816,8 @@ def test_from_index_finds_the_image_from_the_index(tmp_path: pathlib.Path,
     """
 
     rows = index_rows(tmp_path)
-    obs = next(CassiniISS.from_index(tmp_path / index_path, row_dicts=rows[:1]))
+    obs = next(CassiniISS.from_index(tmp_path / index_path, row_dicts=rows[:1],
+                                     label=index_label(tmp_path)))
     assert obs.filepath == FCPath(tmp_path / image_path)
 
 
@@ -1819,7 +1827,7 @@ def test_from_index_remote_image_has_no_abspath(tmp_path: pathlib.Path) -> None:
     rows = index_rows(tmp_path)
     index_url = 'https://rms-test.invalid/holdings/metadata/COISS_2xxx/COISS_2009'
     obs = next(CassiniISS.from_index(index_url + '/COISS_2009_index.lbl',
-                                     row_dicts=rows[:1]))
+                                     row_dicts=rows[:1], label=index_label(tmp_path)))
     assert obs.image_url == ('https://rms-test.invalid/holdings/volumes/COISS_2xxx/'
                              'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG')
     assert 'abspath' not in obs.subfields
@@ -1897,14 +1905,14 @@ def test_from_index_filter(tmp_path: pathlib.Path) -> None:
 def test_from_index_leaves_out_null_items(tmp_path: pathlib.Path) -> None:
     rows = index_rows(tmp_path)
     rows[0]['TARGET_NAME'] = 'UNK'
-    obs = next(CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=rows[:1]))
     assert 'label_target' not in obs.subfields
     assert obs.target == 'NONE'
 
 
 def test_from_index_uses_given_rows(tmp_path: pathlib.Path) -> None:
     rows = index_rows(tmp_path)
-    snapshots = CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows[:1])
+    snapshots = CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=rows[:1])
     assert [obs.detector for obs in snapshots] == ['NAC']
 
 
@@ -1916,7 +1924,7 @@ def test_from_index_dict_is_json_serializable(tmp_path: pathlib.Path) -> None:
                      'VALID_MAXIMUM_mask': np.array([False, False]),
                      'SEQUENCE_NUMBER': np.int64(2), 'SEQUENCE_NUMBER_mask': np.False_,
                      'TARGET_DESC': np.str_('Mimas  '), 'TARGET_DESC_mask': np.False_}
-    obs = next(CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     json.dumps(obs.dict)
     assert obs.dict['VALID_MAXIMUM'] == [4095, 9896]
     assert obs.dict['SEQUENCE_NUMBER'] == 2
@@ -1986,6 +1994,25 @@ def test_from_index_reads_given_rows_with_a_given_label(tmp_path: pathlib.Path) 
     assert 'BIAS_STRIP_MEAN' not in obs.dict
 
 
+def test_host_from_index_reads_given_rows_with_the_index_label(
+        tmp_path: pathlib.Path) -> None:
+    """oops.Host.from_index gives the host rows without a label; the host reads the label
+    of the index, so a corrected label's declared constants apply to the rows."""
+
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 5.),
+                                         'NULL_CONSTANT = -1.'),))
+    rows = list(CassiniISS._index_rows(path, supplement=None))
+    obs = next(oops.Host.from_index(path, row_dicts=rows))
+    assert 'BIAS_STRIP_MEAN' not in obs.dict
+
+
+def test_from_index_given_rows_without_a_label_need_the_index_label(
+        tmp_path: pathlib.Path) -> None:
+    rows = index_rows(tmp_path)
+    with pytest.raises(FileNotFoundError, match=r'missing\.lbl'):
+        CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows)
+
+
 @pytest.mark.parametrize(('column', 'value'), [
     ('SEQUENCE_NUMBER', 65534),
     ('ORDER_NUMBER', 65534),
@@ -2010,7 +2037,7 @@ def test_from_index_leaves_out_fill_values(tmp_path: pathlib.Path, column: str,
     """
 
     rows = index_rows(tmp_path)
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl',
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL',
                                      row_dicts=[rows[0] | {column: value}]))
     assert column not in obs.dict
 
@@ -2022,7 +2049,7 @@ def test_from_index_keeps_a_zero_angle_with_target_geometry(
 
     rows = index_rows(tmp_path)
     row = rows[0] | {'PHASE_ANGLE': 30., 'EMISSION_ANGLE': 0.}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.dict['EMISSION_ANGLE'] == 0.
 
 
@@ -2031,14 +2058,14 @@ def test_from_index_keeps_minus_999_where_it_can_be_real(tmp_path: pathlib.Path)
 
     rows = index_rows(tmp_path)
     row = rows[0] | {'PLANET_CENTER': np.array([-999., 12.])}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.dict['PLANET_CENTER'] == [-999., 12.]
 
 
 def test_from_index_marks_a_fill_element_none(tmp_path: pathlib.Path) -> None:
     rows = index_rows(tmp_path)
     row = rows[0] | {'VALID_MAXIMUM': np.array([4095, 65534])}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.dict['VALID_MAXIMUM'] == [4095, None]
 
 
@@ -2054,7 +2081,7 @@ def test_from_index_spells_clock_counts_as_the_labels(tmp_path: pathlib.Path, co
 
     rows = index_rows(tmp_path)
     row = rows[0] | {'SPACECRAFT_CLOCK_STOP_COUNT': count}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.spacecraft_clock_stop_count == expected
 
 
@@ -2224,7 +2251,7 @@ def test_from_index_cached_remote_image_has_an_abspath(tmp_path: pathlib.Path) -
     local = cast(pathlib.Path, image.get_local_path())
     local.write_bytes(b'')
     obs = next(CassiniISS.from_index(index_url + '/COISS_2009_index.lbl',
-                                     row_dicts=rows[:1]))
+                                     row_dicts=rows[:1], label=index_label(tmp_path)))
     assert obs.abspath == local.resolve()
 
 
@@ -2261,7 +2288,7 @@ def test_from_index_early_cruise_boundary(tmp_path: pathlib.Path, number: str,
     row = rows[0] | {'IMAGE_NUMBER': number, 'EXPOSURE_DURATION': 2000.,
                      'SPACECRAFT_CLOCK_START_COUNT': '1343357423.000',
                      'SPACECRAFT_CLOCK_STOP_COUNT': number + '.000'}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.spacecraft_clock_start_count == start
 
 
@@ -2337,7 +2364,7 @@ def test_from_index_leaves_out_each_placeholder(tmp_path: pathlib.Path,
                                                 value: str) -> None:
     rows = index_rows(tmp_path)
     row = rows[0] | {'OBSERVATION_ID': np.str_(value)}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert 'OBSERVATION_ID' not in obs.dict
 
 

@@ -73,8 +73,9 @@ Other arguments
     The rows themselves, one dictionary per row, if the tables have already been read,
     in a list or any other iterable. The host then uses these rows in place of the
     tables, ``supplement`` is ignored, and each row is filtered and built when the
-    iteration reaches it. ``label``, if it is given, tells which null values the index
-    declares (see below); without it, the rows are read as if the label declared none.
+    iteration reaches it. The null values that the index declares (see below) are read
+    from ``label`` or, if it is not given, from the index's own label, which must then
+    exist.
 
 ``filter``
     A dictionary of column names and the values to keep. A row is kept when each column

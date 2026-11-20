@@ -656,8 +656,9 @@ class CassiniISS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` has already been read;
                 each is filtered and built when the iteration reaches it. If provided,
-                `supplement` is ignored, and `label`, if it is given, tells which null
-                constants the index declares; without it, none are applied.
+                `supplement` is ignored, and the null constants that the index declares
+                are read from `label` or, if it is not given, from the label of
+                `filepath`, as for rows read from the table.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -731,22 +732,25 @@ class CassiniISS(oops.Host):
             such as UNK or NULL; the fill values 1e32 and -1e32; -999 in the
             temperature, data rate and compression columns, where it cannot be a real
             value; 65534 and -2147483648, the null constants that the other labels
-            declare, in the columns listed for them where the index label declares no
-            null constant; and an EMISSION_ANGLE, INCIDENCE_ANGLE, CENTER_LATITUDE or
-            CENTER_LONGITUDE of 0 in a row that has no target geometry (no PHASE_ANGLE),
-            where the tables write 0 for a missing angle. A missing element of an array
-            column is None. The clock counts are spelled as the labels spell them, with
-            three digits after the point, where the tables drop trailing zeros. Those of
-            an early cruise image are computed as :meth:`from_file` describes.
+            declare, in the columns listed for them where the index label does not
+            declare a null constant; and an EMISSION_ANGLE, INCIDENCE_ANGLE,
+            CENTER_LATITUDE or CENTER_LONGITUDE of 0 in a row that has no target
+            geometry (no PHASE_ANGLE), where the tables write 0 for a missing angle. A
+            missing element of an array column is None. The clock counts are spelled as
+            the labels spell them, with three digits after the point, where the tables
+            drop trailing zeros. Those of an early cruise image are computed as
+            :meth:`from_file` describes.
 
             The pointing is not checked, and every filtered row gives an observation.
-            Where the C kernels cannot supply the camera's pointing at the midtime of
-            an observation, its frame raises :exc:`oops.OopsSpiceError` when it is
-            used.
+            Where the C kernels cannot supply the camera's pointing at the time at
+            which an observation evaluates its frame, that frame raises
+            :exc:`oops.OopsSpiceError` when it is used.
 
         Raises:
-            FileNotFoundError: If `supplement` gives a file whose label does not exist;
-                when the iteration starts, if a table file does not exist.
+            FileNotFoundError: If the label of `filepath` does not exist and `label` is
+                not given, also for rows given in `row_dicts`; if `supplement` gives a
+                file whose label does not exist; when the iteration starts, if a table
+                file does not exist.
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID; raised when the iteration reaches that row.
@@ -780,12 +784,12 @@ class CassiniISS(oops.Host):
         oops.Host._check_select(select, unit='row of a Cassini ISS index')
 
         # The labels are read now and the rows as the iteration reaches them. The index
-        # label, parsed once, also tells how its declared null constants are read. The
-        # archive has no ISS supplement, so the default looks for one without requiring
-        # it, while one that is given must exist.
-        if row_dicts is None:
-            label = CassiniISS._read_index_label(filepath, label=label,
-                                                 pds3_options=pds3_options)
+        # label, parsed once, also tells how its declared null constants are read, for
+        # rows given in row_dicts too, which oops.Host.from_index passes without the
+        # label. The archive has no ISS supplement, so the default looks for one without
+        # requiring it, while one that is given must exist.
+        label = CassiniISS._read_index_label(filepath, label=label,
+                                             pds3_options=pds3_options)
         (masked, fills) = CassiniISS._index_fill_rules(label)
         rows = CassiniISS._index_rows(filepath, supplement=supplement,
                                       require_supplement=(supplement is not
@@ -1304,29 +1308,27 @@ class CassiniISS(oops.Host):
         """How the missing values of an ISS index table are told, from its label.
 
         Parameters:
-            label (Pds3Label | dict[str, Any] | None): The parsed label of the index; None
-                if it is not known, as for rows given without their label.
+            label (Pds3Label | dict[str, Any]): The parsed label of the index.
 
         Returns:
             tuple[frozenset[str], dict[str, Any]]: The columns whose masks apply, those
             for which the label declares a null constant other than 0 (see
             `_DECLARED_ZERO`); and the fill value of each column, beyond its mask: -999
             in each column of `_FILL_KEYWORDS`, and the value of `_UNDECLARED_FILL_VALUES`
-            in each column listed there for which the label declares no null constant.
-            Without a label, no column declares one.
+            in each column listed there for which the label does not declare a null
+            constant.
         """
 
         declared = {}
-        if label is not None:
-            content = label.as_dict() if isinstance(label, Pds3Label) else label
-            for table in content.values():
-                if not isinstance(table, dict):
-                    continue
-                for column in table.values():
-                    if isinstance(column, dict) and column.get('OBJECT') == 'COLUMN':
-                        declared[column.get('NAME')] = [column[key] for key in
-                                                        _SPECIAL_CONSTANT_KEYS
-                                                        if key in column]
+        content = label.as_dict() if isinstance(label, Pds3Label) else label
+        for table in content.values():
+            if not isinstance(table, dict):
+                continue
+            for column in table.values():
+                if isinstance(column, dict) and column.get('OBJECT') == 'COLUMN':
+                    declared[column.get('NAME')] = [column[key] for key in
+                                                    _SPECIAL_CONSTANT_KEYS
+                                                    if key in column]
 
         masked = frozenset(name for (name, values) in declared.items()
                            if values and _DECLARED_ZERO not in values)
