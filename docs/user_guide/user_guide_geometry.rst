@@ -7,7 +7,7 @@ Time
 
 An ISS image's exposure begins at ``START_TIME``, in UTC at the spacecraft, and lasts
 for ``EXPOSURE_DURATION``. The Snapshot's default cadence covers exactly that interval.
-An image cannot be read if neither label that was read gives ``START_TIME`` or
+An image cannot be read if no label that was read gives ``START_TIME`` or
 ``EXPOSURE_DURATION`` (see :doc:`user_guide_errors`).
 
 A UVIS observation begins at the label's ``START_TIME``. Each sample of a QUBE or
@@ -38,17 +38,17 @@ kernels lack still appears, and its frame raises :exc:`oops.OopsSpiceError`, wit
 same message, when it is evaluated.
 
 A caller that has better pointing can pass it with the ``frame`` override, for example
-as a :class:`~oops.frame.Cmatrix`. The host then uses that frame, neither loads nor
-checks the C kernels for the observation's time, and raises no error about missing
-pointing. The C kernels that fill gaps in the attitude record are still loaded when the
+as a :class:`~oops.frame.Cmatrix`. The host then uses that frame. It neither loads nor
+checks the C kernels for the observation's time, so a gap in them cannot cause an error
+about missing pointing. The C kernels that fill gaps in the attitude record are still loaded when the
 hosts are initialized, unless ``initialize()`` is called with ``gapfill=False``.
 
 Targets and light sources
 =========================
 
-The target body comes from ``TARGET_NAME``. An observation whose label gives no
-``TARGET_NAME``, or gives a value that means none, such as ``UNK``, has the target
-``NONE``. Each host repairs the names that its labels
+The target body comes from ``TARGET_NAME``. If the label lacks ``TARGET_NAME``, or
+gives text that means no value, such as ``UNK``, ``N/A``, ``NULL``, or an empty string,
+the observation has the target ``NONE``. Each host repairs the names that its labels
 give wrongly or that are not bodies. The ISS host repairs these:
 
 .. list-table::

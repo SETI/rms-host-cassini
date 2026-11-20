@@ -50,7 +50,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
   fakes for every test, and gives each test its own copy of the oops path, frame and body
-  registries, so new tests get this automatically. A test that tracks a target with
+  registries and of each path and frame class's waypoint and wayframe pools, so new tests
+  get this automatically. A test that tracks a target with
   `tracker` needs a registered body; the `saturn_path` fixture provides SATURN.
 
 ## Architecture gotchas
@@ -79,7 +80,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - `CassiniISS.from_file()` reads only the VICAR image file when given it, and the PDS3
   label plus the whole image file when given the label (the label alone with
   `astrometry`). `_merged_dict()` combines the two into `dict`: PDS3 null values (any
-  case) and the fill value -999 count as missing, the header's values are first written
+  case), and -999 in the keywords of `_FILL_KEYWORDS`, count as missing, the header's
+  values are first written
   in the label's forms (`_pds3_form()`), and `_RESOLUTION_RULES` names each item's one
   fixed source, the label by default; there is no per-image choice. Each rule's comment
   gives the evidence and cites issue #10, which lists every item on which the two
@@ -100,45 +102,58 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   checks the `_FLIPPED` SpiceFrame, since its camera frame is a fixed Cmatrix on it.
   Clock conversions go through `_tdb_from_sclk()`/`_sclk_from_tdb()`, which turn a
   cspyce error into `OopsSpiceError`.
-- Every `from_file()` rejects an unknown keyword with `OopsTypeError` and checks
-  `select` before reading (ISS: must be None; UVIS/VIMS: `_check_select()`). ISS builds
+- Every `from_file()` rejects an unknown keyword with `oops.Host._check_keywords()` and
+  checks `select` before reading with `oops.Host._check_select()` (ISS: `unit=`, so it
+  must be None; VIMS: the channel names). ISS builds
   `header_dict` from a `VicarLabel` read from the file, since rms-vicar writes the
   reading machine into HOST and BHOST when it reads the array.
   `CassiniISS._detect_in_file()` lets `oops.Host.from_file` reach the host for a label
   that only its repairs make readable.
 - The null rules (`_is_null`, `_without_nulls`, `_row_items`, `_label_dict` in
   `_cassini.py`) are shared by the three instruments: "UNK", "UNKNOWN", "N/A", "NULL",
-  "---" and "" (any case, padded) and -999 are missing; index rows also drop 1e32 and
-  -1e32. ISS rows ignore the table masks (see `_row_items` below); UVIS and VIMS rows
-  apply them, since their labels declare real null constants (-99, -9.9e99, -1, N/A).
-  UVIS and VIMS `from_file` publish `dict` (no nulls), `label_dict` or (VIMS cube)
+  "---" and "" (any case, padded) are missing; index rows also drop 1e32 and -1e32.
+  -999 is missing only where it is a declared null or cannot be a real value: in the
+  label keywords of each module's `_FILL_KEYWORDS` (temperatures, rates, ratios, VIMS
+  exposures) and the ISS index columns of `_INDEX_FILL_VALUES`; UVIS and VIMS rows get
+  it from their labels' declared null constants. A placeholder TARGET_NAME gives the
+  target NONE in every instrument. ISS rows ignore the table masks (see `_row_items`
+  below); UVIS and VIMS rows apply them, since their labels declare real null constants
+  (-999, -99, -9.9e99, -1, N/A). UVIS and VIMS `from_file` publish `dict` (no nulls),
+  `label_dict` or (VIMS cube)
   `header_dict`, the clock counts, and `time_from_sclk`; their file subfields still name
   the label (#32). They parse with the fast/strict/loose fallback of
-  `_read_pds3_fileinfo()`, and VIMS repairs two-line comments (`_TWO_LINE_COMMENT`);
+  `_read_pds3_fileinfo()`, which also refuses another instrument's parsed label with
+  `WrongHostError`, and VIMS repairs two-line comments (`_TWO_LINE_COMMENT`);
   `CassiniVIMS._detect_in_file()` lets `oops.Host.from_file` reach it for those labels.
-- Every `from_index()` refuses a volume's own index (one in an `index` directory, any
-  case) with `HostIndexError` at call time (`_refuse_volume_index()`), as the other three
-  hosts do, and names each row's file by its full path or URL: `_index_file_path()` in
-  `_cassini.py` puts the volume `<VOLUME_ID>` in `volumes/<series>/` for an index in the
-  `metadata/` tree and in the index's own directory otherwise (Galileo's rule). `abspath`
-  comes from `oops.Host._apply_overrides()`, which gives it only when the file, or the
-  cache's copy of a remote file, exists, and never creates a directory; parsed content
-  with no path (`_known_path()` is None) has no file subfields. All three follow the
-  `oops.Host.from_index` contract
-  (#20): `supplement` defaults to `oops.Host.SUPPLEMENT` (UVIS and VIMS require it, so
-  None raises `HostIndexError` unless `row_dicts` is given; ISS has none and ignores a
-  missing one), `label=` reaches `_read_index_rows()`, and an unknown keyword raises
-  `OopsTypeError`. ISS refuses `select`, since each row is one observation; UVIS and VIMS
-  apply it, since a row gives several windows or a (vis, ir) pair.
-- `oops.Host._read_index_rows()` pairs index and supplement rows by position when the two
-  tables list the same files in the same order, and otherwise by file. UVIS passes
-  `file_key='FILE_NAME'` and `supplement_key=('VOLUME_ID', 'FILE_SPECIFICATION_NAME')`
-  (54 of 60 volumes are out of order, #30); VIMS passes `file_key=('VOLUME_ID',
-  'PATH_NAME', 'FILE_NAME')` and the same `supplement_key` (24 of 94 volumes and
-  COVIMS_0999, #34; the index names the `.qub`, the supplement the `.lbl`, and the
-  comparison ignores the extension). Each host's `_validate_index` still checks every
-  pair. `oops.Host.from_index()` identifies the host from the index label (or the first
-  row) and passes the call to the host's `from_index()`, which reads the rows.
+- Every `from_index()` reads its rows through `oops.Host._index_rows()`, which streams
+  the index and supplement with `PdsTable(defer_load=True).iter_dicts` ten rows at a
+  time, pairs, validates and filters them, and refuses a volume's own index (one in an
+  `index` directory, any case) through each class's `METADATA_INDEX_EXAMPLE`. Nothing in
+  the host reads a whole table, builds a list of rows, or indexes `row_dicts`; a check
+  on a row (UVIS/VIMS: the supplement's columns in `row_dicts`) happens in the generator
+  at that row. Each row's file is its full path or URL: `_index_file_path()` puts
+  `<VOLUME_ID>/<FILE_SPECIFICATION_NAME>` in `oops.Host._volumes_directory()` of the
+  index. `abspath` comes from `oops.Host._apply_overrides()`, which gives it only when
+  the file, or the cache's copy of a remote file, exists, and never creates a directory;
+  parsed content with no path (`_known_path()` is None) has no file subfields. All three
+  follow the `oops.Host.from_index` contract (#20): `supplement` defaults to
+  `oops.Host.SUPPLEMENT` (UVIS and VIMS require it, so None raises `HostIndexError`
+  unless `row_dicts` is given; ISS has none and ignores a missing one), and an unknown
+  keyword raises `OopsTypeError`. ISS refuses `select`, since each row is one
+  observation; UVIS and VIMS apply it, since a row gives several windows or a (vis, ir)
+  pair.
+- `MERGE_SUPPLEMENT_BY_FILE` on each class fixes how oops pairs the two tables, from the
+  survey of every metadata index cited beside it: ISS False (no ISS supplement exists, so
+  a given one is paired by position), UVIS and VIMS True (54 of 61 and 25 of 95 out of
+  order until the supplements are corrected, #30, #34). UVIS passes
+  `file_key='FILE_NAME'` and `supplement_key=('VOLUME_ID', 'FILE_SPECIFICATION_NAME')`;
+  VIMS passes `file_key=('VOLUME_ID', 'PATH_NAME', 'FILE_NAME')` and the same
+  `supplement_key` (the index names the `.qub`, the supplement the `.lbl`, and oops
+  compares paths without the extension). Each host's `_validate_index` checks every
+  pair. `oops.Host.from_index()` asks every host's `_detect_in_index()` about the label
+  first: ISS and UVIS claim their paths (COISS, COUVIS) and return False for another
+  instrument's path or INSTRUMENT_ID, VIMS claims INSTRUMENT_ID VIMS or a COVIMS path, so
+  no Cassini index needs its first row read to be identified.
 - `CassiniUVIS._label_from_index_row()` builds the QUBE, TIME_SERIES or SPECTRUM object
   that a product label has from a row's DATA_OBJECT_TYPE and window, binning and
   LINE_SAMPLES columns (#33). A QUBE whose line window bins to one line has one line;
@@ -147,15 +162,21 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   1,555 of 1,559 sampled labels; 4 in COUVIS_0031/0032 give DWELL_TIME 72 and 125 ms). A
   row gives one window, the enclosing one for a multi-window QUBE, binned by the smallest
   binning (`from_file(enclose=True)` leaves it unbinned).
-- Every `from_index()` returns an iterator. It checks its arguments and reads and filters
-  the tables itself, then returns a generator that builds each row's observation when the
-  iteration reaches it, so only an error in one row waits for that row. It must not be a
-  generator function, which would defer every error to the first `next()`.
+- Every `from_index()` returns an iterator. It checks its arguments and calls
+  `_index_rows()`, which reads only the labels at call time, then returns a generator
+  that builds each row's observation when the iteration reaches it, so an error in one
+  row waits for that row. It must not be a generator function, which would defer every
+  argument error to the first `next()`.
+- Every index workaround must still give the right answer once the index files are
+  corrected (the holdings' product labels and data files cannot change; the index and
+  supplement files can, SETI/rms-data-projects#253, #255, #257): apply it only where the
+  defect shows, and test the corrected form.
 - `CassiniISS._row_items()` does not apply the table reader's masks: the metadata index
   labels declare 0 the null constant of BIAS_STRIP_MEAN and DARK_STRIP_MEAN, real values
   in the image labels. `_INDEX_FILL_VALUES` and the bound 1e32 list the fill values
-  instead, for the volume indexes (which declare none) and the metadata indexes alike. It
-  also writes the clock counts with three digits after the point, which the tables drop.
+  instead. A 0 angle (`_ZERO_WITHOUT_GEOMETRY`) is missing only in a row without
+  PHASE_ANGLE, so a corrected table keeps a real 0. It also writes the clock counts with
+  three digits after the point, which the tables drop.
 - `CassiniISS._early_cruise_counts()` fixes the clock counts of the first 1250 images of
   COISS_1001 (through `_LAST_EARLY_CRUISE_IMAGE`): the stop count is IMAGE_NUMBER, the
   start count is computed from it and the exposure with the SCLK kernel (operator,

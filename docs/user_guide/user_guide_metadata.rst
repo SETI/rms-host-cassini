@@ -68,19 +68,21 @@ The PDS3 label supplies every other item. Some of the differences are worth know
   ``MISSION_NAME``, where the labels and the archive's catalog give
   ``CASSINI-HUYGENS``.
 
-If the chosen label gives no value for an item, the other label's value is used.
+If the chosen label lacks a value for an item, the other label's value is used.
 
 Missing values
 ==============
 
-A value that neither label that was read gives is left out: there is no ``dict`` key and
-no subfield for it, and never a None or a placeholder in its place. These count as no
-value:
+If no label that was read gives a value, the value is left out: there is no ``dict`` key
+and no subfield for it, and never a None or a placeholder in its place. These count as
+no value:
 
 - the text that the archive writes for no value, ``UNK``, ``UNKNOWN``, ``N/A``,
   ``NULL``, ``---``, or an empty string, in any case;
-- the number -999, which both labels write for a reading that was not made, such as the
-  back optics temperature of a camera that has no back sensor;
+- the number -999 in a temperature, a data rate, an exposure, or a compression ratio,
+  which cannot take that value. The labels write it for a reading that was not made,
+  such as the back optics temperature of an ISS camera that has no back sensor, or the
+  exposure of a VIMS channel that was off. In any other keyword, -999 is kept;
 - a list that holds only these.
 
 In a list whose positions carry meaning, such as the front and back temperatures of
@@ -207,5 +209,6 @@ Each observation has the subfields ``label_target``, ``observation_id``,
 ``spacecraft_clock_start_count``, and ``spacecraft_clock_stop_count`` when the label
 gives their items, and ``time_from_sclk``. The clock counts are the label's text, such
 as ``1/1640775127.032``. ``time_from_sclk`` is True only for a VIMS cube whose time
-backplanes, or an index's ``BACKPLANE_SCLK_START_COUNT``, gave its times, and False
-otherwise. All three dictionaries can be written with :func:`json.dump`.
+backplanes gave its times, and False otherwise. A backplane gives a clock reading in
+seconds and a decimal fraction, which the host converts as whole seconds plus that
+fraction of a second. All three dictionaries can be written with :func:`json.dump`.

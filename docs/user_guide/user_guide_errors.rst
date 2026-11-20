@@ -20,7 +20,7 @@ Reading an ISS image file
     cannot convert the clock counts of an early cruise image.
 
 :exc:`~oops.host.HostFormatError`
-    Neither label that was read gives ``START_TIME``, ``EXPOSURE_DURATION``,
+    No label that was read gives ``START_TIME``, ``EXPOSURE_DURATION``,
     ``INSTRUMENT_MODE_ID``, or ``INSTRUMENT_NAME``, or ``START_TIME`` or
     ``INSTRUMENT_MODE_ID`` is not valid.
     The message gives the item and the image file. It is also raised when a normal read
@@ -34,7 +34,8 @@ Reading an ISS image file
 
 :exc:`~oops.host.PdsHostError`
     No method of the parser can read the PDS3 label, even after the repairs that
-    :doc:`user_guide_files` describes, or the label's ``^IMAGE`` pointer gives no file.
+    :doc:`user_guide_files` describes, or the label's ``^IMAGE`` pointer does not give
+    the name of a file.
     The message gives the label.
 
 :exc:`~oops.host.VicarHostError`
@@ -62,10 +63,12 @@ Reading an ISS index
     valid. This error is raised when the iteration reaches that row.
 
 :exc:`~oops.host.HostIndexError`
-    The index is a volume's own index rather than a metadata index; the index or the
-    supplement cannot be read as an index table; or a supplement that was given does not
-    list the same images as the index, or, when the two tables list the images in
-    different orders, one of them lists an image twice.
+    When the method is called: the index is a volume's own index rather than a metadata
+    index, or the PDS3 label of the index or the supplement does not describe a table
+    that can be read. When the iteration reaches the row: a row does not match the
+    table's label, as when the table holds fewer rows than its label says, or a
+    supplement that was given does not list the same image as the index in that row.
+    After the last row: the supplement has rows left over.
 
 :exc:`oops.OopsSpiceError`
     The spacecraft clock kernel cannot convert the clock counts of an early cruise
@@ -74,11 +77,13 @@ Reading an ISS index
     error only when its frame is evaluated.
 
 :exc:`FileNotFoundError`
-    A supplement that was given does not exist.
+    The label of a supplement that was given does not exist, when the method is called;
+    or the table of the index or the supplement does not exist, when the iteration
+    starts.
 
 :exc:`~oops.OopsTypeError`
-    A keyword argument is not one that the method accepts, or a range in ``filter``
-    cannot be compared with the column's values.
+    A keyword argument is not one that the method accepts, or, when the iteration
+    reaches a row, a range in ``filter`` cannot be compared with the row's value.
 
 :exc:`~oops.OopsValueError`
     ``select`` is not None, or ``filter`` asks for a column that the index does not
@@ -91,7 +96,8 @@ Reading an ISS index
     The file is not a Cassini ISS index.
 
 :exc:`OSError`
-    The index cannot be read.
+    The label of the index cannot be read, when the method is called; or its table
+    cannot be read, when the iteration starts.
 
 UVIS and VIMS
 =============
@@ -115,7 +121,7 @@ UVIS and VIMS
     No method of the parser can read the PDS3 label, or the ISIS label of a VIMS cube.
 
 :exc:`~oops.host.WrongHostError`
-    The file is not of the host's instrument.
+    The file, or the parsed label given in its place, is not of the host's instrument.
 
 :exc:`~oops.OopsIndexError`, :exc:`~oops.OopsTypeError`, :exc:`~oops.OopsValueError`
     ``select`` is out of range, is of a type that it does not accept, or gives a name
@@ -130,18 +136,22 @@ UVIS and VIMS
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise:
 
 :exc:`~oops.host.HostIndexError`
-    The index is a volume's own index rather than a metadata index; the index or the
-    supplement cannot be read as an index table; ``supplement`` is None and
-    ``row_dicts`` is not given; a product appears in only one of the index and the
-    supplement; the two tables list the products in different orders and one of them
-    lists a product twice; a pair of rows names different files; or ``row_dicts`` does
-    not include the supplement's columns.
+    When the method is called: the index is a volume's own index rather than a metadata
+    index; the PDS3 label of the index or the supplement does not describe a table that
+    can be read, or lacks a column that gives a row's file; or ``supplement`` is None
+    and ``row_dicts`` is not given. When the iteration reaches the row: a row does not
+    match the table's label; the supplement does not list the index row's product,
+    which is known once the whole supplement has been read; the supplement gives a
+    product a second time while its first row is still held; a pair of rows gives
+    different files; or a row of ``row_dicts`` does not include the supplement's
+    columns. After the last row: the supplement lists a product that the index does
+    not, or lists it more often.
 
 :exc:`~oops.host.HostFormatError`
     A row is not valid, it describes an option that the host does not support, or, for
-    UVIS, it lacks a column that its observation needs or gives no positive sampling
-    interval for a time series. This error is raised when the iteration reaches that
-    row.
+    UVIS, it lacks a column that its observation needs or gives a time series a
+    sampling interval that is not positive. This error is raised when the iteration
+    reaches that row.
 
 :exc:`~oops.OopsIndexError`
     ``select`` is out of range for a row. This error is raised when the iteration
@@ -154,9 +164,9 @@ UVIS and VIMS
     lack raises this error only when its frame is evaluated.
 
 :exc:`~oops.OopsTypeError`
-    A keyword argument is not one that the method accepts, ``select`` is not of a type
-    that it accepts, or a range in ``filter`` cannot be compared with the column's
-    values.
+    A keyword argument is not one that the method accepts, or ``select`` is not of a
+    type that it accepts; or, when the iteration reaches a row, a range in ``filter``
+    cannot be compared with the row's value.
 
 :exc:`~oops.OopsValueError`
     ``select`` gives a name that it does not accept, or ``filter`` asks for a column that
@@ -169,4 +179,5 @@ UVIS and VIMS
     The file is not an index of the host's instrument.
 
 :exc:`OSError`
-    The index or the supplement cannot be read.
+    The label of the index or the supplement cannot be read, when the method is called;
+    or a table cannot be read, when the iteration starts.

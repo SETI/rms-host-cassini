@@ -113,8 +113,8 @@ intersphinx_mapping = {
 }
 
 # Nitpicky mode: report every cross-reference that does not resolve. The check script,
-# CI, and scripts/read-docs.sh also pass -n, but the ReadTheDocs build takes no extra
-# options, so it gets nitpicky mode only from here.
+# CI, and scripts/read-docs.sh also pass -n, but the ReadTheDocs build passes only its
+# own options, so it gets nitpicky mode only from here.
 nitpicky = True
 
 # The only cross-references that cannot resolve are the informal type words this
