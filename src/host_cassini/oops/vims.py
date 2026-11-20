@@ -402,7 +402,7 @@ class CassiniVIMS(oops.Host):
             'timeshift'   : timeshift,
             'navigation'  : navigation,
             'tracker'     : tracker,
-            '/seti/newnav/capped-run.sh parallel'    : parallel,
+            'parallel'    : parallel,
         }
 
         # The label as read is `header_dict` for the ISIS label of a cube, which holds a

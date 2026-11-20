@@ -791,6 +791,13 @@ def test_meshgrid_and_times_rejects_other_instruments(image_pair: Observations) 
 ##########################################################################################
 
 
+def test_from_file_parallel_override(image_pair: Observations,
+                                     tmp_path: pathlib.Path) -> None:
+    other = image_pair[0]
+    (_, ir) = CassiniVIMS.from_file(write_pds3_cube(tmp_path), parallel=other)
+    assert ir.frame.reference.frame_id == other.frame.frame_id
+
+
 def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
     with pytest.raises(oops.OopsTypeError, match=r"CassiniVIMS\.from_file: 'selection'"):
         CassiniVIMS.from_file(write_pds3_cube(tmp_path), selection='IR')

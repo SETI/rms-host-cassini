@@ -271,7 +271,7 @@ class CassiniUVIS(oops.Host):
             'timeshift'   : timeshift,
             'navigation'  : navigation,
             'tracker'     : tracker,
-            '/seti/newnav/capped-run.sh parallel'    : parallel,
+            'parallel'    : parallel,
         }
 
         subfields = _common_subfields(_without_nulls(label_dict), label_dict=label_dict)

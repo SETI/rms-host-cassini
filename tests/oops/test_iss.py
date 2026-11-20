@@ -1799,6 +1799,14 @@ def test_from_index_parallel_applies_to_every_row(
         parallel.frame.frame_id, parallel.frame.frame_id]
 
 
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_parallel_override(
+        tmp_path: pathlib.Path, index_snapshots: list[oops.observation.Snapshot]) -> None:
+    other = index_snapshots[0]
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path), parallel=other)
+    assert obs.frame.reference.frame_id == other.frame.frame_id
+
+
 def test_host_from_index_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
     snapshots = oops.Host.from_index(write_index(tmp_path))
     assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']

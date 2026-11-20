@@ -561,7 +561,7 @@ class CassiniISS(oops.Host):
             'timeshift'   : timeshift,
             'navigation'  : navigation,
             'tracker'     : tracker,
-            '/seti/newnav/capped-run.sh parallel'    : parallel,
+            'parallel'    : parallel,
         }
 
         snapshot = CassiniISS._make_snapshot(dict_, filepath=filepath, data=data,

@@ -665,6 +665,12 @@ def test_from_index_unfetched_file_has_no_abspath(tmp_path: pathlib.Path) -> Non
 ##########################################################################################
 
 
+def test_from_file_parallel_override(tmp_path: pathlib.Path) -> None:
+    other = CassiniUVIS.from_file(write_spectrum(tmp_path))
+    obs = CassiniUVIS.from_file(write_qube(tmp_path), parallel=other)
+    assert obs.frame.reference.frame_id == other.frame.frame_id
+
+
 def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
     with pytest.raises(oops.OopsTypeError, match=r"CassiniUVIS\.from_file: 'enclosed'"):
         CassiniUVIS.from_file(write_qube(tmp_path), enclosed=True)
