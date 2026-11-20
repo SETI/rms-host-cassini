@@ -326,7 +326,8 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     # A path or frame defined as an earlier one was shares its waypoint or wayframe, and
     # so its ID, so each class's pool is copied too; otherwise a fixed path made by one
     # test could become the path of the next, every fake SPICE path being fixed at the
-    # origin
+    # origin. These copies stay until oops offers one helper that isolates all of its
+    # global state for a test, SETI/rms-oops#250.
     for path_class in oops.Path._PATH_SUBCLASSES:
         if '_WAYPOINTS' in vars(path_class):
             monkeypatch.setattr(path_class, '_WAYPOINTS', dict(path_class._WAYPOINTS))
@@ -384,6 +385,12 @@ def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
 
     CassiniISS.initialize()
     return fake_spicedb
+
+
+# Time-shift letters, and the seconds after the observation's midtime at which its frame
+# is evaluated for a shift of 30 s: "T" moves the observation's times, and "F" evaluates
+# the frame that much later than them; the letters are read in either case
+TIME_SHIFTS = [('T', 0.), ('t', 0.), ('F', 30.), ('TF', 30.)]
 
 
 @pytest.fixture

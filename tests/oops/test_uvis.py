@@ -13,7 +13,8 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, claim_more_rows, pds3_lines, write_table
+from conftest import (TIME_SHIFTS, FakeSpice, FakeSpiceDB, claim_more_rows, pds3_lines,
+                      write_table)
 from pdsparser import Pds3Label
 
 import host_cassini.oops.uvis as uvis
@@ -956,12 +957,13 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times[-1] == cadence.midtime
 
 
+@pytest.mark.parametrize(('letters', 'after'), TIME_SHIFTS)
 def test_from_index_probes_pointing_after_a_time_shift(
-        spice_check_times: list[float]) -> None:
-    """A time shift of the observation ("T") moves the time of the pointing probe."""
+        spice_check_times: list[float], letters: str, after: float) -> None:
+    """The pointing probe is where the frame is evaluated, after the time shift."""
 
     obs = next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()],
-                                      timeshift=(30., 'T')))
-    assert spice_check_times == [pytest.approx(obs.midtime, abs=1.e-3)]
+                                      timeshift=(30., letters)))
+    assert spice_check_times == [pytest.approx(obs.midtime + after, abs=1.e-3)]
 
 ##########################################################################################

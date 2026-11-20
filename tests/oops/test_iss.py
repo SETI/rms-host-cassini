@@ -19,9 +19,9 @@ import oops
 from pdsparser import Pds3Label
 import pytest
 import vicar
-from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
-                      FakeSpiceDB, claim_more_rows, ik_dict, pds3_lines, tdb_in_month,
-                      write_table)
+from conftest import (NAC_HALF_FOV_DEG, PIXELS, TIME_SHIFTS, WAC_HALF_FOV_DEG,
+                      FakeSpice, FakeSpiceDB, claim_more_rows, ik_dict, pds3_lines,
+                      tdb_in_month, write_table)
 
 import host_cassini
 import host_cassini.oops
@@ -1254,6 +1254,18 @@ def test_from_file_marks_a_missing_list_element_none(tmp_path: pathlib.Path,
 
 
 @pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('keyword', ['FILTER_TEMPERATURE',
+                                     'INSTRUMENT_DATA_RATE', 'INST_CMPRS_RATE',
+                                     'INST_CMPRS_RATIO', 'SENSOR_HEAD_ELEC_TEMPERATURE'])
+def test_from_file_leaves_out_minus_999_in_a_fill_keyword(tmp_path: pathlib.Path,
+                                                          keyword: str) -> None:
+    changes: dict[str, Any] = {keyword: -999.0}
+    path = write_pds3_image(tmp_path, **changes)
+    obs = CassiniISS.from_file(path, astrometry=True)
+    assert keyword not in obs.dict
+
+
+@pytest.mark.usefixtures('initialized_iss')
 def test_from_file_keeps_minus_999_where_it_can_be_real(tmp_path: pathlib.Path) -> None:
     """-999 is missing only in the temperatures, rates and ratios, which it cannot be."""
 
@@ -1407,103 +1419,84 @@ def test_host_from_file_reads_a_label_only_iss_repairs(tmp_path: pathlib.Path) -
     assert oops.Host.from_file(path, astrometry=True).detector == 'NAC'
 
 
-@pytest.mark.parametrize('name', ['N0000000001_1.IMG', 'N0000000001_1.LBL'])
-def test_detection_in_file_needs_a_readable_label(tmp_path: pathlib.Path,
-                                                  name: str) -> None:
-    path = tmp_path / name
-    path.write_text('NOT A LABEL')
-    assert CassiniISS._detect_in_file(path) is False
+def test_label_correction_leaves_a_label_without_defects(tmp_path: pathlib.Path) -> None:
+    text = write_pds3_image(tmp_path).read_text().replace('\r\n', '\n')
+    assert CassiniISS._correct_label_text(text, FCPath(tmp_path)) == text
+
+
+def without_next_line_repair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave the next-line repair out of the label correction."""
+
+    monkeypatch.setattr(iss, '_LABEL_REPAIRS',
+                        tuple(repair for repair in iss._LABEL_REPAIRS
+                              if repair != iss._NEXT_LINE_VALUE))
 
 
 @pytest.mark.usefixtures('initialized_iss')
-@pytest.mark.parametrize(('extra_lines', 'method'), [
-    (_NEXT_LINE_VALUE, 'strict'),
-    (_NEXT_LINE_VALUE + _UNQUOTED_NULL, 'loose'),
-], ids=['strict', 'loose'])
+@pytest.mark.parametrize('extra_lines', [_NEXT_LINE_VALUE,
+                                         _NEXT_LINE_VALUE + _UNQUOTED_NULL],
+                         ids=['strict', 'loose'])
 def test_from_file_parser_fallbacks(tmp_path: pathlib.Path,
                                     monkeypatch: pytest.MonkeyPatch,
-                                    extra_lines: list[str], method: str) -> None:
-    """Without the next-line repair, such a label falls back to a slower parser."""
+                                    extra_lines: list[str]) -> None:
+    """Without the next-line repair, such a label is read by a slower parser."""
 
-    monkeypatch.setattr(iss, '_NEXT_LINE_VALUE', (r'^\b$', ''))
-    methods = record_parser_methods(monkeypatch)
+    without_next_line_repair(monkeypatch)
     obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=extra_lines),
                                astrometry=True)
     assert obs.label_dict['DESCRIPTION'] == _NEXT_LINE_DESCRIPTION
-    assert methods[-1] == method
-
-
-def record_parser_methods(monkeypatch: pytest.MonkeyPatch, *,
-                          fail: Exception | None = None,
-                          fail_methods: tuple[str, ...] = ('fast',)) -> list[str]:
-    """Record the parser method of each attempt to read a file; return the record.
-
-    With `fail`, each attempt with a method in `fail_methods` raises that exception
-    instead.
-    """
-
-    methods: list[str] = []
-    read_fileinfo = CassiniISS._read_fileinfo
-
-    def recording_read_fileinfo(*args: Any, **kwargs: Any) -> Any:
-        method = kwargs['pds3_options']['method']
-        methods.append(method)
-        if fail is not None and method in fail_methods:
-            raise fail
-        return read_fileinfo(*args, **kwargs)
-
-    monkeypatch.setattr(CassiniISS, '_read_fileinfo', recording_read_fileinfo)
-    return methods
 
 
 @pytest.mark.usefixtures('initialized_iss')
-@pytest.mark.parametrize(('method', 'expected'), [
-    ('strict', ['strict', 'loose']),
-    ('loose', ['loose']),
-])
+def test_from_file_reads_a_fast_misread_with_a_later_parser(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A label that the fast parser reads with a keyword that is not a PDS3 name is read
+    again from the strict parser on."""
+
+    without_next_line_repair(monkeypatch)
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_EQUALS),
+                               astrometry=True)
+    assert all(iss._PDS3_NAME.fullmatch(name) for name in obs.label_dict)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_keeps_a_fast_misread_that_no_later_parser_reads(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    without_next_line_repair(monkeypatch)
+    monkeypatch.setattr(oops.Host, '_parse_pds3', fail_after_fast(oops.Host._parse_pds3))
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_EQUALS),
+                               astrometry=True)
+    assert obs.label_dict['TARGET_NAME'] == 'SATURN'
+
+
+def fail_after_fast(parse_pds3: Any) -> Any:
+    """A replacement for oops.Host._parse_pds3 under which only the fast method reads a
+    label."""
+
+    def parse(filepath: Any, pds3_options: dict[str, Any], **kwargs: Any) -> Any:
+        if pds3_options['method'] != 'fast':
+            raise oops.host.PdsHostError(f'cannot parse the PDS3 label {filepath}')
+        return parse_pds3(filepath, pds3_options, **kwargs)
+
+    return staticmethod(parse)
+
+
+@pytest.mark.usefixtures('initialized_iss')
 def test_from_file_explicit_parser_method_falls_back_to_later_ones(
-        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, method: str,
-        expected: list[str]) -> None:
+        tmp_path: pathlib.Path) -> None:
     """A requested method is followed by the methods after it in fast, strict, loose."""
 
-    methods = record_parser_methods(monkeypatch)
     path = write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_VALUE + _UNQUOTED_NULL)
-    obs = CassiniISS.from_file(path, astrometry=True, pds3_options={'method': method})
+    obs = CassiniISS.from_file(path, astrometry=True, pds3_options={'method': 'strict'})
     assert obs.label_dict['NOTE'] == 'N/A'
-    assert methods == expected
-
-
-@pytest.mark.usefixtures('initialized_iss')
-def test_from_file_falls_back_after_a_value_error(tmp_path: pathlib.Path,
-                                                  monkeypatch: pytest.MonkeyPatch
-                                                  ) -> None:
-    """A label value that the fast parser cannot convert falls back to strict."""
-
-    methods = record_parser_methods(monkeypatch,
-                                    fail=oops.OopsValueError('hour 25 is invalid'))
-    obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True)
-    assert obs.label_dict['TARGET_NAME'] == 'SATURN'
-    assert methods == ['fast', 'fast', 'strict']
-
-
-@pytest.mark.usefixtures('initialized_iss')
-def test_from_file_value_error_in_every_attempt(tmp_path: pathlib.Path,
-                                                monkeypatch: pytest.MonkeyPatch) -> None:
-    """A label that no attempt can convert raises PdsHostError naming the label."""
-
-    path = write_pds3_image(tmp_path)
-    record_parser_methods(monkeypatch, fail=oops.OopsValueError('hour 25 is invalid'),
-                          fail_methods=('fast', 'strict', 'loose'))
-    with pytest.raises(oops.host.PdsHostError,
-                       match=r'hour 25 is invalid in .*N0000000001_1\.LBL'):
-        CassiniISS.from_file(path, astrometry=True, pds3_options={'method': 'fast'})
 
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_unparsable_label(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, extra_lines=['X = (1, 2'])
     with pytest.raises(oops.host.PdsHostError,
-                       match=r"found 'X'.* in .*N0000000001_1\.LBL"):
+                       match=r"cannot parse the PDS3 label .*N0000000001_1\.LBL: "
+                             r"method fast: .*found 'X'"):
         CassiniISS.from_file(path, astrometry=True)
 
 
@@ -1638,35 +1631,50 @@ _INDEX_ROWS = [
 ]
 
 
-def write_index(directory: pathlib.Path) -> pathlib.Path:
-    """Write a two-row Cassini ISS index table and label; return the label's path."""
+def write_index(directory: pathlib.Path, *,
+                extra: tuple[tuple[str, str, int, tuple[Any, ...], str], ...] = ()
+                ) -> pathlib.Path:
+    """Write a two-row Cassini ISS index table and label; return the label's path.
 
-    widths = [width + 2 if kind == 'CHARACTER' else width
-              for (_, kind, width) in _INDEX_COLUMNS]
+    Each item of `extra` adds a column: its name, data type, width, its value in each
+    row, and a line that its label gives it, such as "NULL_CONSTANT = 0.", or "" for
+    none.
+    """
+
+    columns = _INDEX_COLUMNS + [(name, kind, width)
+                                for (name, kind, width, _, _) in extra]
+    rows = [row + tuple(values[k] for (_, _, _, values, _) in extra)
+            for (k, row) in enumerate(_INDEX_ROWS)]
+    declarations = {name: line for (name, _, _, _, line) in extra if line}
+    widths = [width + 2 if kind == 'CHARACTER' else width for (_, kind, width) in columns]
     row_bytes = sum(widths) + len(widths) - 1 + 2
 
     lines = []
-    for row in _INDEX_ROWS:
+    for row in rows:
         fields = []
-        for (value, (_, kind, width)) in zip(row, _INDEX_COLUMNS, strict=True):
+        for (value, (_, kind, width)) in zip(row, columns, strict=True):
             if kind == 'CHARACTER':
                 fields.append('"' + str(value).ljust(width) + '"')
+            elif kind == 'ASCII_INTEGER':
+                fields.append(f'{value:{width}d}')
             else:
                 fields.append(f'{value:{width}.3f}')
         lines.append(','.join(fields) + '\r\n')
     (directory / 'INDEX.TAB').write_text(''.join(lines), newline='')
 
     text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
-            f'RECORD_BYTES = {row_bytes}', f'FILE_RECORDS = {len(_INDEX_ROWS)}',
+            f'RECORD_BYTES = {row_bytes}', f'FILE_RECORDS = {len(rows)}',
             '^IMAGE_INDEX_TABLE = "INDEX.TAB"', 'OBJECT = IMAGE_INDEX_TABLE',
-            '  INTERCHANGE_FORMAT = ASCII', f'  ROWS = {len(_INDEX_ROWS)}',
-            f'  COLUMNS = {len(_INDEX_COLUMNS)}', f'  ROW_BYTES = {row_bytes}']
+            '  INTERCHANGE_FORMAT = ASCII', f'  ROWS = {len(rows)}',
+            f'  COLUMNS = {len(columns)}', f'  ROW_BYTES = {row_bytes}']
     start = 1
-    for ((name, kind, width), field_width) in zip(_INDEX_COLUMNS, widths, strict=True):
+    for ((name, kind, width), field_width) in zip(columns, widths, strict=True):
         offset = 1 if kind == 'CHARACTER' else 0
         text += ['  OBJECT = COLUMN', f'    NAME = {name}', f'    DATA_TYPE = {kind}',
-                 f'    START_BYTE = {start + offset}', f'    BYTES = {width}',
-                 '  END_OBJECT = COLUMN']
+                 f'    START_BYTE = {start + offset}', f'    BYTES = {width}']
+        if name in declarations:
+            text.append('    ' + declarations[name])
+        text.append('  END_OBJECT = COLUMN')
         start += field_width + 1
     text += ['END_OBJECT = IMAGE_INDEX_TABLE', 'END', '']
     path = directory / 'INDEX.LBL'
@@ -1894,22 +1902,46 @@ def test_from_index_dict_is_json_serializable(tmp_path: pathlib.Path) -> None:
     assert type(obs.label_target) is str
 
 
-@pytest.mark.parametrize(('column', 'value'), [
-    ('BIAS_STRIP_MEAN', 0.),
-    ('DARK_STRIP_MEAN', 0.),
-], ids=['bias', 'dark'])
-def test_from_index_keeps_a_value_declared_null(tmp_path: pathlib.Path, column: str,
-                                                value: float) -> None:
-    """A real value that an index label declares as its null constant is kept.
+@pytest.mark.parametrize('column', ['BIAS_STRIP_MEAN', 'DARK_STRIP_MEAN'],
+                         ids=['bias', 'dark'])
+def test_from_index_keeps_a_value_declared_null_as_zero(tmp_path: pathlib.Path,
+                                                        column: str) -> None:
+    """A null constant of 0, which the metadata indexes declare for these columns while
+    the image labels give 0 as the value, is not applied."""
 
-    The metadata indexes declare 0 the null constant of these columns, which the image
-    labels give as the value.
-    """
+    path = write_index(tmp_path, extra=((column, 'ASCII_REAL', 10, (0., 5.),
+                                         'NULL_CONSTANT = 0.'),))
+    obs = next(CassiniISS.from_index(path))
+    assert obs.dict[column] == 0.
 
-    rows = index_rows(tmp_path)
-    row = rows[0] | {column: np.float64(value), column + '_mask': np.True_}
-    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
-    assert obs.dict[column] == value
+
+def test_from_index_applies_a_declared_null_other_than_zero(tmp_path: pathlib.Path
+                                                            ) -> None:
+    """A corrected label, which declares the fill value its table writes, is followed."""
+
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 5.),
+                                         'NULL_CONSTANT = -1.'),))
+    obs = next(CassiniISS.from_index(path))
+    assert 'BIAS_STRIP_MEAN' not in obs.dict
+
+
+def test_from_index_keeps_a_fill_value_where_the_label_declares_another(
+        tmp_path: pathlib.Path) -> None:
+    """65534 is missing only in a column whose label declares no null constant."""
+
+    path = write_index(tmp_path, extra=(('SEQUENCE_NUMBER', 'ASCII_INTEGER', 5,
+                                         (65534, 1), 'NULL_CONSTANT = 99999'),))
+    obs = next(CassiniISS.from_index(path))
+    assert obs.dict['SEQUENCE_NUMBER'] == 65534
+
+
+def test_from_index_reads_given_rows_with_a_given_label(tmp_path: pathlib.Path) -> None:
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 5.),
+                                         'NULL_CONSTANT = -1.'),))
+    rows = list(CassiniISS._index_rows(path, supplement=None))
+    obs = next(CassiniISS.from_index(path, row_dicts=rows,
+                                     label=Pds3Label(path, method='fast')))
+    assert 'BIAS_STRIP_MEAN' not in obs.dict
 
 
 @pytest.mark.parametrize(('column', 'value'), [
@@ -1924,9 +1956,10 @@ def test_from_index_keeps_a_value_declared_null(tmp_path: pathlib.Path, column: 
     ('CENTER_LONGITUDE', 0.),
     ('CENTRAL_BODY_DISTANCE', 'NULL'),
     ('OPTICS_TEMPERATURE', -999.),
+    ('INST_CMPRS_RATIO', -999.),
 ], ids=['65534', 'order-number-65534', 'int32-min', '1e32', 'minus-1e32', 'emission-0',
         'incidence-0', 'center-latitude-0', 'center-longitude-0', 'null-text',
-        'temperature-999'])
+        'temperature-999', 'ratio-999'])
 def test_from_index_leaves_out_fill_values(tmp_path: pathlib.Path, column: str,
                                            value: Any) -> None:
     """A fill value of the index tables is missing, whether or not the label declares it.
@@ -2217,12 +2250,22 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times == [cadence.midtime]
 
 
+@pytest.mark.parametrize(('letters', 'after'), TIME_SHIFTS)
 def test_from_index_probes_pointing_after_a_time_shift(
-        tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
-    """A time shift of the observation ("T") moves the time of the pointing probe."""
+        tmp_path: pathlib.Path, spice_check_times: list[float], letters: str,
+        after: float) -> None:
+    """The pointing probe is where the frame is evaluated, after the time shift."""
 
-    obs = next(CassiniISS.from_index(write_index(tmp_path), timeshift=(30., 'T')))
-    assert spice_check_times == [pytest.approx(obs.midtime, abs=1.e-3)]
+    obs = next(CassiniISS.from_index(write_index(tmp_path), timeshift=(30., letters)))
+    assert spice_check_times == [pytest.approx(obs.midtime + after, abs=1.e-3)]
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_checks_pointing_where_a_frame_shift_evaluates_it(
+        tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True,
+                               timeshift=(30., 'F'))
+    assert spice_check_times == [pytest.approx(obs.midtime + 30., abs=1.e-3)]
 
 
 @pytest.mark.usefixtures('initialized_iss')
@@ -2233,7 +2276,7 @@ def test_from_file_leaves_out_each_placeholder(tmp_path: pathlib.Path,
     assert 'OBSERVATION_ID' not in obs.dict
 
 
-@pytest.mark.parametrize('value', ['UNKNOWN', '', '---'])
+@pytest.mark.parametrize('value', ['UNKNOWN', '', '---', 'NOT APPLICABLE'])
 def test_from_index_leaves_out_each_placeholder(tmp_path: pathlib.Path,
                                                 value: str) -> None:
     rows = index_rows(tmp_path)

@@ -530,19 +530,14 @@ def _pds3_options_with_defaults(options):
     return oops.Host._pds3_options_with_defaults(options) | {'sources': False}
 
 
-# The order in which the PDS3 label parsers are tried, from the one requested onward
-_PARSER_METHODS = ('fast', 'strict', 'loose')
+def _read_pds3_label(host, fileinfo, *, astrometry, pds3_options):
+    """The parsed PDS3 label of a UVIS or VIMS product.
 
-
-def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=()):
-    """The parsed PDS3 label of a UVIS or VIMS product, read with the parser fallbacks.
-
-    The label is parsed with the method in `pds3_options` and, if that parser rejects it
-    or cannot convert one of its values, by each later method in the order "fast",
-    "strict", "loose". A method that is not one of the three is tried alone. The repairs
-    in `pds3_options`, a list of (pattern, replacement) pairs or a single pair, and then
-    `repairs`, are applied in every attempt. Parsed content is not parsed again, but must
-    describe a product of this host.
+    A path is read by ``oops.Host._read_fileinfo`` with its parser fallback: the label's
+    text is first corrected by the host's ``_correct_label_text``, then parsed with the
+    method in `pds3_options` and, if that method rejects it or cannot convert one of its
+    values, with each later method in the order "fast", "strict", "loose". Parsed content
+    is not parsed again, but must describe a product of this host.
 
     Parameters:
         host (type): The host class, such as CassiniVIMS.
@@ -551,14 +546,14 @@ def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=())
         astrometry (bool): True to read no data array.
         pds3_options (dict[str, Any]): The options for the PDS3 label parser, including
             its method.
-        repairs (tuple[tuple[str, str], ...], optional): The host's own repairs.
 
     Returns:
         Pds3Label: The parsed label.
 
     Raises:
         OSError: If the file cannot be read.
-        PdsHostError: If no parser can read the label; the message names the file.
+        PdsHostError: If no parser can read the label; the message names the file and
+            gives the error of each method tried.
         WrongHostError: If the file or the parsed content is not of this host.
     """
 
@@ -570,53 +565,8 @@ def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=())
                                            getattr(fileinfo, 'filepath', None))
         return fileinfo
 
-    method = pds3_options['method']
-    if method in _PARSER_METHODS:
-        methods = _PARSER_METHODS[_PARSER_METHODS.index(method):]
-    else:
-        methods = (method,)
-
-    given_repairs = pds3_options.get('repairs', [])
-    if (isinstance(given_repairs, tuple) and len(given_repairs) == 2
-            and all(isinstance(item, str) for item in given_repairs)):
-        given_repairs = [given_repairs]     # one (pattern, replacement) pair
-
-    error = None
-    for method in methods:
-        options = pds3_options | {'method': method,
-                                  'repairs': list(given_repairs) + list(repairs)}
-        try:
-            return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
-                                       pds3_options=options)
-        except (oops.host.PdsHostError, oops.OopsValueError) as err:
-            # An OopsValueError is a value that this parser could not convert, which a
-            # later parser may still read
-            error = err
-    raise oops.host.PdsHostError(f'{error} in {fileinfo}') from error
-
-
-def _index_file_path(volumes, row_dict):
-    """The path to the file that one row of an index describes.
-
-    The row's FILE_SPECIFICATION_NAME is relative to the root directory of its volume,
-    the directory named by its VOLUME_ID, inside the directory that holds the volumes.
-    An index in the "metadata" tree of the holdings, such as
-    metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may list files of any volume of
-    its series, so for it that directory is the series in the "volumes" tree beside it,
-    volumes/COISS_2xxx; for an index anywhere else it is the index's own directory.
-    ``oops.Host._volumes_directory`` gives it.
-
-    Parameters:
-        volumes (FCPath): The directory that holds the volume directories.
-        row_dict (dict[str, Any]): The row, which gives VOLUME_ID and
-            FILE_SPECIFICATION_NAME.
-
-    Returns:
-        FCPath: The path or URL of the file.
-    """
-
-    volume_id = str(row_dict['VOLUME_ID']).strip()
-    return volumes / volume_id / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
+    return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
+                               pds3_options=pds3_options, pds3_fallback=True)
 
 
 # The prefix of the volume names of each Cassini instrument that has a host here
@@ -667,33 +617,6 @@ def _known_path(filepath):
     return FCPath(filepath)
 
 
-def _pointing_midtime(cadence, overrides):
-    """The time at which an observation's pointing is checked, after the overrides.
-
-    The overrides are applied after the check, so the time is found here as they will
-    set it: the `cadence` override in place of the observation's own cadence, then a
-    `timeshift` whose letters include "T", which moves every time by its seconds.
-
-    Parameters:
-        cadence (Cadence): The observation's own cadence.
-        overrides (dict[str, Any]): The standard overrides, keyed by name, each None
-            when not given.
-
-    Returns:
-        float: The midtime in seconds TDB.
-    """
-
-    midtime = (overrides['cadence'] or cadence).midtime
-    timeshift = overrides.get('timeshift')
-    if timeshift is not None and 'T' in str(timeshift[1]).upper():
-        midtime += timeshift[0]
-    return midtime
-
-
-# The classes of exception that cspyce raises for a SPICE error
-_SPICE_ERRORS = (LookupError, OSError, RuntimeError, ValueError)
-
-
 def _tdb_from_sclk(count, filepath):
     """The time in seconds TDB of a Cassini spacecraft clock count.
 
@@ -705,12 +628,17 @@ def _tdb_from_sclk(count, filepath):
         float: The time in seconds TDB.
 
     Raises:
-        OopsSpiceError: If the spacecraft clock kernel cannot convert the count.
+        OopsSpiceError: If the spacecraft clock kernel cannot convert the count, which
+            cspyce reports with a SPICE error code; any other exception from cspyce
+            propagates unchanged.
     """
 
+    # The rule by which oops tells missing SPICE data from any other failure
     try:
         return cspyce.scs2e(_CASSINI_SCLK, count)
-    except _SPICE_ERRORS as err:
+    except oops.OopsSpiceError.CSPYCE_ERRORS as err:
+        if not oops.OopsSpiceError.is_spice_error(err):
+            raise
         raise oops.OopsSpiceError.from_spice_error(
             err, description=f'no Cassini clock time for count {count}',
             filepath=filepath) from err
@@ -727,12 +655,16 @@ def _sclk_from_tdb(tdb, filepath):
         str: The clock count, such as "1294562649.000".
 
     Raises:
-        OopsSpiceError: If the spacecraft clock kernel cannot convert the time.
+        OopsSpiceError: If the spacecraft clock kernel cannot convert the time, which
+            cspyce reports with a SPICE error code; any other exception from cspyce
+            propagates unchanged.
     """
 
     try:
         count = cspyce.sce2s(_CASSINI_SCLK, tdb)
-    except _SPICE_ERRORS as err:
+    except oops.OopsSpiceError.CSPYCE_ERRORS as err:
+        if not oops.OopsSpiceError.is_spice_error(err):
+            raise
         raise oops.OopsSpiceError.from_spice_error(
             err, description='no Cassini clock count', time=tdb,
             filepath=filepath) from err
@@ -774,10 +706,6 @@ def _common_subfields(meta, *, label_dict=None, time_from_sclk=False):
 # Metadata in JSON form, without missing values
 ##########################################################################################
 
-# The PDS3 null constants and the other text that the archive writes for "no value",
-# compared without regard to case or surrounding blanks
-_NULL_STRINGS = {'UNK', 'UNKNOWN', 'N/A', 'NULL', '', '---'}
-
 # The number that the Cassini labels and indexes write for a value that was not
 # determined. It is missing only in the keywords and columns that the host lists, where
 # it is a declared null constant or cannot be a real value, such as a temperature, a data
@@ -793,15 +721,17 @@ def _is_null(value, fill=False):
         fill (bool, optional): True if -999 is a fill value in this keyword or column.
 
     Returns:
-        bool: True if `value` is None; one of "UNK", "UNKNOWN", "N/A", "NULL", "---" or
-        the empty string, in any case and with any surrounding blanks; -999 if `fill` is
-        True; or a non-empty list, tuple or set of nothing but these.
+        bool: True if `value` is None or text that PDS3 writes for no value, as
+        ``oops.host.is_pds3_null`` tells ("UNK", "UNKNOWN", "N/A", "NULL", "NOT
+        APPLICABLE", "---" or the empty string, in any case and with any surrounding
+        blanks); -999 if `fill` is True; or a non-empty list, tuple or set of nothing but
+        these.
     """
 
-    if value is None:
+    if oops.host.is_pds3_null(value):
         return True
     if isinstance(value, str):
-        return value.strip().upper() in _NULL_STRINGS
+        return False
     if isinstance(value, bool):
         return False
     if isinstance(value, (int, float)):
@@ -921,8 +851,9 @@ def _row_items(row_dict, *, masks, fill_values=None):
     Parameters:
         row_dict (dict[str, Any]): The row, as the index reader gives it: NumPy values
             and, for each column, a "_mask" entry.
-        masks (bool): True to treat each value that the table's label declares a null
-            constant (its "_mask" entry) as missing.
+        masks (bool | collections.abc.Container[str]): True to treat each value that
+            the table's label declares a null constant (its "_mask" entry) as missing;
+            False to ignore the masks; or the columns whose masks apply.
         fill_values (dict[str, Any], optional): Further values that are missing, by
             column name.
 
@@ -939,7 +870,9 @@ def _row_items(row_dict, *, masks, fill_values=None):
         if key.endswith('_mask') and key[:-5] in row_dict:
             continue
         value = np.asarray(value).tolist()
-        mask = np.asarray(row_dict.get(key + '_mask', False)).tolist() if masks else False
+        mask = False
+        if masks if isinstance(masks, bool) else key in masks:
+            mask = np.asarray(row_dict.get(key + '_mask', False)).tolist()
         fill = fill_values.get(key)
         if isinstance(value, list):
             if not isinstance(mask, list):

@@ -19,10 +19,9 @@ from filecache import FCPath
 import oops
 from oops.host import HostFormatError, HostIndexError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
-                       _common_subfields, _detect_index_by_path, _index_file_path,
-                       _is_null, _known_path, _label_dict, _pds3_options_with_defaults,
-                       _pointing_midtime, _read_pds3_fileinfo, _row_items,
-                       _without_nulls)
+                       _common_subfields, _detect_index_by_path, _is_null, _known_path,
+                       _label_dict, _pds3_options_with_defaults, _read_pds3_label,
+                       _row_items, _without_nulls)
 
 __all__ = ['CassiniUVIS']
 
@@ -131,6 +130,9 @@ class CassiniUVIS(oops.Host):
     #: that appears in its error messages.
     NAME = 'Cassini UVIS'
 
+    # Pairing by file works around the order until the supplements are corrected, and
+    # stays right once they are: SETI/rms-data-projects#255 item 1; #30.
+    #
     #: The supplements of 54 of the 61 UVIS metadata indexes in the holdings (COUVIS_0001
     #: to COUVIS_0060 and COUVIS_0999) list the products in another order than the index,
     #: as much as 1,455 rows away (survey of 2026-11-19), so each index row is paired with
@@ -241,7 +243,8 @@ class CassiniUVIS(oops.Host):
                 one of those listed.
             OopsValueError: If `select` is a string.
             OSError: If `filepath` cannot be read.
-            PdsHostError: If no parser can read the PDS3 label.
+            PdsHostError: If no parser can read the PDS3 label; the message names the
+                file and gives the error of each parser method tried.
             WrongHostError: If the file is not the label of a Cassini UVIS product.
         """
 
@@ -256,8 +259,8 @@ class CassiniUVIS(oops.Host):
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
         # Read the label
-        fileinfo = _read_pds3_fileinfo(CassiniUVIS, fileinfo, astrometry=astrometry,
-                                       pds3_options=pds3_options)
+        fileinfo = _read_pds3_label(CassiniUVIS, fileinfo, astrometry=astrometry,
+                                    pds3_options=pds3_options)
         filepath = _known_path(fileinfo.filepath)
         if filepath is None and not astrometry:
             raise HostFormatError('no file path is known for this Cassini UVIS PDS3 '
@@ -415,21 +418,26 @@ class CassiniUVIS(oops.Host):
                 "index" directory; if the label of the index or the supplement does not
                 describe a table that can be read, or lacks a column that gives a row's
                 product; or if `supplement` is None while `row_dicts` is not given.
-                During the iteration, at the row concerned: if a row does not match the
-                table's label; if an index row's product is not in the supplement, which
-                is found once the whole supplement has been read; if the supplement
-                gives a product a second time while its first row is still held; if a
-                pair of rows fails the check that the index's FILE_NAME contains the
-                supplement's VOLUME_ID and FILE_SPECIFICATION_NAME; or if a row of
-                `row_dicts` has no supplemental columns merged in. After the last row,
-                if the supplement lists a product that the index does not.
+                During the iteration, at the row concerned: if an index row's product is
+                not in the supplement, which is found once the whole supplement has been
+                read; if the supplement gives a product a second time while its first
+                row is still held; if a pair of rows fails the check that the index's
+                FILE_NAME contains the supplement's VOLUME_ID and
+                FILE_SPECIFICATION_NAME; if a row of `row_dicts` has no supplemental
+                columns merged in; after every row that a table holds, if it holds fewer
+                rows than its label says; or at the first of the ten rows read with it,
+                if a row is longer than the label's row length. After the last row, if
+                the supplement lists a product that the index does not, or a table holds
+                more rows than its label says. A value that cannot be read as its
+                column's number gives a warning, and is missing from the row.
             OopsIndexError: If an index in `select` is out of range for a row; raised when
                 the iteration reaches that row.
             OopsTypeError: If a keyword argument is not one of those listed or `select`
                 has an invalid type; when the iteration reaches a row whose value cannot
                 be compared with a range in `filter`.
             OopsValueError: If `select` is a string, or `filter` uses a column that the
-                index does not have.
+                index does not have; for `row_dicts` that is not a sequence, the latter
+                is raised when the iteration reads the first row.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -448,7 +456,8 @@ class CassiniUVIS(oops.Host):
 
         # The labels are read now and the rows as the iteration reaches them. The index
         # gives each product as "/COUVIS_0001/DATA/.../X.LBL" and the supplement by its
-        # volume and "DATA/.../X.LBL", in another order for most volumes (#30).
+        # volume and "DATA/.../X.LBL", in another order for most volumes until the
+        # supplements are corrected (SETI/rms-data-projects#255 item 1; #30).
         rows = CassiniUVIS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
                                        filter=filter,
@@ -486,7 +495,7 @@ class CassiniUVIS(oops.Host):
                 # The table's declared null constants, -999 among them, and the text
                 # that the archive writes for "no value" are missing
                 items = _row_items(row_dict, masks=True)
-                fpath = _index_file_path(volumes, items)        # full path or URL (#29)
+                fpath = oops.Host._index_file_path(volumes, items)  # path or URL (#29)
                 row_label = CassiniUVIS._label_from_index_row(items, fpath)
                 yield CassiniUVIS._make_observations(
                     row_label, fpath, astrometry=True, enclose=enclose,
@@ -1112,12 +1121,14 @@ class CassiniUVIS(oops.Host):
         }
 
         # A frame that the C kernels cannot supply raises OopsSpiceError, never a cspyce
-        # error: now from from_file, and from from_index when the frame is used
+        # error: now from from_file, and from from_index when the frame is used. It is
+        # checked at the time at which the observation will evaluate the frame.
         if overrides['frame'] is None:
-            midtime = _pointing_midtime(cadence, overrides)
+            pointing_time = oops.Host._pointing_time(cadence, overrides)
             params['frame'] = oops.Host._check_spice_frame(
-                frame_name, midtime, description=f'no Cassini UVIS {frame_name} pointing',
-                filepath=filepath, defer=not check)
+                frame_name, pointing_time,
+                description=f'no Cassini UVIS {frame_name} pointing', filepath=filepath,
+                defer=not check)
 
         # Parsed content from no file has no file subfields, and `abspath` is given only
         # when the file is on the local disk

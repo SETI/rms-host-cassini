@@ -29,9 +29,8 @@ import oops
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _common_subfields, _detect_index_by_path, _fix_cassini_ring_target,
-                       _index_file_path, _is_null, _known_path, _label_dict,
-                       _pds3_options_with_defaults, _pointing_midtime,
-                       _read_pds3_fileinfo, _row_items, _tdb_from_sclk, _without_nulls)
+                       _is_null, _known_path, _label_dict, _pds3_options_with_defaults,
+                       _read_pds3_label, _row_items, _tdb_from_sclk, _without_nulls)
 
 __all__ = ['CassiniVIMS']
 
@@ -138,8 +137,16 @@ _CORE_ITEMS_FROM_MODE = {'POINT'      : (1, _INDEX_BANDS, 64),
 # sampled labels have one, such as v1481842120_1_048.lbl of COVIMS_0005:
 #     SNAPSHOT_MODE_FLAG               = OFF/* IR high resolution,
 #                                          IR low resolution, Visible (degree K) */
-# The two lines of the comment are joined.
-_TWO_LINE_COMMENT = (r'(/\*(?:[^*\r\n]|\*(?!/))*)\r?\n([^\r\n]*?\*/)', r'\1 \2')
+# The two lines of the comment are joined. The labels are in the holdings, so the repair
+# stays; CassiniVIMS._correct_label_text applies it.
+_TWO_LINE_COMMENT = (r'(/\*(?:[^*\n]|\*(?!/))*)\n([^\n]*?\*/)', r'\1 \2')
+
+# A line of plain text, outside any comment, in the label of each volume's own index,
+# such as volumes/COVIMS_0xxx/COVIMS_0040/index/index.lbl (all 94 volumes), which no PDS3
+# parser accepts. The metadata index labels hold the same text as a comment, and the
+# repair makes it one.
+_INDEX_TEXT_LINE = (r"(?m)^(For full definitions of index fields, please refer to "
+                    r"Operator's Handbook\.)[ \t]*$", r'/*\1*/')
 
 # The SPICE frames of the VIS channel, the IR channel, and the IR channel's solar port
 _VIS_FRAME_NAME    = 'CASSINI_VIMS_V'
@@ -275,6 +282,9 @@ class CassiniVIMS(oops.Host):
     #: that appears in its error messages.
     NAME = 'Cassini VIMS'
 
+    # Pairing by file works around the order until the supplements are corrected, and
+    # stays right once they are: SETI/rms-data-projects#257 item 1; #34.
+    #
     #: The supplements of 25 of the 95 VIMS metadata indexes in the holdings (COVIMS_0001
     #: to COVIMS_0094 and COVIMS_0999) list the cubes in another order than the index, as
     #: much as 28,990 rows away, in COVIMS_0003 and the cumulative COVIMS_0999 (survey of
@@ -300,11 +310,11 @@ class CassiniVIMS(oops.Host):
                 A parsed label that came from no file has no file subfields, and a full
                 read of it raises an error.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser. A label
-                that the requested parser, by default "fast", rejects or cannot convert
-                is parsed again by each later one of "fast", "strict" and "loose". A
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. A
                 comment that opens on a value's line and closes on the next, which no
-                parser accepts, has its two lines joined first.
+                parser accepts, has its two lines joined first. A label that the
+                requested parser, by default "fast", rejects or cannot convert is parsed
+                again by each later one of "fast", "strict" and "loose".
             select (int | slice | str | tuple[int | slice | str, ...], optional): An
                 index, slice, or tuple of indices and slices to apply to the returned
                 (vis, ir) pair. A channel can also be chosen by name, "VIS" or "IR"
@@ -382,7 +392,8 @@ class CassiniVIMS(oops.Host):
             OopsTypeError: If `select` has an invalid type, or a keyword argument is not
                 one of those listed.
             OopsValueError: If a string in `select` is not a channel name.
-            PdsHostError: If no parser can read the PDS3 or ISIS label.
+            PdsHostError: If no parser can read the PDS3 or ISIS label; the message
+                names the file and gives the error of each parser method tried.
             OSError: If the file cannot be read.
             WrongHostError: If the file is not a Cassini VIMS file.
         """
@@ -398,9 +409,8 @@ class CassiniVIMS(oops.Host):
         pds3_options = _pds3_options_with_defaults(pds3_options)
 
         # Read the label
-        fileinfo = _read_pds3_fileinfo(CassiniVIMS, fileinfo, astrometry=astrometry,
-                                       pds3_options=pds3_options,
-                                       repairs=(_TWO_LINE_COMMENT,))
+        fileinfo = _read_pds3_label(CassiniVIMS, fileinfo, astrometry=astrometry,
+                                    pds3_options=pds3_options)
         filepath = _known_path(fileinfo.filepath)
         if filepath is None and not astrometry:
             raise HostFormatError('no file path is known for this Cassini VIMS label, so '
@@ -568,13 +578,17 @@ class CassiniVIMS(oops.Host):
                 "index" directory; if the label of the index or the supplement does not
                 describe a table that can be read, or lacks a column that gives a row's
                 cube; or if `supplement` is None while `row_dicts` is not given. During
-                the iteration, at the row concerned: if a row does not match the table's
-                label; if an index row's cube is not in the supplement, which is found
-                once the whole supplement has been read; if the supplement gives a cube a
-                second time while its first row is still held; if a pair of rows gives
-                different VOLUME_IDs or file names; or if a row of `row_dicts` has no
-                supplemental columns merged in. After the last row, if the supplement
-                lists a cube that the index does not.
+                the iteration, at the row concerned: if an index row's cube is not in the
+                supplement, which is found once the whole supplement has been read; if
+                the supplement gives a cube a second time while its first row is still
+                held; if a pair of rows gives different VOLUME_IDs or file names; if a
+                row of `row_dicts` has no supplemental columns merged in; after every
+                row that a table holds, if it holds fewer rows than its label says; or
+                at the first of the ten rows read with it, if a row is longer than the
+                label's row length. After the last row, if the supplement lists a cube
+                that the index does not, or a table holds more rows than its label says.
+                A value that cannot be read as its column's number gives a warning, and
+                is missing from the row.
             OopsIndexError: If an index in `select` is out of range for a row; raised when
                 the iteration reaches that row.
             OopsSpiceError: If the spacecraft clock kernel cannot convert a row's
@@ -583,7 +597,8 @@ class CassiniVIMS(oops.Host):
                 has an invalid type; when the iteration reaches a row whose value cannot
                 be compared with a range in `filter`.
             OopsValueError: If a string in `select` is not a channel name, or `filter`
-                uses a column that the index does not have.
+                uses a column that the index does not have; for `row_dicts` that is not
+                a sequence, the latter is raised when the iteration reads the first row.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -603,7 +618,8 @@ class CassiniVIMS(oops.Host):
         # The labels are read now and the rows as the iteration reaches them. The index
         # gives each cube by PATH_NAME and FILE_NAME, its data file, as
         # "/data/.../v1294638283_1.qub", and the supplement by its label,
-        # "data/.../v1294638283_1.lbl", in another order for some volumes (#34).
+        # "data/.../v1294638283_1.lbl", in another order for some volumes until the
+        # supplements are corrected (SETI/rms-data-projects#257 item 1; #34).
         rows = CassiniVIMS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
                                        filter=filter,
@@ -641,7 +657,7 @@ class CassiniVIMS(oops.Host):
                 # The table's declared null constants, -999 among them, and the text
                 # that the archive writes for "no value" are missing
                 items = _row_items(row_dict, masks=True)
-                fpath = _index_file_path(volumes, items)        # full path or URL (#29)
+                fpath = oops.Host._index_file_path(volumes, items)  # path or URL (#29)
                 row_label = CassiniVIMS._label_from_index_row(items, fpath)
                 meta = dict(items, SPECTRAL_QUBE={
                     'CORE_ITEMS': list(row_label['SPECTRAL_QUBE']['CORE_ITEMS'])})
@@ -1123,9 +1139,10 @@ class CassiniVIMS(oops.Host):
                 # a cspyce error: now from from_file, and from from_index when the frame
                 # is used
                 if using_cks:
-                    midtime = _pointing_midtime(cadence, overrides)
+                    pointing_time = oops.Host._pointing_time(cadence, overrides)
                     frame = oops.Host._check_spice_frame(
-                        frame, midtime, description=f'no Cassini VIMS {frame} pointing',
+                        frame, pointing_time,
+                        description=f'no Cassini VIMS {frame} pointing',
                         filepath=filepath, defer=not check)
 
                 params = {
@@ -1469,29 +1486,28 @@ class CassiniVIMS(oops.Host):
                 return True
         return False
 
-    @staticmethod
-    def _detect_in_file(filepath):
-        """True if a file is a VIMS label that only this host can read.
+    @classmethod
+    def _correct_label_text(cls, text, filepath):
+        """The text of a PDS3 label of a VIMS cube or index, with its known defects
+        repaired.
 
-        :meth:`oops.Host.from_file <oops.host.host_.Host.from_file>` asks this when no
-        PDS3 parser reads a label as it is, as for the labels with a comment that spans
-        two lines, which this host repairs in memory.
+        ``oops.Host`` calls this before any parser reads a label of this host, the labels
+        of the index tables included. A comment that opens on the line of a value and
+        closes on the next line, as in 119 of 570 sampled cube labels, is joined into one
+        line, and the line of plain text in the label of each volume's own index is made
+        a comment. A label without these defects is returned unchanged.
 
         Parameters:
-            filepath (str | pathlib.Path | FCPath): The path to the file.
+            text (str): The text of the label, with <LF> line terminators.
+            filepath (FCPath): The path to the label.
 
         Returns:
-            bool: True if the file is a PDS3 or ISIS label that :meth:`from_file` reads,
-            with its repairs, as that of a Cassini VIMS cube.
+            str: The repaired text.
         """
 
-        try:
-            label = _read_pds3_fileinfo(CassiniVIMS, filepath, astrometry=True,
-                                        pds3_options=_pds3_options_with_defaults(None),
-                                        repairs=(_TWO_LINE_COMMENT,))
-        except (oops.host.HostError, oops.OopsValueError, OSError):
-            return False
-        return CassiniVIMS._detect_in_pds3(label)
+        for (pattern, replacement) in (_TWO_LINE_COMMENT, _INDEX_TEXT_LINE):
+            text = re.sub(pattern, replacement, text)
+        return text
 
     @staticmethod
     def _detect_in_index(label):

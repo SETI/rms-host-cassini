@@ -16,7 +16,8 @@ from oops.body import Body
 
 from host_cassini.oops._cassini import (_Cassini, _cassini_obs_id_code,
                                         _fix_cassini_ring_target,
-                                        _pds3_options_with_defaults)
+                                        _pds3_options_with_defaults, _sclk_from_tdb,
+                                        _tdb_from_sclk)
 
 ##########################################################################################
 # Mission constants
@@ -523,5 +524,26 @@ def test_fix_target_without_observation_id() -> None:
 ], ids=['iss', 'uvis', 'vims', 'too-short', 'other-instrument'])
 def test_cassini_obs_id_code(obs_id: str, expected: str) -> None:
     assert _cassini_obs_id_code(obs_id) == expected
+
+##########################################################################################
+# Clock conversions
+##########################################################################################
+
+
+def fail_without_a_spice_code(*args: Any) -> None:
+    raise ValueError('the count is not a number')
+
+
+@pytest.mark.parametrize(('name', 'convert', 'value'), [
+    ('scs2e', _tdb_from_sclk, '1294562649.000'),
+    ('sce2s', _sclk_from_tdb, 0.),
+], ids=['count-to-time', 'time-to-count'])
+def test_clock_error_without_a_spice_code_propagates(
+        monkeypatch: pytest.MonkeyPatch, name: str, convert: Any, value: Any) -> None:
+    """Only a cspyce error with a SPICE error code is missing SPICE data."""
+
+    monkeypatch.setattr(cspyce, name, fail_without_a_spice_code)
+    with pytest.raises(ValueError, match='the count is not a number'):
+        convert(value, 'N1294562649_1.IMG')
 
 ##########################################################################################

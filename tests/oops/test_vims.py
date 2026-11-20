@@ -15,7 +15,8 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, claim_more_rows, pds3_lines, write_table
+from conftest import (TIME_SHIFTS, FakeSpice, FakeSpiceDB, claim_more_rows, pds3_lines,
+                      write_table)
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from pdsparser import Pds3Label
 
@@ -991,10 +992,25 @@ def test_host_from_file_reads_a_comment_that_spans_two_lines(
     assert ir.instrument == 'VIMS'
 
 
-def test_detection_in_file_needs_a_readable_label(tmp_path: pathlib.Path) -> None:
-    path = tmp_path / 'v0000000001_1.lbl'
-    path.write_text('NOT A LABEL')
-    assert CassiniVIMS._detect_in_file(path) is False
+def test_label_correction_leaves_a_label_without_defects(tmp_path: pathlib.Path) -> None:
+    text = write_pds3_cube(tmp_path).read_text().replace('\r\n', '\n')
+    assert CassiniVIMS._correct_label_text(text, FCPath(tmp_path)) == text
+
+
+def test_host_from_index_refuses_a_volumes_own_index_with_a_text_line(
+        tmp_path: pathlib.Path) -> None:
+    """The label of a volume's own index holds a line of plain text, which no parser
+    reads; the host's correction makes it readable, and the host refuses the index."""
+
+    directory = tmp_path / 'COVIMS_0040' / 'index'
+    directory.mkdir(parents=True)
+    path = directory / 'index.lbl'
+    path.write_text('\n'.join([
+        'PDS_VERSION_ID = PDS3', 'INSTRUMENT_HOST_ID = CO', 'INSTRUMENT_ID = VIMS', '',
+        "For full definitions of index fields, please refer to Operator's Handbook.", '',
+        'OBJECT = INDEX_TABLE', '  ROWS = 1', 'END_OBJECT = INDEX_TABLE', 'END', '']))
+    with pytest.raises(HostIndexError, match="not a volume's own index"):
+        oops.Host.from_index(path)
 
 
 def test_from_file_reads_a_comment_that_spans_two_lines(tmp_path: pathlib.Path) -> None:
@@ -1054,6 +1070,27 @@ def test_from_file_keeps_minus_999_where_it_can_be_real(tmp_path: pathlib.Path) 
     assert ir.dict['SC_SUN_POSITION_VECTOR'] == [-999., 1., 2.]
 
 
+@pytest.mark.parametrize('keyword', ['DETECTOR_TEMPERATURE', 'INSTRUMENT_DATA_RATE',
+                                     'INSTRUMENT_TEMPERATURE', 'INST_CMPRS_RATIO',
+                                     'OPTICS_TEMPERATURE'])
+def test_from_file_leaves_out_minus_999_in_a_fill_keyword(tmp_path: pathlib.Path,
+                                                          keyword: str) -> None:
+    changes: dict[str, Any] = {keyword: -999.}
+    path = write_pds3_cube(tmp_path, **changes)
+    (_, ir) = CassiniVIMS.from_file(path, astrometry=True)
+    assert keyword not in ir.dict
+
+
+def test_from_file_marks_a_fill_exposure_none_inside_an_object(
+        tmp_path: pathlib.Path) -> None:
+    """The ISIS label of a cube holds its keywords in its QUBE object."""
+
+    path = write_isis_cube(tmp_path, POWER_STATE_FLAG=['ON', 'OFF'],
+                           EXPOSURE_DURATION=[100., -999.])
+    (_, ir) = CassiniVIMS.from_file(path, astrometry=True)
+    assert ir.dict['QUBE']['EXPOSURE_DURATION'] == [100., None]
+
+
 def test_from_file_marks_a_fill_exposure_none(tmp_path: pathlib.Path) -> None:
     path = write_pds3_cube(tmp_path, POWER_STATE_FLAG=['ON', 'OFF'],
                            EXPOSURE_DURATION=[100., -999.])
@@ -1093,15 +1130,16 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times == [cadence.midtime]
 
 
+@pytest.mark.parametrize(('letters', 'after'), TIME_SHIFTS)
 def test_from_index_probes_pointing_after_a_time_shift(
-        spice_check_times: list[float]) -> None:
-    """A time shift of the observation ("T") moves the time of the pointing probe."""
+        spice_check_times: list[float], letters: str, after: float) -> None:
+    """The pointing probe is where the frame is evaluated, after the time shift."""
 
     row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
                     VIS_POWER_STATE_FLAG='OFF')
     [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row],
-                                       timeshift=(30., 'T'))
-    assert spice_check_times == [pytest.approx(ir.midtime, abs=1.e-3)]
+                                       timeshift=(30., letters))
+    assert spice_check_times == [pytest.approx(ir.midtime + after, abs=1.e-3)]
 
 
 def write_vims_tables(directory: pathlib.Path) -> pathlib.Path:
@@ -1169,5 +1207,50 @@ def test_backplane_clock_fraction_is_in_seconds(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(cspyce, 'scs2e', scs2e)
     tdb = CassiniVIMS._tdb_from_clock_seconds(1640775127.5, FCPath('v1.qub'))
     assert tdb == pytest.approx(1640775127.5, abs=1.e-6)
+
+
+def backplane_times(directory: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                    seconds: np.ndarray) -> np.ndarray:
+    """The times that a 4x2 cube's time backplanes give, read with a clock kernel that
+    counts the digits after the point as 1/256 s ticks.
+
+    `seconds` holds the clock seconds of each sample in (line, sample) order; every
+    sample is 7980 ticks of 1/15959 s, half a second, later.
+    """
+
+    def scs2e(code: int, sclk: str) -> float:
+        (whole, _, ticks) = sclk.partition('.')
+        return float(whole) + int(ticks or '0') / 256.
+
+    monkeypatch.setattr(cspyce, 'scs2e', scs2e)
+    backplanes = np.zeros((BAND_SUFFIX_ITEMS, 2, 4), dtype='int32')
+    backplanes[0] = seconds
+    backplanes[1] = 7980
+    path = write_pds3_cube(directory, band_suffix_name=_TIMED_SUFFIX_NAME,
+                           backplanes=backplanes)
+    label = CassiniVIMS._standard_label(Pds3Label(path, method='fast').as_dict())
+    (_, times) = CassiniVIMS._load_data_and_times(FCPath(path.with_suffix('.qub')),
+                                                  label['^QUBE_offset'] - 1, label)
+    return np.asarray(times)
+
+
+def test_backplane_times_span_the_clock_fractions(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first and last samples' times keep their fractions of a second in seconds."""
+
+    times = backplane_times(tmp_path, monkeypatch,
+                            _CLOCK_SECONDS + np.arange(8).reshape(2, 4))
+    assert times.max() == pytest.approx(_CLOCK_SECONDS + 7 + 7980 / 15959, abs=1.e-6)
+
+
+def test_backplane_with_one_time_gives_it_to_every_sample(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A backplane whose samples after the first are all -8192 gives the first time to
+    every sample, with its fraction of a second in seconds."""
+
+    seconds = np.full((2, 4), -8192)
+    seconds[0, 0] = _CLOCK_SECONDS
+    times = backplane_times(tmp_path, monkeypatch, seconds)
+    assert times.min() == pytest.approx(_CLOCK_SECONDS + 7980 / 15959, abs=1.e-6)
 
 ##########################################################################################
