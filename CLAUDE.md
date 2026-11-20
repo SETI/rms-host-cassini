@@ -45,7 +45,7 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
 - Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project and
-  patch targets in `codecov.yml`); it is at 87%, held down by `vims.py` at 71%. The ubuntu /
+  patch targets in `codecov.yml`); it is at 90%, held down by `vims.py` at 77%. The ubuntu /
   Python 3.13 CI job uploads to Codecov and fails if the upload fails. The upload
   authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
@@ -114,7 +114,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   UVIS and VIMS `from_file` publish `dict` (no nulls), `label_dict` or (VIMS cube)
   `header_dict`, the clock counts, and `time_from_sclk`; their file subfields still name
   the label (#32). They parse with the fast/strict/loose fallback of
-  `_read_pds3_fileinfo()`, and VIMS repairs two-line comments (`_TWO_LINE_COMMENT`).
+  `_read_pds3_fileinfo()`, and VIMS repairs two-line comments (`_TWO_LINE_COMMENT`);
+  `CassiniVIMS._detect_in_file()` lets `oops.Host.from_file` reach it for those labels.
 - Every `from_index()` refuses a volume's own index (one in an `index` directory, any
   case) with `HostIndexError` at call time (`_refuse_volume_index()`), as the other three
   hosts do, and names each row's file by its full path or URL: `_index_file_path()` in

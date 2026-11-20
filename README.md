@@ -47,8 +47,8 @@ compute its geometry. It is a product of the
   PDS3 names, with one fixed choice for each value on which they disagree.
 - **Spectrometer products**: a UVIS product becomes one observation per window, and a
   VIMS cube becomes a pair of observations, one for each channel.
-- **Whole volumes at once**: a PDS3 index gives the observations of every product in a
-  volume, without opening the products.
+- **Whole volumes at once**: a Ring-Moon Systems Node metadata index gives the
+  observations of every product in a volume, without opening the products.
 - **Pointing from SPICE**: the pointing comes from the Cassini C kernels, loaded a month
   of the mission at a time, or from a frame that the caller supplies.
 
@@ -83,7 +83,7 @@ volume:
 from host_cassini import CassiniISS, CassiniVIMS
 
 snapshot = CassiniISS.from_file('COISS_2009/data/1484506648_1484573295/N1484506648_1.LBL')
-snapshots = list(CassiniISS.from_index('COISS_2009/index/index.lbl'))
+snapshots = list(CassiniISS.from_index('metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl'))
 (vis, ir) = CassiniVIMS.from_file('v1484505000_1.qub')
 ```
 

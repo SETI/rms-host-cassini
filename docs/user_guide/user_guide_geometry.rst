@@ -7,9 +7,8 @@ Time
 
 An ISS image's exposure begins at ``START_TIME``, in UTC at the spacecraft, and lasts
 for ``EXPOSURE_DURATION``. The Snapshot's default cadence covers exactly that interval.
-An image cannot
-be read if no label read gives ``START_TIME`` or ``EXPOSURE_DURATION`` (see
-:doc:`user_guide_errors`).
+An image cannot be read if neither label that was read gives ``START_TIME`` or
+``EXPOSURE_DURATION`` (see :doc:`user_guide_errors`).
 
 A UVIS observation begins at the label's ``START_TIME``. Each sample of a QUBE or
 SPECTRUM lasts for ``INTEGRATION_DURATION``, and each sample of a TIME_SERIES for the
@@ -31,12 +30,12 @@ frame of the detector for UVIS, such as ``CASSINI_UVIS_FUV``, and ``CASSINI_VIMS
 ``CASSINI_VIMS_IR_SOL``. The C kernels for the time of the observation are loaded when
 it is made, as :doc:`user_guide_setup` describes.
 
-When :meth:`~host_cassini.oops.iss.CassiniISS.from_file` builds the frame from the C
-kernels, it checks at once that they hold the camera's pointing at the middle of the
-exposure, after any ``cadence`` override. If they do not, it raises
-:exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`). The UVIS and VIMS hosts do not
-check the pointing when they make an observation; if the kernels lack it, the error
-appears only when the observation's frame is evaluated.
+When ``from_file()`` builds the frame from the C kernels, it checks at once that they
+hold the pointing at the middle of each observation, after any ``cadence`` override. If
+they do not, it raises :exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
+``from_index()`` does not raise for missing pointing: an observation whose pointing the
+kernels lack still appears, and its frame raises :exc:`oops.OopsSpiceError`, with the
+same message, when it is evaluated.
 
 A caller that has better pointing can pass it with the ``frame`` override, for example
 as a :class:`~oops.frame.Cmatrix`. The host then uses that frame, neither loads nor
@@ -47,8 +46,9 @@ hosts are initialized, unless ``initialize()`` is called with ``gapfill=False``.
 Targets and light sources
 =========================
 
-The target body comes from ``TARGET_NAME``. An ISS image whose labels give no
-``TARGET_NAME`` has the target ``NONE``. Each host repairs the names that its labels
+The target body comes from ``TARGET_NAME``. An observation whose label gives no
+``TARGET_NAME``, or gives a value that means none, such as ``UNK``, has the target
+``NONE``. Each host repairs the names that its labels
 give wrongly or that are not bodies. The ISS host repairs these:
 
 .. list-table::
@@ -65,10 +65,10 @@ give wrongly or that are not bodies. The ISS host repairs these:
    * - ``DARK SKY``, ``SKY``
      - ``NONE``
 
-The UVIS host gives the target ``NONE`` for ``CALIB``, ``IPH``, ``N/A``, ``SKY``,
-``SOLAR WIND``, ``STAR``, and ``UNK``, and expands the two-letter codes of small moons,
+The UVIS host gives the target ``NONE`` for ``CALIB``, ``IPH``, ``SKY``, ``SOLAR WIND``,
+and ``STAR``, and expands the two-letter codes of small moons,
 such as ``DA`` for ``DAPHNIS``. The VIMS host gives the target ``NONE`` for ``DARK SKY``,
-``DUST``, ``OTHER``, ``SKY``, and ``UNK``.
+``DUST``, ``OTHER``, and ``SKY``.
 
 An ISS or VIMS observation of the rings has a ring plane as its target. The host
 recognizes it by the target code in ``OBSERVATION_ID``, ``RI`` or ``RA`` through ``RG``,

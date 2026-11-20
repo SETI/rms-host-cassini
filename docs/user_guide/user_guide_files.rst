@@ -59,8 +59,10 @@ A path that ends in ``.lbl``, in any case, is read as a PDS3 label, and any othe
 as a VICAR image file.
 
 The ``filepath``, ``basename``, ``abspath``, and ``image_url`` subfields always give the
-image file, also when the input is the label. After an astrometry read of a remote
-label, the image file has not been retrieved, so ``abspath`` is absent.
+image file, also when the input is the label. ``abspath`` is present only when the image
+file is on the local file system or is a remote file already in the local cache. An
+astrometry read of a remote label does not retrieve the image file, so ``abspath`` is
+present only if an earlier read cached it. Reading a file never creates a directory.
 
 Parsed input
 ------------
@@ -68,6 +70,12 @@ Parsed input
 A label or image that has already been parsed can be passed in its place: a
 :class:`~pdsparser.Pds3Label` is read as a PDS3 label, and a :class:`~vicar.VicarLabel`
 or :class:`~vicar.VicarImage` as the image file.
+
+Parsed content that came from no file, such as a label parsed from text, has no
+``filepath``, ``basename``, ``abspath``, or ``image_url``. An astrometry read of it
+works. So does a normal read of a :class:`~vicar.VicarImage`, which holds its array. A
+normal read of a PDS3 label or a :class:`~vicar.VicarLabel` needs the image file, so it
+raises :exc:`~oops.host.HostFormatError`, saying that no file path is known.
 
 Reading the PDS3 label
 ----------------------
@@ -110,11 +118,16 @@ These options are particular to the ISS host:
 ``astrometry``
     True for an astrometry read, as described above.
 
+``select``
+    Must be None. An image is one observation, so there is nothing to select, and any
+    other value raises :exc:`~oops.OopsValueError`.
+
 The standard OOPS overrides, ``target``, ``lightsource``, ``path``, ``frame``,
 ``cadence``, ``fov``, ``calibrations``, ``timeshift``, ``navigation``, ``tracker``, and
 ``parallel``, replace what the host would otherwise build. They are listed with
-:meth:`~host_cassini.oops.iss.CassiniISS.from_file`. Any other keyword, ``select``
-included, is accepted and ignored.
+:meth:`~host_cassini.oops.iss.CassiniISS.from_file`. Any other keyword raises
+:exc:`~oops.OopsTypeError`, so that a misspelled argument is not silently ignored. The
+arguments are checked before any file is read.
 
 UVIS products
 =============
@@ -141,12 +154,19 @@ product gives a single observation. Two options control this:
 ``select``
     An index, a slice, or a tuple of indices and slices that picks from the
     observations, with a single observation treated as a tuple of one. ``select=1``
-    returns only the observation of the second window.
+    returns only the observation of the second window. A ``select`` of a type that it
+    does not accept, or a name, raises an error before the label is read.
 
-The ``dict`` subfield holds the PDS3 label, and ``filepath`` and ``basename`` give the
-label. ``pds3_options``, ``astrometry``, and the standard overrides work as they do for
-ISS; the parser uses only the method given, by default the fast one. Any other keyword
-is accepted and ignored.
+The ``label_dict`` subfield holds the PDS3 label and ``dict`` the same keywords without
+their missing values, as :doc:`user_guide_metadata` describes. ``filepath``,
+``basename``, ``abspath``, and ``image_url`` give the label, not the data file; whether
+they should give the data file instead is an open question
+(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
+``pds3_options``, ``astrometry``, and the standard overrides work as they do for ISS,
+and the parser falls back from the fast method to the strict and the loose ones in the
+same way. Parsed content that came from no file works as it does for ISS: an astrometry
+read has no file subfields, and a normal read raises :exc:`~oops.host.HostFormatError`.
+Any other keyword raises :exc:`~oops.OopsTypeError`.
 
 VIMS cubes
 ==========
@@ -166,10 +186,39 @@ True, the cube that the label's ``^QUBE`` pointer gives, in the label's director
 
 The result is the pair (vis, ir), with None for a channel that was off. ``select`` picks
 from the pair by an index, a slice, a tuple of these, or the channel's name, ``'VIS'`` or
-``'IR'`` in any case.
+``'IR'`` in any case. A ``select`` of a type that it does not accept, or another name,
+raises an error before the file is read.
 
-The ``dict`` subfield holds the label that was read, and ``filepath`` and ``basename``
-give the file that was passed in. ``pds3_options``, ``astrometry``, and the standard
-overrides work as they do for ISS; the parser uses only the method given, by default the
-fast one. Override ``fov`` only when ``select`` picks a single channel, because the two
-channels have different fields of view. Any other keyword is accepted and ignored.
+The label that was read is ``label_dict`` for a detached PDS3 label and ``header_dict``
+for the cube's own ISIS label, and ``dict`` holds its keywords without their missing
+values, as :doc:`user_guide_metadata` describes. ``filepath``, ``basename``, ``abspath``,
+and ``image_url`` give the file that was passed in, which is the label when the label is
+given; whether they should give the cube instead is an open question
+(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
+``pds3_options``, ``astrometry``, parsed content, and the standard overrides work as they
+do for UVIS. Override ``fov`` only when ``select`` picks a single channel, because the
+two channels have different fields of view. Any other keyword raises
+:exc:`~oops.OopsTypeError`.
+
+Some VIMS labels, such as ``v1481842120_1_048.lbl`` of COVIMS_0005, have a comment that
+opens on the line of a value and closes on the next line:
+
+.. code-block:: text
+
+   SNAPSHOT_MODE_FLAG               = OFF/* IR high resolution,
+                                        IR low resolution, Visible (degree K) */
+
+A PDS3 comment ends on the line where it starts, so no method of the parser can read
+such a label. The host joins the two lines of the comment in memory before parsing.
+
+Reading a label through oops.Host
+=================================
+
+:meth:`oops.host.Host.from_file` recognizes an ISS image file or PDS3 label, a UVIS
+label, or a VIMS cube or label, and passes the file's path, with its other arguments, to
+the host's ``from_file()``, so the two give the same observations. To recognize a label,
+it tries the parser's fast, strict, and loose methods in turn, as the hosts do. A label
+that none of them can read is recognized by the host itself, which reads it with the
+repairs described above: the calibrated ISS labels whose ``DESCRIPTION`` is split in
+two, such as ``N1640662528_3_CALIB.LBL`` of COISS_2059, and the VIMS labels with a
+comment that spans two lines.

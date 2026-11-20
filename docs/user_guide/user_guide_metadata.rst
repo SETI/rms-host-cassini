@@ -2,9 +2,8 @@
 Metadata and Subfields
 =======================
 
-This chapter describes the metadata of an ISS image. A UVIS or VIMS observation's
-``dict`` subfield holds the label that was read, as :doc:`user_guide_files` describes,
-and the two-label rules below do not apply to it.
+This chapter describes the metadata of an ISS image first, and then that of a UVIS
+product or a VIMS cube, which have a single label each.
 
 The two labels
 ==============
@@ -77,10 +76,11 @@ Missing values
 A value that no label read gives is left out: there is no ``dict`` key and no subfield
 for it, and never a None or a placeholder in its place. These count as no value:
 
-- the PDS3 null constants ``UNK``, ``N/A``, and ``NULL``, in any case, and a list of
-  nothing else;
+- the text that the archive writes for no value, ``UNK``, ``UNKNOWN``, ``N/A``,
+  ``NULL``, ``---``, or an empty string, in any case;
 - the number -999, which both labels write for a reading that was not made, such as the
-  back optics temperature of a camera that has no back sensor.
+  back optics temperature of a camera that has no back sensor;
+- a list that holds only these.
 
 In a list whose positions carry meaning, such as the front and back temperatures of
 ``OPTICS_TEMPERATURE`` or the two filters of ``FILTER_NAME``, a missing element is kept
@@ -105,10 +105,12 @@ type whichever label it came from.
     ``START_TIME_fmt`` and ``^IMAGE_offset``, are left out.
 
 ``header_dict``
-    Every parameter of the VICAR header, present only when the image file was read. A
-    parameter that occurs more than once, such as the ``TASK`` of each step of the
-    processing history, is keyed by its name and its occurrence counted from zero:
-    ``TASK[0]``, ``TASK[1]``, and so on.
+    Every parameter of the VICAR header as the file writes it, present only when the
+    image file was read. A normal read and an astrometry read give the same values,
+    including ``HOST`` and ``BHOST``, the machine that wrote the file. A parameter that
+    occurs more than once, such as the ``TASK`` of each step of the processing history,
+    is keyed by its name and its occurrence counted from zero: ``TASK[0]``, ``TASK[1]``,
+    and so on.
 
 Subfields
 =========
@@ -129,6 +131,9 @@ these subfields. One whose item no label gives is absent.
      - ``INSTRUMENT_MODE_ID``: ``"FULL"``, ``"SUM2"``, or ``"SUM4"``.
    * - ``texp``
      - ``EXPOSURE_DURATION`` in seconds.
+   * - ``time_from_sclk``
+     - Always False: the time of an ISS image comes from ``START_TIME``, never from a
+       spacecraft clock count.
    * - ``filter``, ``filter1``, ``filter2``
      - ``filter1`` and ``filter2`` are the two names of ``FILTER_NAME``, such as
        ``"CL1"`` and ``"GRN"``. ``filter`` is the filter that is not clear (``CL1`` or
@@ -166,4 +171,40 @@ no start count. For these images the stop count is ``IMAGE_NUMBER``, the whole s
 of the clock at the close of the shutter, with zero ticks, as the labels give it. The
 start count is computed from it and ``EXPOSURE_DURATION`` with the Cassini spacecraft
 clock kernel. The same correction applies whether the image is read from its label, from
-its image file, or from an index, and ``dict`` holds the corrected counts.
+its image file, or from an index, and ``dict`` holds the corrected counts. If the clock
+kernel cannot convert a count, the read raises :exc:`oops.OopsSpiceError`.
+
+How the start count of an early cruise image whose shutter was disabled should be
+computed is an open question
+(`rms-host-cassini#35 <https://github.com/SETI/rms-host-cassini/issues/35>`_). The host
+computes it the same way for every early cruise image, as the stop count less the
+exposure.
+
+UVIS and VIMS metadata
+======================
+
+A UVIS product has one label, its detached PDS3 label. A VIMS cube has two forms of
+one label: the detached PDS3 label and the ISIS label at the start of the cube. The
+host reads the label it is given, and no merging applies.
+
+``label_dict``
+    The detached PDS3 label as its parser reads it, when the label was read, with times
+    as the label's text and sets as lists, and without ``END`` or the extra keys that
+    the parser adds.
+
+``header_dict``
+    The ISIS label of a VIMS cube, in the same form, when the cube itself was given.
+
+``dict``
+    The keywords of the label read without their missing values, as described above
+    for ISS. For a VIMS cube, both ``QUBE`` and ``SPECTRAL_QUBE`` hold the cube's
+    object. From the ISIS label, the object's keywords also appear at the top level;
+    from the PDS3 label, the object holds the fixed values of the archive's format
+    files.
+
+Each observation has the subfields ``label_target``, ``observation_id``,
+``spacecraft_clock_start_count``, and ``spacecraft_clock_stop_count`` when the label
+gives their items, and ``time_from_sclk``. The clock counts are the label's text, such
+as ``1/1640775127.032``. ``time_from_sclk`` is True only for a VIMS cube whose time
+backplanes, or an index's ``BACKPLANE_SCLK_START_COUNT``, gave its times, and False
+otherwise. All three dictionaries can be written with :func:`json.dump`.

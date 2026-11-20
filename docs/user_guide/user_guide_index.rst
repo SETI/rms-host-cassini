@@ -11,7 +11,14 @@ chapter describes ISS first, then UVIS and VIMS.
 order of the index. The call itself checks the arguments and reads the index, so a wrong
 argument or an index that cannot be read raises an error at once. Each row's observation
 is built only when the iteration reaches that row, so an error in a row is raised there,
-after the rows before it. To build every row at once, pass the iterator to ``list()``.
+after the rows before it, and the iteration ends with that error. ``filter`` can leave
+such a row out. To build every row at once, pass the iterator to ``list()``.
+
+The hosts read the indexes of the Ring-Moon Systems Node holdings, in their ``metadata``
+tree, such as ``metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl``. A volume's own
+index, in the volume's ``index`` directory, is not supported: given one, ``from_index()``
+raises :exc:`~oops.host.HostIndexError` at once, and the message gives the metadata
+index to use instead.
 
 ISS indexes
 ===========
@@ -23,19 +30,20 @@ ISS indexes
 
    from host_cassini import CassiniISS
 
-   for snapshot in CassiniISS.from_index('COISS_2009/index/index.lbl'):
+   index = 'metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl'
+   for snapshot in CassiniISS.from_index(index):
        print(snapshot.basename, snapshot.time)
 
-   snapshots = list(CassiniISS.from_index('COISS_2009/index/index.lbl'))
+   snapshots = list(CassiniISS.from_index(index))
 
 The index and its supplement
 ----------------------------
 
-Each COISS volume has a PDS3 index, ``index/index.lbl``, with one row per image. The
-Ring-Moon Systems Node holdings keep a copy of it in their ``metadata`` tree, such as
-``COISS_2009_index.lbl``, beside a cumulative index of the whole series, such as
-``COISS_2999_index.lbl``. The host reads any of these. It recognizes an ISS index by
-``COISS`` in its path, or failing that by the instrument that its rows give.
+The Ring-Moon Systems Node holdings keep an index of each COISS volume in their
+``metadata`` tree, such as ``COISS_2009_index.lbl``, with one row per image, beside a
+cumulative index of the whole series, such as ``COISS_2999_index.lbl``. The host reads
+either. It recognizes an ISS index by ``COISS`` in its path, or failing that by the
+instrument that its rows give.
 
 The archive has no supplemental index for ISS, so the host needs none. The
 ``supplement`` argument chooses one if it exists:
@@ -62,7 +70,9 @@ Other arguments
 ``filter``
     A dictionary of column names and the values to keep. A row is kept when each column
     equals its value, is one of a set of values, or falls in a range given as a tuple of
-    two values.
+    two values. A column that no row has raises :exc:`~oops.OopsValueError`, whose
+    message gives the column, and a range that cannot be compared with a column's
+    values raises :exc:`~oops.OopsTypeError`.
 
 ``select``
     Must be None. Each row is one image, so there is nothing to select, and any other
@@ -84,7 +94,8 @@ subfield holds the row, in Python types, with the padding stripped from its text
 list for each array column. The index tables write fill values for values that an image
 does not have, and these are left out:
 
-- the PDS3 null constants, such as ``UNK`` and ``NULL``, and the fill value -999;
+- the text that the archive writes for no value, ``UNK``, ``UNKNOWN``, ``N/A``,
+  ``NULL``, ``---``, or an empty string, and the fill value -999;
 - 1e32 and -1e32, in every column;
 - 65534 in ``COMMAND_SEQUENCE_NUMBER``, ``ELECTRONICS_BIAS``, ``EXPECTED_PACKETS``,
   ``ORDER_NUMBER``, ``PARALLEL_CLOCK_VOLTAGE_INDEX``, ``RECEIVED_PACKETS``,
@@ -106,27 +117,29 @@ table's ``1473199010.12``. The clock counts of the early cruise images are compu
 
 The subfields are those of an image read from its label (see
 :doc:`user_guide_metadata`), except ``data``, ``label_dict``, and ``header_dict``, and
-except that each item the row does not give leaves out its subfield. The host does not
-check the C kernels for the pointing of an index row. If the kernels hold no pointing
-for an image, its row still gives a Snapshot, and the error appears only when the
-Snapshot's frame is evaluated.
+except that each item the row does not give leaves out its subfield. If the C kernels
+hold no pointing for an image at the middle of its exposure, its row still gives a
+Snapshot, whose frame raises :exc:`oops.OopsSpiceError` when it is evaluated. The
+message is the one that :meth:`~host_cassini.oops.iss.CassiniISS.from_file` gives for
+the same image (see :doc:`user_guide_errors`).
 
 File paths
 ----------
 
-A row's ``FILE_SPECIFICATION_NAME`` is the path of the image file within its volume.
-``filepath``, ``basename``, and ``image_url`` give that file as a full path or URL,
-formed from the location of the index:
+A row's ``FILE_SPECIFICATION_NAME`` is the path of the image file within the volume
+that its ``VOLUME_ID`` gives. ``filepath``, ``basename``, and ``image_url`` give that file
+as a full path or URL, formed from the location of the index:
 
-- For an index in a volume's ``index`` directory, in either case, the volume is the
-  directory above it.
 - For an index in the ``metadata`` tree of the Ring-Moon Systems Node holdings, such as
-  ``.../metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl``, the volume is the row's
-  ``VOLUME_ID`` in the matching ``volumes`` tree, ``.../volumes/COISS_2xxx/COISS_2009``.
-  A cumulative index lists images of many volumes this way.
-- For an index anywhere else, the volume is the index's own directory.
+  ``.../metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl``, the volume is in the
+  matching ``volumes`` tree, ``.../volumes/COISS_2xxx/COISS_2009``. A cumulative index
+  lists images of many volumes this way.
+- For an index anywhere else, the volume is the directory of that name beside the
+  index, as in a copy of the holdings that keeps each index next to its volumes.
 
-``abspath`` is present only when the image file is local or already in the local cache.
+``abspath`` is present only when the image file is on the local file system, or is a
+remote file that is already in the local cache. Reading an index never creates a
+directory, even when the volume is not where the index places it.
 
 UVIS indexes
 ============
@@ -175,9 +188,21 @@ Each row gives the observation that
 
 A row that lacks one of these columns, or gives no positive sampling interval, raises
 :exc:`~oops.host.HostFormatError` when the iteration reaches it. ``select`` applies to
-each row as it does for the product's label. The
-``filepath`` and ``image_url`` subfields give the product's PDS3 label, from the
+each row as it does for the product's label, and a ``select`` of a type that it does not
+accept, or a name, raises an error when the method is called.
+
+The ``dict`` subfield holds the row, with the ``QUBE``, ``TIME_SERIES``, or ``SPECTRUM``
+object built from it, in Python types and without the table's masks. These are missing
+and left out: each value that the table's label declares a null constant, such as -99 in
+the supplement's angles; the text that the archive writes for no value; -999; and 1e32
+and -1e32. ``label_target``, ``observation_id``, and the clock counts follow from the
+row as they do from the label. If the C kernels hold no pointing for an observation, its
+frame raises :exc:`oops.OopsSpiceError` when it is evaluated.
+
+The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from the
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
+Whether they should give the data file instead is an open question
+(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
 ``label``, ``row_dicts``, ``filter``, ``pds3_options``, and the standard overrides work
 as they do for ISS, and any other keyword raises :exc:`~oops.OopsTypeError`.
 
@@ -211,11 +236,26 @@ does, so the observations are built from these columns:
 - Without them, the shape is the index's swath with a nominal 352 bands, and a ``POINT``
   or ``OCCULTATION`` cube is taken to fill the 64-line buffer, as nearly every one does:
   1 by 64 pixels for ``POINT`` and 64 by 64 for ``OCCULTATION``.
-- A channel whose recorded exposure is zero or negative is treated as off, because only
-  the cube's label holds its real exposure.
-- A nonblank ``BACKPLANE_SCLK_START_COUNT``, the clock count of the first sample of a
-  cube with time backplanes, replaces ``START_TIME`` as the start of the observations.
+- A channel whose recorded exposure is missing, zero, or negative is treated as off,
+  because only the cube's label holds its real exposure.
+- A ``BACKPLANE_SCLK_START_COUNT``, the clock count of the first sample of a cube with
+  time backplanes, replaces ``START_TIME`` as the start of the observations, and their
+  ``time_from_sclk`` subfield is True.
 
-The ``filepath`` and ``image_url`` subfields give the cube's PDS3 label, from the
-supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS. The
-other arguments work as they do for UVIS.
+The ``dict`` subfield holds the row, cleaned as for UVIS, with a ``SPECTRAL_QUBE`` object
+whose ``CORE_ITEMS`` give the shape that the observations use. The ``filepath`` and
+``image_url`` subfields give the cube's PDS3 label, from the supplement's
+``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS; whether they should
+give the cube instead is the same open question as for UVIS. The other arguments work as
+they do for UVIS.
+
+Reading an index through oops.Host
+==================================
+
+:meth:`oops.host.Host.from_index` recognizes an ISS index from ``COISS`` in its path or
+the instrument of its first row, a UVIS index from ``COUVIS`` in its path or the
+``DATA_SET_ID`` of its first row, and a VIMS index from its label's instrument or the
+``VOLUME_ID`` of its first row. It passes the index, with all of its other arguments, to
+the host's ``from_index()``, which reads and pairs the rows itself, so the two give the
+same observations, also when ``supplement`` gives a path. A volume's own index raises
+the same :exc:`~oops.host.HostIndexError` either way.
