@@ -11,9 +11,10 @@ Reading an ISS image file
 :meth:`~host_cassini.oops.iss.CassiniISS.from_file` raises:
 
 :exc:`oops.OopsSpiceError`
-    The C kernels hold no pointing for the camera at the middle of the exposure. The
-    message reads "no Cassini ISS NAC pointing at <time> for <image file>: <code>",
-    ending with the SPICE error code, such as ``SPICE(CKINSUFFDATA)``, and the
+    The C kernels hold no pointing for the camera at the middle of the exposure, moved
+    as a ``cadence`` override or a ``timeshift`` moves the time at which the frame is
+    evaluated. The message reads "no Cassini ISS NAC pointing at <time> for <image
+    file>: <code>", ending with the SPICE error code, such as ``SPICE(CKINSUFFDATA)``, and the
     exception's ``spice_code`` and ``filepath`` attributes hold the code and the image
     file. It is never raised for missing pointing when the caller supplies the pointing
     with the ``frame`` override. It is also raised when the spacecraft clock kernel
@@ -36,7 +37,8 @@ Reading an ISS image file
     No method of the parser can read the PDS3 label, even after the repairs that
     :doc:`user_guide_files` describes, or the label's ``^IMAGE`` pointer does not give
     the name of a file.
-    The message gives the label.
+    The message gives the label and the error of each method of the parser that was
+    tried.
 
 :exc:`~oops.host.VicarHostError`
     The VICAR header cannot be read, or the image file ends before its array. The
@@ -65,10 +67,14 @@ Reading an ISS index
 :exc:`~oops.host.HostIndexError`
     When the method is called: the index is a volume's own index rather than a metadata
     index, or the PDS3 label of the index or the supplement does not describe a table
-    that can be read. When the iteration reaches the row: a row does not match the
-    table's label, as when the table holds fewer rows than its label says, or a
-    supplement that was given does not list the same image as the index in that row.
-    After the last row: the supplement has rows left over.
+    that can be read. During the iteration: a supplement that was given does not list
+    the same image as the index in that row; a table ends before its label says, after
+    every row it holds; or a row is longer than the label's row length, raised at the
+    first of the ten rows read with it, none of which gives an observation. After the
+    last row: the supplement has rows left over, or a table holds more rows than its
+    label says. A value that cannot be read as its column's number is not reported as
+    an error: the table reader issues a warning, and the row is read with that value as
+    text, or missing in a column whose declared null values apply.
 
 :exc:`oops.OopsSpiceError`
     The spacecraft clock kernel cannot convert the clock counts of an early cruise
@@ -87,7 +93,8 @@ Reading an ISS index
 
 :exc:`~oops.OopsValueError`
     ``select`` is not None, or ``filter`` asks for a column that the index does not
-    have.
+    have. For rows given in ``row_dicts`` as an iterator rather than a list, the
+    ``filter`` error comes when the iteration reads the first row.
 
 :exc:`~oops.host.PdsHostError`
     The PDS3 label of the index or the supplement cannot be parsed.
@@ -119,6 +126,7 @@ UVIS and VIMS
 
 :exc:`~oops.host.PdsHostError`
     No method of the parser can read the PDS3 label, or the ISIS label of a VIMS cube.
+    The message gives the label and the error of each method that was tried.
 
 :exc:`~oops.host.WrongHostError`
     The file, or the parsed label given in its place, is not of the host's instrument.
@@ -139,13 +147,16 @@ UVIS and VIMS
     When the method is called: the index is a volume's own index rather than a metadata
     index; the PDS3 label of the index or the supplement does not describe a table that
     can be read, or lacks a column that gives a row's file; or ``supplement`` is None
-    and ``row_dicts`` is not given. When the iteration reaches the row: a row does not
-    match the table's label; the supplement does not list the index row's product,
-    which is known once the whole supplement has been read; the supplement gives a
-    product a second time while its first row is still held; a pair of rows gives
-    different files; or a row of ``row_dicts`` does not include the supplement's
-    columns. After the last row: the supplement lists a product that the index does
-    not, or lists it more often.
+    and ``row_dicts`` is not given. When the iteration reaches the row: the supplement
+    does not list the index row's product, which is known once the whole supplement has
+    been read; the supplement gives a product a second time while its first row is
+    still held; a pair of rows gives different files; a row of ``row_dicts`` does not
+    include the supplement's columns; a table ends before its label says, after every
+    row it holds; or a row is longer than the label's row length, raised at the first of
+    the ten rows read with it. After the last row: the supplement lists a product that
+    the index does not, or lists it more often, or a table holds more rows than its
+    label says. A value that cannot be read as its column's number is not reported as
+    an error: the table reader issues a warning, and the value is missing from the row.
 
 :exc:`~oops.host.HostFormatError`
     A row is not valid, it describes an option that the host does not support, or, for
@@ -170,7 +181,8 @@ UVIS and VIMS
 
 :exc:`~oops.OopsValueError`
     ``select`` gives a name that it does not accept, or ``filter`` asks for a column that
-    the index does not have.
+    the index does not have. For rows given in ``row_dicts`` as an iterator rather than
+    a list, the ``filter`` error comes when the iteration reads the first row.
 
 :exc:`~oops.host.PdsHostError`
     The PDS3 label of the index or the supplement cannot be parsed.

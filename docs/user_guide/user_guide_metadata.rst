@@ -78,11 +78,12 @@ and no subfield for it, and never a None or a placeholder in its place. These co
 no value:
 
 - the text that the archive writes for no value, ``UNK``, ``UNKNOWN``, ``N/A``,
-  ``NULL``, ``---``, or an empty string, in any case;
-- the number -999 in a temperature, a data rate, an exposure, or a compression ratio,
-  which cannot take that value. The labels write it for a reading that was not made,
-  such as the back optics temperature of an ISS camera that has no back sensor, or the
-  exposure of a VIMS channel that was off. In any other keyword, -999 is kept;
+  ``NULL``, ``NOT APPLICABLE``, ``---``, or an empty string, in any case;
+- in an ISS image or a VIMS cube, the number -999 in a temperature, a data rate, a
+  compression ratio, or, for VIMS, an exposure, which cannot take that value. The labels
+  write it for a reading that was not made, such as the back optics temperature of an
+  ISS camera that has no back sensor, or the exposure of a VIMS channel that was off. In
+  any other keyword, -999 is kept. A UVIS label keeps -999 in every keyword;
 - a list that holds only these.
 
 In a list whose positions carry meaning, such as the front and back temperatures of

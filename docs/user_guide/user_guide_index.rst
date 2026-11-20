@@ -72,16 +72,19 @@ Other arguments
 ``row_dicts``
     The rows themselves, one dictionary per row, if the tables have already been read,
     in a list or any other iterable. The host then uses these rows in place of the
-    tables, ``supplement`` and ``label`` are ignored, and each row is filtered and built
-    when the iteration reaches it.
+    tables, ``supplement`` is ignored, and each row is filtered and built when the
+    iteration reaches it. ``label``, if it is given, tells which null values the index
+    declares (see below); without it, the rows are read as if the label declared none.
 
 ``filter``
     A dictionary of column names and the values to keep. A row is kept when each column
     equals its value, is one of a set of values, or falls in a range given as a tuple of
-    two values. A column that neither table has raises :exc:`~oops.OopsValueError` when
-    the method is called, and its message gives the column. A range that cannot be
-    compared with a row's value raises :exc:`~oops.OopsTypeError` when the iteration
-    reaches that row.
+    two values. A column that neither table has raises :exc:`~oops.OopsValueError`, and
+    its message gives the column. The error comes when the method is called, except for
+    rows given in ``row_dicts`` as an iterator rather than a list, whose columns are
+    known only when the iteration reads the first row. A range that cannot be compared
+    with a row's value raises :exc:`~oops.OopsTypeError` when the iteration reaches that
+    row.
 
 ``select``
     Must be None. Each row is one image, so there is nothing to select, and any other
@@ -103,25 +106,32 @@ subfield holds the row, in Python types, with the padding stripped from its text
 list for each array column. The index tables write fill values for values that an image
 does not have, and these are left out:
 
+- each value that the index label declares a null value of its column, except 0, as
+  described below;
 - the text that the archive writes for no value, ``UNK``, ``UNKNOWN``, ``N/A``,
-  ``NULL``, ``---``, or an empty string;
+  ``NULL``, ``NOT APPLICABLE``, ``---``, or an empty string;
 - 1e32 and -1e32, in every column;
-- -999 in the temperature, data rate, and compression columns, where the index labels
-  declare it a null value or it cannot be a real value; elsewhere, as in a position, it
-  is kept;
-- 65534 in ``COMMAND_SEQUENCE_NUMBER``, ``ELECTRONICS_BIAS``, ``EXPECTED_PACKETS``,
+- -999 in the temperature, data rate, and compression columns, where it cannot be a
+  real value, whatever the label declares; elsewhere, as in a position, it is kept;
+- in a column whose index label declares no null value, 65534 in
+  ``COMMAND_SEQUENCE_NUMBER``, ``ELECTRONICS_BIAS``, ``EXPECTED_PACKETS``,
   ``ORDER_NUMBER``, ``PARALLEL_CLOCK_VOLTAGE_INDEX``, ``RECEIVED_PACKETS``,
   ``SEQUENCE_NUMBER``, and ``VALID_MAXIMUM``, and -2147483648 in ``INST_CMPRS_PARAM``
-  and ``MISSING_LINES``, where the image labels give ``UNK`` or ``N/A``;
+  and ``MISSING_LINES``. These are the null values that the other index labels declare,
+  and the image labels give ``UNK`` or ``N/A`` there. Until the index is corrected, the
+  labels of ``COISS_2115`` and ``COISS_2116`` declare no null values at all;
 - an ``EMISSION_ANGLE``, ``INCIDENCE_ANGLE``, ``CENTER_LATITUDE``, or
   ``CENTER_LONGITUDE`` of 0 in a row that has no target geometry, that is, no
   ``PHASE_ANGLE``. Until the index is corrected, the tables write 0 there for a missing
   angle. A 0 in a row that has target geometry is kept.
 
-A missing element of an array column is None. The index labels in the ``metadata``
-tree declare 0 the null value of ``BIAS_STRIP_MEAN`` and ``DARK_STRIP_MEAN``, but the
-image labels give 0 as a real value there, so the host does not use the null values that
-the index labels declare.
+A missing element of an array column is None. Until the index is corrected, the index
+labels in the ``metadata`` tree declare 0 the null value of ``BIAS_STRIP_MEAN`` and
+``DARK_STRIP_MEAN``, where the image labels give 0 as a real value, and of
+``EMISSION_ANGLE`` and ``INCIDENCE_ANGLE``, where 0 is a possible angle. The host does
+not apply a declared null value of 0, so these columns keep a 0, apart from the angles
+of a row that has no target geometry. A label that declares another null value for a
+column, as a corrected label does, is followed.
 
 The tables drop the trailing zeros of the clock counts, so the host writes each count
 with three digits after the point, as the image labels do: ``1473199010.120`` for the
@@ -131,7 +141,12 @@ left as it is. The clock counts of the early cruise images are computed as
 
 The subfields are those of an image read from its label (see
 :doc:`user_guide_metadata`), except ``data``, ``label_dict``, and ``header_dict``, and
-except that each item the row does not give leaves out its subfield. If the C kernels
+except that each item the row does not give leaves out its subfield. Until the index is
+corrected, three items in ``dict`` have another form than in the image label, and the
+host gives them as the table does: ``INST_CMPRS_PARAM`` lists its four elements in
+another order, ``IMAGE_OBSERVATION_TYPE`` is one text value whose members are joined by
+commas, where the label gives a set, and ``MISSION_PHASE_NAME`` has underscores where the
+label has spaces, as in ``SPACE_SCIENCE``. If the C kernels
 hold no pointing for an image at the middle of its exposure, its row still gives a
 Snapshot, whose frame raises :exc:`oops.OopsSpiceError` when it is evaluated. The
 message is the one that :meth:`~host_cassini.oops.iss.CassiniISS.from_file` gives for
@@ -213,9 +228,9 @@ Each row gives the observation that
   a ``DWELL_TIME`` of 72 and an interval of 125 milliseconds.
 
 A row that lacks one of these columns, or gives a sampling interval that is not
-positive, raises :exc:`~oops.host.HostFormatError` when the iteration reaches it. ``select`` applies to
-each row as it does for the product's label, and a ``select`` of a type that it does not
-accept, or a name, raises an error when the method is called.
+positive, raises :exc:`~oops.host.HostFormatError` when the iteration reaches it.
+``select`` applies to each row as it does for the product's label, and a ``select`` of a
+type that it does not accept, or a name, raises an error when the method is called.
 
 The ``dict`` subfield holds the row, with the ``QUBE``, ``TIME_SERIES``, or ``SPECTRUM``
 object built from it, in Python types and without the table's masks. These are missing
@@ -291,10 +306,8 @@ its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. The index then goes, with all
 other arguments, to the host's ``from_index()``, which reads and pairs the rows itself,
 so the two give the same observations, also when ``supplement`` gives a path.
 
-A volume's own ISS or UVIS index raises the same :exc:`~oops.host.HostIndexError`
-either way. The label of a volume's own VIMS index, such as
-``volumes/COVIMS_0xxx/COVIMS_0040/index/index.lbl``, holds a line of plain text that is
-not valid PDS3, so :meth:`oops.host.Host.from_index`, which parses it to find the host,
-raises :exc:`~oops.host.PdsHostError`, while
-:meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raises its
-:exc:`~oops.host.HostIndexError` without reading the label.
+A volume's own index raises the same :exc:`~oops.host.HostIndexError` either way. The
+label of a volume's own VIMS index, such as
+``volumes/COVIMS_0xxx/COVIMS_0040/index/index.lbl``, holds a line of plain text that no
+PDS3 parser reads. The VIMS host makes that line a comment before the label is parsed,
+so :meth:`oops.host.Host.from_index` finds the VIMS host from it.

@@ -80,13 +80,12 @@ raises :exc:`~oops.host.HostFormatError`, saying that no file path is known.
 Reading the PDS3 label
 ----------------------
 
-The host starts with the parser's fast method and, if that cannot read a label, tries
-the strict method and then the loose one. A method given in ``pds3_options`` starts that
-sequence at the method given. The host also repairs in memory three defects of archive
-labels that every method rejects or misreads:
+Before the parser reads a label, the host repairs in memory three defects of archive
+labels that the parser rejects or misreads. A label without them is read as it is.
 
 - A quoted value that starts on the line after its keyword, as in
-  ``N1569827183_4.LBL`` of COISS_2037, is moved up to the keyword's line.
+  ``N1569827183_4.LBL`` of COISS_2037, is moved up to the keyword's line. The fast
+  method rejects such a value, or, if it holds an equals sign, misreads it.
 - The ``DESCRIPTION`` of every label in the first version of the calibrated COISS_1xxx
   volumes, and of some in the first version of the calibrated COISS_2xxx volumes, opens
   a quote that it never closes. The quote is closed at the end of the line before the
@@ -95,8 +94,12 @@ labels that every method rejects or misreads:
   ``N1640662528_3_CALIB.LBL`` of COISS_2059, is split into two quoted strings. The two
   are joined into one.
 
+The host then starts with the parser's fast method and, if that cannot read the label,
+tries the strict method and then the loose one. A method given in ``pds3_options``
+starts that sequence at the method given. A label that the fast method reads with a
+keyword that is not a PDS3 name is read again from the strict method on.
 ``pds3_options`` can add repairs of its own as ``repairs``, a list of (pattern,
-replacement) pairs or a single pair, which the host applies in every attempt.
+replacement) pairs or a single pair, which are applied after the host's.
 
 Options
 -------
@@ -218,7 +221,8 @@ Reading a label through oops.Host
 label, or a VIMS cube or label, and passes the file's path, with its other arguments, to
 the host's ``from_file()``, so the two give the same observations. To recognize a label,
 it tries the parser's fast, strict, and loose methods in turn, as the hosts do. A label
-that none of them can read is recognized by the host itself, which reads it with the
-repairs described above: the calibrated ISS labels whose ``DESCRIPTION`` is split in
-two, such as ``N1640662528_3_CALIB.LBL`` of COISS_2059, and the VIMS labels with a
-comment that spans two lines.
+that none of them can read is repaired by each host in turn, as described above, and
+goes to the first host whose repairs make it readable and that recognizes it: the
+calibrated ISS labels whose ``DESCRIPTION`` is split in two, such as
+``N1640662528_3_CALIB.LBL`` of COISS_2059, go to the ISS host, and the VIMS labels with
+a comment that spans two lines to the VIMS host.

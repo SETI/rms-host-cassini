@@ -31,9 +31,10 @@ frame of the detector for UVIS, such as ``CASSINI_UVIS_FUV``, and ``CASSINI_VIMS
 it is made, as :doc:`user_guide_setup` describes.
 
 When ``from_file()`` builds the frame from the C kernels, it checks at once that they
-hold the pointing at the middle of each observation, after any ``cadence`` override and
-any ``timeshift`` that moves the observation's times (one whose letters include ``T``).
-If they do not, it raises :exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
+hold the pointing at the time at which the observation evaluates its frame. That is the
+middle of the observation, after any ``cadence`` override, moved by the seconds of a
+``timeshift`` whose letters include ``T``, which moves the observation's times, and
+again if they include ``F``, which evaluates the frame that much later. If they do not, it raises :exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
 ``from_index()`` makes the same check at the same time but does not raise: an
 observation whose pointing the kernels lack still appears, and its frame raises
 :exc:`oops.OopsSpiceError`, with the same message, when it is evaluated.
@@ -41,8 +42,9 @@ observation whose pointing the kernels lack still appears, and its frame raises
 A caller that has better pointing can pass it with the ``frame`` override, for example
 as a :class:`~oops.frame.Cmatrix`. The host then uses that frame. It neither loads nor
 checks the C kernels for the observation's time, so a gap in them cannot cause an error
-about missing pointing. The C kernels that fill gaps in the attitude record are still loaded when the
-hosts are initialized, unless ``initialize()`` is called with ``gapfill=False``.
+about missing pointing. The C kernels that fill gaps in the attitude record are still
+loaded when the hosts are initialized, unless ``initialize()`` is called with
+``gapfill=False``.
 
 Targets and light sources
 =========================
