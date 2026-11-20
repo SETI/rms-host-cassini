@@ -940,12 +940,6 @@ def test_from_index_backplane_count_error_is_a_spice_error(
         next(rows)
 
 
-def test_from_index_refuses_a_volumes_own_index(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.host.HostIndexError,
-                       match='reads the Ring-Moon Systems Node metadata index'):
-        CassiniVIMS.from_index(tmp_path / 'COVIMS_0001' / 'index' / 'index.lbl')
-
-
 def remove_ir_pointing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the SPICE frames of VIMS raise as cspyce does with no C kernel data."""
 
@@ -1006,22 +1000,6 @@ def test_label_correction_leaves_a_label_without_defects(tmp_path: pathlib.Path)
     assert CassiniVIMS._correct_label_text(text, FCPath(tmp_path)) == text
 
 
-def test_host_from_index_refuses_a_volumes_own_index_with_a_text_line(
-        tmp_path: pathlib.Path) -> None:
-    """The label of a volume's own index holds a line of plain text, which no parser
-    reads; the host's correction makes it readable, and the host refuses the index."""
-
-    directory = tmp_path / 'COVIMS_0040' / 'index'
-    directory.mkdir(parents=True)
-    path = directory / 'index.lbl'
-    path.write_text('\n'.join([
-        'PDS_VERSION_ID = PDS3', 'INSTRUMENT_HOST_ID = CO', 'INSTRUMENT_ID = VIMS', '',
-        "For full definitions of index fields, please refer to Operator's Handbook.", '',
-        'OBJECT = INDEX_TABLE', '  ROWS = 1', 'END_OBJECT = INDEX_TABLE', 'END', '']))
-    with pytest.raises(HostIndexError, match="not a volume's own index"):
-        oops.Host.from_index(path)
-
-
 def test_from_file_reads_a_comment_that_spans_two_lines(tmp_path: pathlib.Path) -> None:
     """A comment that opens on a value's line and closes on the next is repaired."""
 
@@ -1043,9 +1021,9 @@ def test_merge_supplement_by_file() -> None:
 
 
 @pytest.mark.parametrize(('relpath', 'expected'), [
-    ('COVIMS_0040/index/index.lbl', True),
+    ('metadata/COVIMS_0xxx/COVIMS_0040/COVIMS_0040_index.lbl', True),
     ('COISS_2001_index.lbl', False),
-    ('COUVIS_0040/INDEX/INDEX.LBL', False),
+    ('COUVIS_0040_index.lbl', False),
 ], ids=['vims', 'iss', 'uvis'])
 def test_detection_in_index_from_the_path(tmp_path: pathlib.Path, relpath: str,
                                           expected: bool) -> None:

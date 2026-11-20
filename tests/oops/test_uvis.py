@@ -488,13 +488,12 @@ _INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = INDEX_TABLE',
 
 
 @pytest.mark.parametrize(('relpath', 'expected'), [
-    ('COUVIS_0001/INDEX/INDEX.LBL', True),
-    ('COUVIS_0999_index.lbl', True),
-    ('couvis_0001/index/index.lbl', True),
-    ('INDEX/INDEX.LBL', None),
+    ('metadata/COUVIS_0xxx/COUVIS_0001/COUVIS_0001_index.lbl', True),
+    ('couvis_0001_index.lbl', True),
+    ('metadata/index.lbl', None),
     ('COISS_2001_index.lbl', False),
-    ('COVIMS_0040/index/index.lbl', False),
-], ids=['couvis-directory', 'couvis-file', 'lowercase', 'no-couvis', 'iss', 'vims'])
+    ('COVIMS_0040_index.lbl', False),
+], ids=['couvis', 'lowercase', 'no-couvis', 'iss', 'vims'])
 def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
                             expected: bool | None) -> None:
     path = tmp_path / relpath
@@ -510,23 +509,6 @@ def test_detection_in_index_without_a_path() -> None:
 def test_detection_in_index_of_another_instrument() -> None:
     label = Pds3Label(['PDS_VERSION_ID = PDS3', 'INSTRUMENT_ID = "VIMS"', 'END'])
     assert CassiniUVIS._detect_in_index(label) is False
-
-
-def test_volumes_own_index_is_refused_alike_through_oops_host(
-        tmp_path: pathlib.Path) -> None:
-    """oops.Host.from_index finds UVIS from the path of a volume's own index, without
-    reading a row, so the refusal is the one the class gives."""
-
-    path = tmp_path / 'COUVIS_0040/INDEX/INDEX.LBL'
-    path.parent.mkdir(parents=True)
-    path.write_text('\r\n'.join(_INDEX_LABEL), newline='')
-    messages = []
-    for host in (CassiniUVIS, oops.Host):
-        with pytest.raises(oops.host.HostIndexError,
-                           match="Cassini UVIS reads the Ring-Moon Systems Node") as info:
-            host.from_index(path)
-        messages.append(str(info.value))
-    assert messages[0] == messages[1]
 
 
 def test_merge_supplement_by_file() -> None:
@@ -836,12 +818,6 @@ def test_from_file_clock_counts(tmp_path: pathlib.Path) -> None:
 
 def test_time_is_not_from_the_clock(tmp_path: pathlib.Path) -> None:
     assert CassiniUVIS.from_file(write_qube(tmp_path)).time_from_sclk is False
-
-
-def test_from_index_refuses_a_volumes_own_index(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.host.HostIndexError,
-                       match='reads the Ring-Moon Systems Node metadata index'):
-        CassiniUVIS.from_index(tmp_path / 'COUVIS_0001' / 'INDEX' / 'INDEX.LBL')
 
 
 def remove_fuv_pointing(monkeypatch: pytest.MonkeyPatch) -> None:

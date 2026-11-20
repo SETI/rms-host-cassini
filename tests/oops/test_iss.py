@@ -183,13 +183,12 @@ _INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = IMAGE_INDEX_TABLE',
 
 
 @pytest.mark.parametrize(('relpath', 'expected'), [
-    ('COISS_2001/index/index.lbl', True),
-    ('COISS_2999_index.lbl', True),
-    ('index/index.lbl', None),
-    ('coiss_2001/index/index.lbl', True),
-    ('COUVIS_0040/INDEX/INDEX.LBL', False),
+    ('metadata/COISS_2xxx/COISS_2001/COISS_2001_index.lbl', True),
+    ('metadata/index.lbl', None),
+    ('coiss_2001_index.lbl', True),
+    ('COUVIS_0040_index.lbl', False),
     ('COVIMS_0999_index.lbl', False),
-], ids=['coiss-directory', 'coiss-file', 'no-coiss', 'lowercase', 'uvis', 'vims'])
+], ids=['coiss', 'no-coiss', 'lowercase', 'uvis', 'vims'])
 def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
                             expected: bool | None) -> None:
     path = tmp_path / relpath
@@ -973,22 +972,15 @@ def test_from_file_keeps_a_later_start_count(tmp_path: pathlib.Path) -> None:
     assert obs.spacecraft_clock_start_count == '1347928994.223'
 
 
-@pytest.mark.parametrize(('start', 'stop'), [
-    ('1294560651.000', '1294562651.000'),
-    ('1294562651.000', '1294562631.000'),
-], ids=['metadata-index', 'volume-index'])
-def test_from_index_computes_the_early_cruise_counts(tmp_path: pathlib.Path, start: str,
-                                                     stop: str) -> None:
+def test_from_index_computes_the_early_cruise_counts(tmp_path: pathlib.Path) -> None:
     """Both counts of an early cruise row follow from its image number and exposure.
 
-    The metadata index gives the label's counts; the volume index gives the image number
-    as the start count and the image number less the exposure in tenths of a second as
-    the stop count.
+    The metadata index gives the label's counts.
     """
 
     rows = index_rows(tmp_path)
-    row = rows[0] | _EARLY_COUNTS | {'SPACECRAFT_CLOCK_START_COUNT': start,
-                                     'SPACECRAFT_CLOCK_STOP_COUNT': stop}
+    row = rows[0] | _EARLY_COUNTS | {'SPACECRAFT_CLOCK_START_COUNT': '1294560651.000',
+                                     'SPACECRAFT_CLOCK_STOP_COUNT': '1294562651.000'}
     obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert obs.spacecraft_clock_stop_count == '1294562651.000'
     assert obs.spacecraft_clock_start_count == _EARLY_START_COUNT
@@ -2366,17 +2358,6 @@ def test_from_index_leaves_out_each_placeholder(tmp_path: pathlib.Path,
     row = rows[0] | {'OBSERVATION_ID': np.str_(value)}
     obs = next(CassiniISS.from_index(tmp_path / 'INDEX.LBL', row_dicts=[row]))
     assert 'OBSERVATION_ID' not in obs.dict
-
-
-@pytest.mark.parametrize('relpath', ['COISS_2009/index/index.lbl',
-                                     'COISS_2009/INDEX/INDEX.LBL'])
-def test_from_index_refuses_a_volumes_own_index(tmp_path: pathlib.Path,
-                                                relpath: str) -> None:
-    """A volume's own index raises HostIndexError before anything is read."""
-
-    with pytest.raises(oops.host.HostIndexError,
-                       match='reads the Ring-Moon Systems Node metadata index'):
-        CassiniISS.from_index(tmp_path / relpath)
 
 
 @pytest.mark.usefixtures('initialized_iss')

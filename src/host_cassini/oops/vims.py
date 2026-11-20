@@ -141,13 +141,6 @@ _CORE_ITEMS_FROM_MODE = {'POINT'      : (1, _INDEX_BANDS, 64),
 # stays; CassiniVIMS._correct_label_text applies it.
 _TWO_LINE_COMMENT = (r'(/\*(?:[^*\n]|\*(?!/))*)\n([^\n]*?\*/)', r'\1 \2')
 
-# A line of plain text, outside any comment, in the label of each volume's own index,
-# such as volumes/COVIMS_0xxx/COVIMS_0040/index/index.lbl (all 94 volumes), which no PDS3
-# parser accepts. The metadata index labels hold the same text as a comment, and the
-# repair makes it one.
-_INDEX_TEXT_LINE = (r"(?m)^(For full definitions of index fields, please refer to "
-                    r"Operator's Handbook\.)[ \t]*$", r'/*\1*/')
-
 # The SPICE frames of the VIS channel, the IR channel, and the IR channel's solar port
 _VIS_FRAME_NAME    = 'CASSINI_VIMS_V'
 _IR_FRAME_NAME     = 'CASSINI_VIMS_IR'
@@ -290,9 +283,6 @@ class CassiniVIMS(oops.Host):
     #: much as 28,990 rows away, in COVIMS_0003 and the cumulative COVIMS_0999 (survey of
     #: 2026-11-19), so each index row is paired with the supplement row for the same cube.
     MERGE_SUPPLEMENT_BY_FILE = True
-
-    #: A metadata index, named in the message that refuses a volume's own index.
-    METADATA_INDEX_EXAMPLE = 'COVIMS_0001_index.lbl'
 
     _INSTRUMENT_KERNEL = None
     _initialized = False
@@ -455,11 +445,13 @@ class CassiniVIMS(oops.Host):
                    tracker=None, parallel=None, **kwargs):
         """An iterator over Observations, one entry for each row of a data file index.
 
-        When this method is called, it checks the arguments and reads the labels of the
-        index and its supplement. The rows are read as the iteration proceeds, a few at a
-        time, through ``oops.Host._index_rows``, and each row's observations are built
-        when the iteration reaches that row, so an error in a row is raised at that row,
-        after every earlier row has been yielded.
+        It reads a Ring-Moon Systems Node metadata index, such as
+        metadata/COVIMS_0xxx/COVIMS_0001/COVIMS_0001_index.lbl, and its supplement. When
+        this method is called, it checks the arguments and reads the labels of the index
+        and its supplement. The rows are read as the iteration proceeds, a few at a time,
+        through ``oops.Host._index_rows``, and each row's observations are built when the
+        iteration reaches that row, so an error in a row is raised at that row, after
+        every earlier row has been yielded.
 
         The observations are for astrometry only and have no `data`.
 
@@ -576,17 +568,16 @@ class CassiniVIMS(oops.Host):
                 unsupported option; raised when the iteration reaches that row.
             FileNotFoundError: If the label of the supplement does not exist; when the
                 iteration starts, if a table file does not exist.
-            HostIndexError: When called, if `filepath` is a volume's own index, in its
-                "index" directory; if the label of the index or the supplement does not
-                describe a table that can be read, or lacks a column that gives a row's
-                cube; or if `supplement` is None while `row_dicts` is not given. During
-                the iteration, at the row concerned: if an index row's cube is not in the
-                supplement, which is found once the whole supplement has been read; if
-                the supplement gives a cube a second time while its first row is still
-                held; if a pair of rows gives different VOLUME_IDs or file names; if a
-                row of `row_dicts` has no supplemental columns merged in; after every
-                row that a table holds, if it holds fewer rows than its label says; or
-                at the first of the ten rows read with it, if a row is longer than the
+            HostIndexError: When called, if the label of the index or the supplement does
+                not describe a table that can be read, or lacks a column that gives a
+                row's cube; or if `supplement` is None while `row_dicts` is not given.
+                During the iteration, at the row concerned: if an index row's cube is not
+                in the supplement, which is found once the whole supplement has been
+                read; if the supplement gives a cube a second time while its first row is
+                still held; if a pair of rows gives different VOLUME_IDs or file names;
+                if a row of `row_dicts` has no supplemental columns merged in; after
+                every row that a table holds, if it holds fewer rows than its label says;
+                or at the first of the ten rows read with it, if a row is longer than the
                 label's row length. After the last row, if the supplement lists a cube
                 that the index does not, or a table holds more rows than its label says.
                 A value that cannot be read as its column's number gives a warning, and
@@ -1497,8 +1488,7 @@ class CassiniVIMS(oops.Host):
         ``oops.Host`` calls this before any parser reads a label of this host, the labels
         of the index tables included. A comment that opens on the line of a value and
         closes on the next line, as in 119 of 570 sampled cube labels, is joined into one
-        line, and the line of plain text in the label of each volume's own index is made
-        a comment. A label without these defects is returned unchanged.
+        line. A label without this defect is returned unchanged.
 
         Parameters:
             text (str): The text of the label, with <LF> line terminators.
@@ -1508,9 +1498,7 @@ class CassiniVIMS(oops.Host):
             str: The repaired text.
         """
 
-        for (pattern, replacement) in (_TWO_LINE_COMMENT, _INDEX_TEXT_LINE):
-            text = re.sub(pattern, replacement, text)
-        return text
+        return re.sub(*_TWO_LINE_COMMENT, text)
 
     @staticmethod
     def _detect_in_index(label):
@@ -1527,7 +1515,7 @@ class CassiniVIMS(oops.Host):
             rows.
         """
 
-        # The metadata index labels and the volumes' own index labels both give these
+        # The metadata index labels give these
         if (label.get('INSTRUMENT_HOST_ID', '') == 'CO'
                 and label.get('INSTRUMENT_ID', '') == 'VIMS'):
             return True

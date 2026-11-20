@@ -371,9 +371,6 @@ class CassiniISS(oops.Host):
     #: position.
     MERGE_SUPPLEMENT_BY_FILE = False
 
-    #: A metadata index, named in the message that refuses a volume's own index.
-    METADATA_INDEX_EXAMPLE = 'COISS_2001_index.lbl'
-
     _INSTRUMENT_KERNEL = None
     _FOVS = {}
     _initialized = False
@@ -637,11 +634,13 @@ class CassiniISS(oops.Host):
                    **kwargs):
         """An iterator over Snapshots, one for each row of a Cassini ISS index file.
 
-        When this method is called, it checks the arguments and reads the labels of the
-        index and of any supplement. The rows are read as the iteration proceeds, a few
-        at a time, through ``oops.Host._index_rows``, and each row's Snapshot is built
-        when the iteration reaches that row, so an error in a row is raised at that row,
-        after every earlier row has been yielded.
+        It reads a Ring-Moon Systems Node metadata index, such as
+        metadata/COISS_2xxx/COISS_2001/COISS_2001_index.lbl, and its supplement, if
+        there is one. When this method is called, it checks the arguments and reads the
+        labels of the index and of any supplement. The rows are read as the iteration
+        proceeds, a few at a time, through ``oops.Host._index_rows``, and each row's
+        Snapshot is built when the iteration reaches that row, so an error in a row is
+        raised at that row, after every earlier row has been yielded.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
@@ -758,9 +757,8 @@ class CassiniISS(oops.Host):
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID; raised when the iteration reaches that row.
-            HostIndexError: When called, if `filepath` is a volume's own index, in its
-                "index" directory, rather than a metadata index, or if the label of the
-                index or the supplement does not describe a table that can be read.
+            HostIndexError: When called, if the label of the index or the supplement does
+                not describe a table that can be read.
                 During the iteration: at the row concerned, if the supplement does not
                 list the same files as the index in the same order; after every row that
                 a table holds, if it holds fewer rows than its label says; at the first
@@ -1382,14 +1380,11 @@ class CassiniISS(oops.Host):
 
         The labels of the early cruise images give a start count that is the stop count
         less the exposure in milliseconds counted as seconds, and their headers give no
-        start count. The ISS index tables of COISS_1001 in the volumes' index directories
-        give the image number as the start count, and as the stop count the image number
-        less the exposure in tenths of a second counted as seconds. For an image whose
-        IMAGE_NUMBER is no later than that of the last early cruise image, the stop count
-        is its IMAGE_NUMBER, the whole seconds of the clock at the shutter's close, with
-        zero ticks, as the labels give it; the start count is the clock count that the
-        Cassini spacecraft clock kernel gives for the time EXPOSURE_DURATION milliseconds
-        earlier.
+        start count. For an image whose IMAGE_NUMBER is no later than that of the last
+        early cruise image, the stop count is its IMAGE_NUMBER, the whole seconds of the
+        clock at the shutter's close, with zero ticks, as the labels give it; the start
+        count is the clock count that the Cassini spacecraft clock kernel gives for the
+        time EXPOSURE_DURATION milliseconds earlier.
 
         Parameters:
             dict_ (dict[str, Any]): The metadata, without missing values, including
@@ -1547,10 +1542,9 @@ class CassiniISS(oops.Host):
             None, meaning the host must be inferred from the index rows.
         """
 
-        # The ISS index labels record nothing that identifies the instrument, but the PDS
-        # volume and RMS Node metadata names all start with COISS. A UVIS or VIMS index
-        # is turned down from its path or label, so the dispatcher can tell from the label
-        # alone.
+        # The ISS index labels record nothing that identifies the instrument, but the RMS
+        # Node metadata index names all start with COISS. A UVIS or VIMS index is turned
+        # down from its path or label, so the dispatcher can tell from the label alone.
         status = _detect_index_by_path(label, 'COISS')
         if (status is None
                 and not str(label.get('INSTRUMENT_ID', 'ISS')).strip().startswith('ISS')):

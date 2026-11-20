@@ -93,8 +93,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   adds (`START_TIME_fmt`, `^IMAGE_offset`, `objects`, ...). The array always comes from
   the VICAR header's layout, never the label's `^IMAGE` offset, which is wrong for
   calibrated files. Every repair of label text lives in each host's
-  `_correct_label_text()` (ISS: `_LABEL_REPAIRS`; VIMS: `_TWO_LINE_COMMENT` and
-  `_INDEX_TEXT_LINE`), which oops runs before any parser method, for product and index
+  `_correct_label_text()` (ISS: `_LABEL_REPAIRS`; VIMS: `_TWO_LINE_COMMENT`), which
+  oops runs before any parser method, for product and index
   labels alike, so each pattern must match only the defect; the comment beside each
   cites its issue. The fast/strict/loose fallback is oops's
   (`_read_fileinfo(..., pds3_fallback=True)`); ISS keeps only the check that sends a
@@ -135,8 +135,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   refuses another instrument's parsed label with `WrongHostError`.
 - Every `from_index()` reads its rows through `oops.Host._index_rows()`, which streams
   the index and supplement with `PdsTable(defer_load=True).iter_dicts` ten rows at a
-  time, pairs, validates and filters them, and refuses a volume's own index (one in an
-  `index` directory, any case) through each class's `METADATA_INDEX_EXAMPLE`. Nothing in
+  time, and pairs, validates and filters them. The hosts read the Ring-Moon Systems Node
+  metadata indexes and their supplements. Nothing in
   the host reads a whole table, builds a list of rows, or indexes `row_dicts`; a check
   on a row (UVIS/VIMS: the supplement's columns in `row_dicts`) happens in the generator
   at that row. Each row's file is its full path or URL: `oops.Host._index_file_path()`

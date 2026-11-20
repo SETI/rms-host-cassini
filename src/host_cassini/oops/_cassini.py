@@ -577,8 +577,8 @@ def _detect_index_by_path(label, prefix):
     """Whether the path of an index label shows that it belongs to one instrument.
 
     The volumes of the Cassini instruments are named COISS_nnnn, COUVIS_nnnn, and
-    COVIMS_nnnn, and the indexes, the volume's own and the metadata index alike, are
-    stored under those names.
+    COVIMS_nnnn, and their metadata indexes are stored under those names, such as
+    metadata/COISS_2xxx/COISS_2001/COISS_2001_index.lbl.
 
     Parameters:
         label (Pds3Label | dict[str, Any]): The parsed label of an index; a dictionary

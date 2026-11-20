@@ -66,16 +66,15 @@ Reading an ISS index
     valid. This error is raised when the iteration reaches that row.
 
 :exc:`~oops.host.HostIndexError`
-    When the method is called: the index is a volume's own index rather than a metadata
-    index, or the PDS3 label of the index or the supplement does not describe a table
-    that can be read. During the iteration: a supplement that was given does not list
-    the same image as the index in that row; a table ends before its label says, after
-    every row it holds; or a row is longer than the label's row length, raised at the
-    first of the ten rows read with it, none of which gives an observation. After the
-    last row: the supplement has rows left over, or a table holds more rows than its
-    label says. A value that cannot be read as its column's number is not reported as
-    an error: the table reader issues a warning, and the row is read with that value as
-    text, or missing in a column whose declared null values apply.
+    When the method is called: the PDS3 label of the index or the supplement does not
+    describe a table that can be read. During the iteration: a supplement that was given
+    does not list the same image as the index in that row; a table ends before its label
+    says, after every row it holds; or a row is longer than the label's row length,
+    raised at the first of the ten rows read with it, none of which gives an
+    observation. After the last row: the supplement has rows left over, or a table holds
+    more rows than its label says. A value that cannot be read as its column's number is
+    not reported as an error: the table reader issues a warning, and the row is read with
+    that value as text, or missing in a column whose declared null values apply.
 
 :exc:`oops.OopsSpiceError`
     The spacecraft clock kernel cannot convert the clock counts of an early cruise
@@ -147,19 +146,19 @@ UVIS and VIMS
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise:
 
 :exc:`~oops.host.HostIndexError`
-    When the method is called: the index is a volume's own index rather than a metadata
-    index; the PDS3 label of the index or the supplement does not describe a table that
-    can be read, or lacks a column that gives a row's file; or ``supplement`` is None
-    and ``row_dicts`` is not given. When the iteration reaches the row: the supplement
-    does not list the index row's product, which is known once the whole supplement has
-    been read; the supplement gives a product a second time while its first row is
-    still held; a pair of rows gives different files; a row of ``row_dicts`` does not
-    include the supplement's columns; a table ends before its label says, after every
-    row it holds; or a row is longer than the label's row length, raised at the first of
-    the ten rows read with it. After the last row: the supplement lists a product that
-    the index does not, or lists it more often, or a table holds more rows than its
-    label says. A value that cannot be read as its column's number is not reported as
-    an error: the table reader issues a warning, and the value is missing from the row.
+    When the method is called: the PDS3 label of the index or the supplement does not
+    describe a table that can be read, or lacks a column that gives a row's file; or
+    ``supplement`` is None and ``row_dicts`` is not given. When the iteration reaches the
+    row: the supplement does not list the index row's product, which is known once the
+    whole supplement has been read; the supplement gives a product a second time while
+    its first row is still held; a pair of rows gives different files; a row of
+    ``row_dicts`` does not include the supplement's columns; a table ends before its
+    label says, after every row it holds; or a row is longer than the label's row
+    length, raised at the first of the ten rows read with it. After the last row: the
+    supplement lists a product that the index does not, or lists it more often, or a
+    table holds more rows than its label says. A value that cannot be read as its
+    column's number is not reported as an error: the table reader issues a warning, and
+    the value is missing from the row.
 
 :exc:`~oops.host.HostFormatError`
     A row is not valid, it describes an option that the host does not support, or, for

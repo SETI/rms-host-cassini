@@ -139,9 +139,6 @@ class CassiniUVIS(oops.Host):
     #: the supplement row for the same product.
     MERGE_SUPPLEMENT_BY_FILE = True
 
-    #: A metadata index, named in the message that refuses a volume's own index.
-    METADATA_INDEX_EXAMPLE = 'COUVIS_0001_index.lbl'
-
     _INSTRUMENT_KERNEL = None
     _FOVS = {}
     _initialized = False
@@ -299,7 +296,9 @@ class CassiniUVIS(oops.Host):
                    navigation=None, tracker=None, parallel=None, **kwargs):
         """An iterator over Observations, one entry for each row of a data file index.
 
-        When this method is called, it checks the arguments and reads the labels of the
+        It reads a Ring-Moon Systems Node metadata index, such as
+        metadata/COUVIS_0xxx/COUVIS_0001/COUVIS_0001_index.lbl, and its supplement. When
+        this method is called, it checks the arguments and reads the labels of the
         index and its supplement. The rows are read as the iteration proceeds, a few at a
         time, through ``oops.Host._index_rows``, and each row's observations are built
         when the iteration reaches that row, so an error in a row is raised at that row,
@@ -416,10 +415,9 @@ class CassiniUVIS(oops.Host):
                 raised when the iteration reaches that row.
             FileNotFoundError: If the label of the supplement does not exist; when the
                 iteration starts, if a table file does not exist.
-            HostIndexError: When called, if `filepath` is a volume's own index, in its
-                "index" directory; if the label of the index or the supplement does not
-                describe a table that can be read, or lacks a column that gives a row's
-                product; or if `supplement` is None while `row_dicts` is not given.
+            HostIndexError: When called, if the label of the index or the supplement does
+                not describe a table that can be read, or lacks a column that gives a
+                row's product; or if `supplement` is None while `row_dicts` is not given.
                 During the iteration, at the row concerned: if an index row's product is
                 not in the supplement, which is found once the whole supplement has been
                 read; if the supplement gives a product a second time while its first
@@ -1263,9 +1261,8 @@ class CassiniUVIS(oops.Host):
             the host must be inferred from the index rows.
         """
 
-        # The UVIS index labels, the metadata index and the volume's own alike, record
-        # nothing that identifies the instrument, but the PDS volume and RMS Node
-        # metadata names all start with COUVIS
+        # The UVIS metadata index labels record nothing that identifies the instrument,
+        # but the RMS Node metadata index names all start with COUVIS
         status = _detect_index_by_path(label, 'COUVIS')
         if (status is None
                 and str(label.get('INSTRUMENT_ID', 'UVIS')).strip() != 'UVIS'):

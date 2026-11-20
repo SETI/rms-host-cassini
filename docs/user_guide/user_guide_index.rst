@@ -18,11 +18,8 @@ iteration reaches it, after the rows before it, and the iteration ends with that
 ``filter`` can leave such a row out. To build every row at once, pass the iterator to
 ``list()``.
 
-The hosts read the indexes of the Ring-Moon Systems Node holdings, in their ``metadata``
-tree, such as ``metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl``. A volume's own
-index, in the volume's ``index`` directory, is not supported: given one, ``from_index()``
-raises :exc:`~oops.host.HostIndexError` at once, before it reads anything, and the
-message gives an example of a metadata index to use instead.
+``from_index()`` reads a metadata index of the Ring-Moon Systems Node holdings, such as
+``metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl``, and its supplemental index.
 
 ISS indexes
 ===========
@@ -306,9 +303,3 @@ Only when no host claims the label is the first row read, once, to find the host
 its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. The index then goes, with all of the
 other arguments, to the host's ``from_index()``, which reads and pairs the rows itself,
 so the two give the same observations, also when ``supplement`` gives a path.
-
-A volume's own index raises the same :exc:`~oops.host.HostIndexError` either way. The
-label of a volume's own VIMS index, such as
-``volumes/COVIMS_0xxx/COVIMS_0040/index/index.lbl``, holds a line of plain text that no
-PDS3 parser reads. The VIMS host makes that line a comment before the label is parsed,
-so :meth:`oops.host.Host.from_index` finds the VIMS host from it.
