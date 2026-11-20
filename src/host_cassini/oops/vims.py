@@ -1137,11 +1137,11 @@ class CassiniVIMS(oops.Host):
                 (obs_subclass, axes, cadence, fov, frame) = info
                 # A frame that the C kernels cannot supply raises OopsSpiceError, never
                 # a cspyce error: now from from_file, and from from_index when the frame
-                # is used
+                # is used. It is evaluated as the observation will evaluate it once the
+                # overrides are applied.
                 if using_cks:
-                    pointing_time = oops.Host._pointing_time(cadence, overrides)
                     frame = oops.Host._check_spice_frame(
-                        frame, pointing_time,
+                        frame, cadence, overrides,
                         description=f'no Cassini VIMS {frame} pointing',
                         filepath=filepath, defer=not check)
 

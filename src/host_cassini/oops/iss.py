@@ -407,10 +407,11 @@ class CassiniISS(oops.Host):
         view, pointing, target and light source are computed from the merged metadata.
 
         If the observation's frame comes from SPICE, the C kernels must give the camera's
-        pointing at the time at which the observation evaluates its frame: its midtime,
-        after any cadence override, or the time that a `tracker` selects, moved by a
-        time shift whose letters include "T" and again by one whose letters include "F".
-        Nothing is checked when a `frame` override is given.
+        pointing at the time at which the observation reads them: its midtime, after any
+        cadence override, or the time that a `tracker` selects, moved by a time shift
+        whose letters include "T". An "F" shift moves the camera frame, which is fixed to
+        the SPICE frame, and not the time at which the C kernels are read. Nothing is
+        checked when a `frame` override is given.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
@@ -906,17 +907,16 @@ class CassiniISS(oops.Host):
             'calibrations': [],         # TBD
         }
 
-        # The pointing is checked at the time at which the observation will evaluate its
-        # frame: its midtime, after any cadence or time-shift override
-        pointing_time = oops.Host._pointing_time(params['cadence'], overrides)
-
-        # An index row's pointing is not checked, but a camera frame that the C kernels
-        # cannot supply raises OopsSpiceError when it is used, not a cspyce error
-        if using_cks and not check_pointing:
+        # The camera frame, a fixed Cmatrix on the SPICE frame that the C kernels define,
+        # is evaluated as the observation will evaluate it once the cadence, time-shift
+        # and tracker overrides are applied. With check_pointing, missing pointing raises
+        # OopsSpiceError now, with its SPICE code (#15); otherwise, as for an index row,
+        # the frame raises it when it is used, never a cspyce error.
+        if using_cks:
             checked = oops.Host._check_spice_frame(
-                'CASSINI_ISS_' + camera + '_FLIPPED', pointing_time,
+                'CASSINI_ISS_' + camera, params['cadence'], overrides,
                 description=f'no Cassini ISS {camera} pointing', filepath=filepath,
-                defer=True)
+                defer=not check_pointing)
             if isinstance(checked, oops.frame.SpiceErrorFrame):
                 params['frame'] = checked
 
@@ -925,10 +925,6 @@ class CassiniISS(oops.Host):
         oops.Host._apply_overrides(params, filepath, **overrides)
 
         obs = oops.observation.Snapshot(('v','u'), **params)
-        if using_cks and check_pointing:
-            # Report missing pointing now, with its SPICE code, not when the frame is
-            # first used (#15)
-            CassiniISS._check_pointing(camera, pointing_time, filepath)
         if data is not None:
             obs.insert_subfield('data', data)
 
@@ -964,29 +960,6 @@ class CassiniISS(oops.Host):
         for item in _REQUIRED_ITEMS:
             if item not in dict_:
                 raise oops.host.HostFormatError(f'{item} is missing from {filepath}')
-
-    @staticmethod
-    def _check_pointing(camera, time, filepath):
-        """Raise OopsSpiceError unless the C kernels give the camera's pointing at a time.
-
-        Parameters:
-            camera (str): "NAC" or "WAC".
-            time (float): The time in seconds TDB.
-            filepath (str | FCPath): The image file, named in the error.
-
-        Raises:
-            OopsSpiceError: If SPICE cannot evaluate the camera frame at `time`. It is
-                built by ``OopsSpiceError.from_spice_error``, so its message
-                reads "no Cassini ISS NAC pointing at <time> for <filepath>: <code>",
-                with the SPICE error code, such as "SPICE(CKINSUFFDATA)", when SPICE gives
-                one, and its cause is the exception that SPICE raised. An exception of
-                any class other than those that cspyce raises propagates unchanged.
-        """
-
-        # The SPICE frame, which the C kernels define; the camera frame is fixed to it
-        oops.Host._check_spice_frame('CASSINI_ISS_' + camera + '_FLIPPED', time,
-                                     description=f'no Cassini ISS {camera} pointing',
-                                     filepath=filepath)
 
     @staticmethod
     def _get_subfields(dict_):

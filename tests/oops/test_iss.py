@@ -19,9 +19,9 @@ import oops
 from pdsparser import Pds3Label
 import pytest
 import vicar
-from conftest import (NAC_HALF_FOV_DEG, PIXELS, TIME_SHIFTS, WAC_HALF_FOV_DEG,
-                      FakeSpice, FakeSpiceDB, claim_more_rows, ik_dict, pds3_lines,
-                      tdb_in_month, write_table)
+from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
+                      FakeSpiceDB, claim_more_rows, ik_dict, pds3_lines, tdb_in_month,
+                      write_table)
 
 import host_cassini
 import host_cassini.oops
@@ -2250,14 +2250,16 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times == [cadence.midtime]
 
 
-@pytest.mark.parametrize(('letters', 'after'), TIME_SHIFTS)
+# The ISS camera frame is a fixed Cmatrix on the SPICE frame, and an "F" time shift wraps
+# the camera frame alone, so the SPICE frame is evaluated at the observation's own time,
+# moved only by a "T"
+@pytest.mark.parametrize('letters', ['T', 't', 'F', 'TF'])
 def test_from_index_probes_pointing_after_a_time_shift(
-        tmp_path: pathlib.Path, spice_check_times: list[float], letters: str,
-        after: float) -> None:
-    """The pointing probe is where the frame is evaluated, after the time shift."""
+        tmp_path: pathlib.Path, spice_check_times: list[float], letters: str) -> None:
+    """The pointing probe is where the SPICE frame is evaluated, after the time shift."""
 
     obs = next(CassiniISS.from_index(write_index(tmp_path), timeshift=(30., letters)))
-    assert spice_check_times == [pytest.approx(obs.midtime + after, abs=1.e-3)]
+    assert spice_check_times == [pytest.approx(obs.midtime, abs=1.e-3)]
 
 
 @pytest.mark.usefixtures('initialized_iss', 'saturn_path')
@@ -2273,9 +2275,11 @@ def test_from_file_checks_pointing_where_a_tracker_evaluates_it(
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_checks_pointing_where_a_frame_shift_evaluates_it(
         tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
+    """An "F" shift of the camera frame leaves the SPICE frame at the midtime."""
+
     obs = CassiniISS.from_file(write_pds3_image(tmp_path), astrometry=True,
                                timeshift=(30., 'F'))
-    assert spice_check_times == [pytest.approx(obs.midtime + 30., abs=1.e-3)]
+    assert spice_check_times == [pytest.approx(obs.midtime, abs=1.e-3)]
 
 
 @pytest.mark.usefixtures('initialized_iss')

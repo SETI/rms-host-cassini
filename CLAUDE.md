@@ -104,11 +104,13 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - Missing C-kernel pointing raises `oops.OopsSpiceError`, checked in `from_file` with
   `oops.Host._check_spice_frame()` only when the frame comes from SPICE (no `frame`
   override). `from_index` calls it with `defer=True`, so a row whose pointing SPICE lacks
-  gets an `oops.frame.SpiceErrorFrame`, which raises `OopsSpiceError` when evaluated. ISS
-  checks the `_FLIPPED` SpiceFrame, since its camera frame is a fixed Cmatrix on it.
-  The check is at `oops.Host._pointing_time(cadence, overrides)`, where the frame will
-  be evaluated after the cadence override, a tracker, and a "T" and/or "F" timeshift
-  (pass the whole overrides dict). Clock
+  gets an `oops.frame.SpiceErrorFrame`, which raises `OopsSpiceError` when evaluated.
+  `_check_spice_frame(frame, cadence, overrides, ...)` is called before
+  `_apply_overrides()` with the cadence before the overrides and the whole overrides
+  dict, and evaluates the frame as the observation will (cadence override, tracker, "T",
+  "F"). ISS passes its camera frame (`CASSINI_ISS_NAC`, a fixed Cmatrix on the
+  `_FLIPPED` SpiceFrame), so an "F" shift leaves the C-kernel lookup at the
+  observation's time; UVIS and VIMS pass the SpiceFrame itself, which "F" shifts. Clock
   conversions go through `_tdb_from_sclk()`/`_sclk_from_tdb()`, which use oops's one
   rule for cspyce failures (`OopsSpiceError.CSPYCE_ERRORS` and `is_spice_error`): only
   an error with a SPICE code becomes `OopsSpiceError`; any other propagates.

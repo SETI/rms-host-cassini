@@ -31,12 +31,15 @@ frame of the detector for UVIS, such as ``CASSINI_UVIS_FUV``, and ``CASSINI_VIMS
 it is made, as :doc:`user_guide_setup` describes.
 
 When ``from_file()`` builds the frame from the C kernels, it checks at once that they
-hold the pointing at the time at which the observation evaluates its frame. That is the
-middle of the observation, after any ``cadence`` override, or, with a ``tracker``, the
-start, middle, or end that it selects. A ``timeshift`` moves that time by its seconds if
-its letters include ``T``, which moves the observation's times, and again if they
-include ``F``, which evaluates the frame that much later. If the kernels lack the
-pointing, it raises :exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
+hold the pointing at the time at which the observation reads them. That is the middle of
+the observation, after any ``cadence`` override, or, with a ``tracker``, the start,
+middle, or end that it selects. A ``timeshift`` whose letters include ``T`` moves that
+time by its seconds, because it moves the observation's times. One whose letters include
+``F`` shifts the instrument's frame by its seconds: the UVIS and VIMS frames are the
+frames that the C kernels give, so their pointing is then read that much later, while
+the ISS camera frame is fixed to the frame that the C kernels give, so the C kernels are
+still read at the observation's own time. If the kernels lack the pointing, it raises
+:exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
 ``from_index()`` makes the same check at the same time but does not raise: an
 observation whose pointing the kernels lack still appears, and its frame raises
 :exc:`oops.OopsSpiceError`, with the same message, when it is evaluated.

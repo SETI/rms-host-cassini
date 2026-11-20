@@ -297,6 +297,7 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
     def spice_frame(spice_id: str, *, frame_id: str) -> oops.Frame:
         fake.spice_frames.append(spice_id)
+        _FAKE_SPICE_FRAME_IDS.add(frame_id)
         return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
                                   frame_id=frame_id)
 
@@ -392,22 +393,33 @@ def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
     return fake_spicedb
 
 
-# Time-shift letters, and the seconds after the observation's midtime at which its frame
-# is evaluated for a shift of 30 s: "T" moves the observation's times, and "F" evaluates
-# the frame that much later than them; the letters are read in either case
+# The frame IDs of the fake SPICE frames, which spice_check_times watches
+_FAKE_SPICE_FRAME_IDS: set[str] = set()
+
+# Time-shift letters, and the seconds after the observation's midtime at which a SPICE
+# frame relative to J2000, as of UVIS and VIMS, is evaluated for a shift of 30 s: "T"
+# moves the observation's times, and "F" wraps the frame in a FrameShift, which
+# evaluates it that much later; the letters are read in either case
 TIME_SHIFTS = [('T', 0.), ('t', 0.), ('F', 30.), ('TF', 30.)]
 
 
 @pytest.fixture
 def spice_check_times(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """The times at which the hosts check the SPICE pointing, recorded as they check."""
+    """The times at which a SPICE frame is evaluated while a host checks the pointing."""
 
     times: list[float] = []
     check = oops.Host._check_spice_frame
+    transform_at_time = oops.frame.Cmatrix.transform_at_time
 
-    def spy(frame: Any, time: Any, **kwargs: Any) -> Any:
-        times.append(float(time))
-        return check(frame, time, **kwargs)
+    def recording_transform(self: Any, time: Any, *args: Any, **kwargs: Any) -> Any:
+        if getattr(self, 'frame_id', None) in _FAKE_SPICE_FRAME_IDS:
+            times.append(float(oops.Scalar.as_scalar(time).vals))
+        return transform_at_time(self, time, *args, **kwargs)
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        with monkeypatch.context() as patch:
+            patch.setattr(oops.frame.Cmatrix, 'transform_at_time', recording_transform)
+            return check(*args, **kwargs)
 
     monkeypatch.setattr(oops.Host, '_check_spice_frame', staticmethod(spy))
     return times
