@@ -955,4 +955,13 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()], cadence=cadence))
     assert spice_check_times[-1] == cadence.midtime
 
+
+def test_from_index_probes_pointing_after_a_time_shift(
+        spice_check_times: list[float]) -> None:
+    """A time shift of the observation ("T") moves the time of the pointing probe."""
+
+    obs = next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()],
+                                      timeshift=(30., 'T')))
+    assert spice_check_times == [pytest.approx(obs.midtime, abs=1.e-3)]
+
 ##########################################################################################

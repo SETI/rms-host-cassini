@@ -1093,6 +1093,17 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times == [cadence.midtime]
 
 
+def test_from_index_probes_pointing_after_a_time_shift(
+        spice_check_times: list[float]) -> None:
+    """A time shift of the observation ("T") moves the time of the pointing probe."""
+
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    VIS_POWER_STATE_FLAG='OFF')
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row],
+                                       timeshift=(30., 'T'))
+    assert spice_check_times == [pytest.approx(ir.midtime, abs=1.e-3)]
+
+
 def write_vims_tables(directory: pathlib.Path) -> pathlib.Path:
     """Write a two-row VIMS index and its supplement; return the index label's path."""
 

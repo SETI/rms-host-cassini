@@ -30,8 +30,8 @@ from oops.host import HostFormatError, HostIndexError, WrongHostError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _common_subfields, _detect_index_by_path, _fix_cassini_ring_target,
                        _index_file_path, _is_null, _known_path, _label_dict,
-                       _pds3_options_with_defaults, _read_pds3_fileinfo, _row_items,
-                       _tdb_from_sclk, _without_nulls)
+                       _pds3_options_with_defaults, _pointing_midtime,
+                       _read_pds3_fileinfo, _row_items, _tdb_from_sclk, _without_nulls)
 
 __all__ = ['CassiniVIMS']
 
@@ -1123,7 +1123,7 @@ class CassiniVIMS(oops.Host):
                 # a cspyce error: now from from_file, and from from_index when the frame
                 # is used
                 if using_cks:
-                    midtime = (overrides['cadence'] or cadence).midtime
+                    midtime = _pointing_midtime(cadence, overrides)
                     frame = oops.Host._check_spice_frame(
                         frame, midtime, description=f'no Cassini VIMS {frame} pointing',
                         filepath=filepath, defer=not check)

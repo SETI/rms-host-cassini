@@ -2217,6 +2217,14 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times == [cadence.midtime]
 
 
+def test_from_index_probes_pointing_after_a_time_shift(
+        tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
+    """A time shift of the observation ("T") moves the time of the pointing probe."""
+
+    obs = next(CassiniISS.from_index(write_index(tmp_path), timeshift=(30., 'T')))
+    assert spice_check_times == [pytest.approx(obs.midtime, abs=1.e-3)]
+
+
 @pytest.mark.usefixtures('initialized_iss')
 @pytest.mark.parametrize('value', ['UNKNOWN', '', '---'])
 def test_from_file_leaves_out_each_placeholder(tmp_path: pathlib.Path,

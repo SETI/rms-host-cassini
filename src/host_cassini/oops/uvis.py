@@ -21,7 +21,8 @@ from oops.host import HostFormatError, HostIndexError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _common_subfields, _detect_index_by_path, _index_file_path,
                        _is_null, _known_path, _label_dict, _pds3_options_with_defaults,
-                       _read_pds3_fileinfo, _row_items, _without_nulls)
+                       _pointing_midtime, _read_pds3_fileinfo, _row_items,
+                       _without_nulls)
 
 __all__ = ['CassiniUVIS']
 
@@ -1113,7 +1114,7 @@ class CassiniUVIS(oops.Host):
         # A frame that the C kernels cannot supply raises OopsSpiceError, never a cspyce
         # error: now from from_file, and from from_index when the frame is used
         if overrides['frame'] is None:
-            midtime = (overrides['cadence'] or cadence).midtime
+            midtime = _pointing_midtime(cadence, overrides)
             params['frame'] = oops.Host._check_spice_frame(
                 frame_name, midtime, description=f'no Cassini UVIS {frame_name} pointing',
                 filepath=filepath, defer=not check)

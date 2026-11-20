@@ -20,7 +20,8 @@ import oops
 from ._cassini import (_Cassini, _CMATRIX_ROTATION, _detect_index_by_path,
                        _FILL_VALUE, _fix_cassini_ring_target, _index_file_path, _is_null,
                        _items, _known_path, _label_dict, _pds3_options_with_defaults,
-                       _row_items, _sclk_from_tdb, _tdb_from_sclk, _without_nulls)
+                       _pointing_midtime, _row_items, _sclk_from_tdb, _tdb_from_sclk,
+                       _without_nulls)
 
 __all__ = ['CassiniISS']
 
@@ -387,8 +388,8 @@ class CassiniISS(oops.Host):
         view, pointing, target and light source are computed from the merged metadata.
 
         If the observation's frame comes from SPICE, the C kernels must give the camera's
-        pointing at its midtime, after any cadence override. Nothing is checked when a
-        `frame` override is given.
+        pointing at its midtime, after any cadence or time-shift override. Nothing is
+        checked when a `frame` override is given.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
@@ -869,9 +870,9 @@ class CassiniISS(oops.Host):
 
         # An index row's pointing is not checked, but a camera frame that the C kernels
         # cannot supply raises OopsSpiceError when it is used, not a cspyce error; at the
-        # midtime of the observation, after any cadence override
+        # midtime of the observation, after any cadence or time-shift override
         if using_cks and not check_pointing:
-            midtime = (overrides['cadence'] or params['cadence']).midtime
+            midtime = _pointing_midtime(params['cadence'], overrides)
             checked = oops.Host._check_spice_frame(
                 'CASSINI_ISS_' + camera + '_FLIPPED', midtime,
                 description=f'no Cassini ISS {camera} pointing', filepath=filepath,
@@ -886,7 +887,7 @@ class CassiniISS(oops.Host):
         obs = oops.observation.Snapshot(('v','u'), **params)
         if using_cks and check_pointing:
             # Report missing pointing now, with its SPICE code, not when the frame is
-            # first used; at the midtime of the observation, after any cadence override
+            # first used; at the midtime of the observation, after the overrides
             # (#15)
             CassiniISS._check_pointing(camera, obs.midtime, filepath)
         if data is not None:

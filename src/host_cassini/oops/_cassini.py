@@ -667,6 +667,29 @@ def _known_path(filepath):
     return FCPath(filepath)
 
 
+def _pointing_midtime(cadence, overrides):
+    """The time at which an observation's pointing is checked, after the overrides.
+
+    The overrides are applied after the check, so the time is found here as they will
+    set it: the `cadence` override in place of the observation's own cadence, then a
+    `timeshift` whose letters include "T", which moves every time by its seconds.
+
+    Parameters:
+        cadence (Cadence): The observation's own cadence.
+        overrides (dict[str, Any]): The standard overrides, keyed by name, each None
+            when not given.
+
+    Returns:
+        float: The midtime in seconds TDB.
+    """
+
+    midtime = (overrides['cadence'] or cadence).midtime
+    timeshift = overrides.get('timeshift')
+    if timeshift is not None and 'T' in str(timeshift[1]).upper():
+        midtime += timeshift[0]
+    return midtime
+
+
 # The classes of exception that cspyce raises for a SPICE error
 _SPICE_ERRORS = (LookupError, OSError, RuntimeError, ValueError)
 

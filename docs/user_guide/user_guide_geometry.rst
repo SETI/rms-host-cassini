@@ -31,11 +31,12 @@ frame of the detector for UVIS, such as ``CASSINI_UVIS_FUV``, and ``CASSINI_VIMS
 it is made, as :doc:`user_guide_setup` describes.
 
 When ``from_file()`` builds the frame from the C kernels, it checks at once that they
-hold the pointing at the middle of each observation, after any ``cadence`` override. If
-they do not, it raises :exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
-``from_index()`` does not raise for missing pointing: an observation whose pointing the
-kernels lack still appears, and its frame raises :exc:`oops.OopsSpiceError`, with the
-same message, when it is evaluated.
+hold the pointing at the middle of each observation, after any ``cadence`` override and
+any ``timeshift`` that moves the observation's times (one whose letters include ``T``).
+If they do not, it raises :exc:`oops.OopsSpiceError` (see :doc:`user_guide_errors`).
+``from_index()`` makes the same check at the same time but does not raise: an
+observation whose pointing the kernels lack still appears, and its frame raises
+:exc:`oops.OopsSpiceError`, with the same message, when it is evaluated.
 
 A caller that has better pointing can pass it with the ``frame`` override, for example
 as a :class:`~oops.frame.Cmatrix`. The host then uses that frame. It neither loads nor
