@@ -12,8 +12,8 @@ Reading an ISS image file
 
 :exc:`oops.OopsSpiceError`
     The C kernels hold no pointing for the camera at the middle of the exposure, moved
-    as a ``cadence`` override or a ``timeshift`` moves the time at which the frame is
-    evaluated. The message reads "no Cassini ISS NAC pointing at <time> for <image
+    as a ``cadence`` override, a ``tracker``, or a ``timeshift`` moves the time at which
+    the frame is evaluated (see :doc:`user_guide_geometry`). The message reads "no Cassini ISS NAC pointing at <time> for <image
     file>: <code>", ending with the SPICE error code, such as ``SPICE(CKINSUFFDATA)``, and the
     exception's ``spice_code`` and ``filepath`` attributes hold the code and the image
     file. It is never raised for missing pointing when the caller supplies the pointing

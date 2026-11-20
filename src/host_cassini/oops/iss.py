@@ -408,9 +408,9 @@ class CassiniISS(oops.Host):
 
         If the observation's frame comes from SPICE, the C kernels must give the camera's
         pointing at the time at which the observation evaluates its frame: its midtime,
-        after any cadence override, moved by a time shift whose letters include "T" and
-        again by one whose letters include "F". Nothing is checked when a `frame`
-        override is given.
+        after any cadence override, or the time that a `tracker` selects, moved by a
+        time shift whose letters include "T" and again by one whose letters include "F".
+        Nothing is checked when a `frame` override is given.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):

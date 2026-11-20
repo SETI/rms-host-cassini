@@ -107,7 +107,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   gets an `oops.frame.SpiceErrorFrame`, which raises `OopsSpiceError` when evaluated. ISS
   checks the `_FLIPPED` SpiceFrame, since its camera frame is a fixed Cmatrix on it.
   The check is at `oops.Host._pointing_time(cadence, overrides)`, where the frame will
-  be evaluated after the cadence override and a "T" and/or "F" timeshift. Clock
+  be evaluated after the cadence override, a tracker, and a "T" and/or "F" timeshift
+  (pass the whole overrides dict). Clock
   conversions go through `_tdb_from_sclk()`/`_sclk_from_tdb()`, which use oops's one
   rule for cspyce failures (`OopsSpiceError.CSPYCE_ERRORS` and `is_spice_error`): only
   an error with a SPICE code becomes `OopsSpiceError`; any other propagates.
