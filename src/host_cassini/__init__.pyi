@@ -15,7 +15,7 @@ The detectors and support methods that a Host subclass overrides or calls, such 
 """
 
 import pathlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any
 
 from filecache import FCPath
@@ -56,14 +56,15 @@ class CassiniISS(Host):
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any) -> Snapshot: ...
     # Every row is one Snapshot. The pointing is never checked. select must be None
-    # (oops.OopsValueError), and any other keyword raises oops.OopsTypeError. The
-    # iterator builds each row's Snapshot when it reaches the row.
+    # (oops.OopsValueError), and any other keyword raises oops.OopsTypeError. The call
+    # reads only the labels; the iterator reads the rows a few at a time and builds each
+    # row's Snapshot when it reaches the row.
     @staticmethod
     def from_index(
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None,
-        row_dicts: list[dict[str, Any]] | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None, fast_distortion: bool | None = True,
         return_all_planets: bool = False,
@@ -107,7 +108,8 @@ class CassiniUVIS(Host):
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
-        label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
+        label: Pds3Label | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None,
         select: int | slice | tuple[int | slice, ...] | None = None,
@@ -149,7 +151,8 @@ class CassiniVIMS(Host):
     def from_index(
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
-        label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
+        label: Pds3Label | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None,
         select: int | slice | str | tuple[int | slice | str, ...] | None = None,

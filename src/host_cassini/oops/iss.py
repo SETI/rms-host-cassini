@@ -17,11 +17,10 @@ from pdsparser import Pds3Label
 from vicar     import VicarError, VicarImage, VicarLabel
 
 import oops
-from ._cassini import (_Cassini, _CMATRIX_ROTATION, _fix_cassini_ring_target,
-                       _index_file_path, _is_null, _items,
-                       _known_path, _label_dict, _pds3_options_with_defaults,
-                       _refuse_volume_index, _row_items, _sclk_from_tdb, _tdb_from_sclk,
-                       _without_nulls)
+from ._cassini import (_Cassini, _CMATRIX_ROTATION, _detect_index_by_path,
+                       _FILL_VALUE, _fix_cassini_ring_target, _index_file_path, _is_null,
+                       _items, _known_path, _label_dict, _pds3_options_with_defaults,
+                       _row_items, _sclk_from_tdb, _tdb_from_sclk, _without_nulls)
 
 __all__ = ['CassiniISS']
 
@@ -173,15 +172,34 @@ _EARLY_VICAR_INSTRUMENT_NAMES = {
     'ISSWA': 'IMAGING SCIENCE SUBSYSTEM WIDE ANGLE',
 }
 
+# The keywords of the ISS labels and VICAR headers in which -999 is a fill value: the
+# back optics temperature of a camera with no back sensor (54 of 400 labels sampled on
+# 2026-11-19, and their headers), the COMPRESSION_RATIO (INST_CMPRS_RATIO) of the early
+# cruise headers, and the temperatures and rates of products whose headers were filled
+# with predictions, such as the DETECTOR_TEMPERATURE of -999 degrees C, below absolute
+# zero, in N1640662528_3_CALIB.LBL of calibrated/COISS_2059, whose DESCRIPTION says
+# "Predicted values used to populate header" (#10). None of them can be -999.
+_FILL_KEYWORDS = frozenset({'DETECTOR_TEMPERATURE', 'FILTER_TEMPERATURE',
+                            'INSTRUMENT_DATA_RATE', 'INST_CMPRS_RATE', 'INST_CMPRS_RATIO',
+                            'OPTICS_TEMPERATURE', 'SENSOR_HEAD_ELEC_TEMPERATURE'})
+
 # The fill values of the index tables, besides the text that the archive writes for "no
-# value", -999, 1e32 and -1e32 (see _cassini._row_items). The index tables in the
-# metadata tree declare these as null constants, and the image labels give their items
-# as UNK or N/A; the tables in the volumes' index directories write the same values but
-# declare no null constants. The masks that the table reader builds from the declared
-# constants are not used, because those labels also declare 0 the null constant of
-# BIAS_STRIP_MEAN and DARK_STRIP_MEAN, which the image labels give as the value (38,006
-# rows) (#28).
+# value", 1e32 and -1e32 (see _cassini._row_items). The metadata index labels declare
+# these as null constants, and the image labels give their items as UNK or N/A. The
+# masks that the table reader builds from the declared constants are not used, because
+# those labels also declare 0 the null constant of BIAS_STRIP_MEAN and DARK_STRIP_MEAN,
+# which the image labels give as the value (38,006 rows) (#28).
 _INDEX_FILL_VALUES = {
+    # -999 in the columns that the labels declare it for, and in INST_CMPRS_RATIO,
+    # whose label declares -1e32 but whose 128 rows of -999 cannot be a ratio (survey of
+    # every ISS metadata index, 2026-11-19)
+    'DETECTOR_TEMPERATURE'        : _FILL_VALUE,
+    'FILTER_TEMPERATURE'          : _FILL_VALUE,
+    'INSTRUMENT_DATA_RATE'        : _FILL_VALUE,
+    'INST_CMPRS_RATE'             : _FILL_VALUE,
+    'INST_CMPRS_RATIO'            : _FILL_VALUE,
+    'OPTICS_TEMPERATURE'          : _FILL_VALUE,
+    'SENSOR_HEAD_ELEC_TEMPERATURE': _FILL_VALUE,
     'COMMAND_SEQUENCE_NUMBER'     : 65534,
     'ELECTRONICS_BIAS'            : 65534,
     'EXPECTED_PACKETS'            : 65534,
@@ -192,13 +210,16 @@ _INDEX_FILL_VALUES = {
     'VALID_MAXIMUM'               : 65534,
     'INST_CMPRS_PARAM'            : -2147483648,
     'MISSING_LINES'               : -2147483648,
-    # Written only for images whose rows have no target geometry (PHASE_ANGLE -1e32):
-    # 8,464 rows each, and 10,558 for CENTER_LONGITUDE
-    'EMISSION_ANGLE'              : 0.,
-    'INCIDENCE_ANGLE'             : 0.,
-    'CENTER_LATITUDE'             : 0.,
-    'CENTER_LONGITUDE'            : 0.,
 }
+
+# The angles that the index tables give as 0 in a row that has no target geometry, whose
+# PHASE_ANGLE is -1e32: 8,464 rows each, and 10,558 for CENTER_LONGITUDE, in COISS_1999
+# and COISS_2999; no row with target geometry gives any of them as 0 (survey of every ISS
+# metadata index, 2026-11-19). Until the index is corrected, a 0 is missing in a row
+# that has no PHASE_ANGLE; a corrected table gives the fill value there, and a real 0
+# in a row with target geometry is kept. SETI/rms-data-projects#253 item 5.
+_ZERO_WITHOUT_GEOMETRY = ('EMISSION_ANGLE', 'INCIDENCE_ANGLE', 'CENTER_LATITUDE',
+                          'CENTER_LONGITUDE')
 
 # The clock counts of the index rows, which the tables write with their trailing zeros
 # dropped, such as "1473199010.12" for the label's "1473199010.120" (#27)
@@ -320,6 +341,15 @@ class CassiniISS(oops.Host):
     #: The name under which this host registers with :class:`~oops.host.host_.Host` and
     #: that appears in its error messages.
     NAME = 'Cassini ISS'
+
+    #: None of the 127 ISS metadata indexes in the holdings, the 10 of COISS_1xxx and
+    #: the 117 of COISS_2xxx, has a supplemental index (survey of 2026-11-19), so the
+    #: rows of a supplement that the caller gives are paired with the index rows by
+    #: position.
+    MERGE_SUPPLEMENT_BY_FILE = False
+
+    #: A metadata index, named in the message that refuses a volume's own index.
+    METADATA_INDEX_EXAMPLE = 'COISS_2001_index.lbl'
 
     _INSTRUMENT_KERNEL = None
     _FOVS = {}
@@ -493,12 +523,8 @@ class CassiniISS(oops.Host):
 
         # A mistaken keyword, such as "astrometery", must not be dropped silently, and
         # an argument error is raised before anything is read, as in from_index (#20)
-        if kwargs:
-            raise oops.OopsTypeError(f'unexpected keyword argument for '
-                                     f'CassiniISS.from_file: {next(iter(kwargs))!r}')
-        if select is not None:
-            raise oops.OopsValueError(f'a Cassini ISS image is one observation; select '
-                                      f'must be None, not {select!r}')
+        CassiniISS._check_keywords('from_file', kwargs)
+        oops.Host._check_select(select, unit='Cassini ISS image')
 
         CassiniISS.initialize()  # define everything the first time through; use defaults
                                  # unless initialize() was called explicitly.
@@ -547,8 +573,7 @@ class CassiniISS(oops.Host):
 
         label_dict = None if label is None else _label_dict(label.as_dict())
         header_dict = None if header is None else CassiniISS._header_dict(header)
-        dict_ = CassiniISS._early_cruise_counts(
-            CassiniISS._merged_dict(label_dict, header_dict), filepath)
+        dict_ = CassiniISS._merged_dict(label_dict, header_dict)
 
         overrides = {
             'target'      : target,
@@ -583,27 +608,30 @@ class CassiniISS(oops.Host):
                    **kwargs):
         """An iterator over Snapshots, one for each row of a Cassini ISS index file.
 
-        The arguments are checked, and the index is read and filtered, when this method is
-        called; each row's Snapshot is built when the iteration reaches that row.
+        When this method is called, it checks the arguments and reads the labels of the
+        index and of any supplement. The rows are read as the iteration proceeds, a few
+        at a time, through ``oops.Host._index_rows``, and each row's Snapshot is built
+        when the iteration reaches that row, so an error in a row is raised at that row,
+        after every earlier row has been yielded.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
             supplement (str | pathlib.Path | FCPath | object | None, optional): The path
                 to the PDS label of a supplemental index file, whose columns are merged
-                into each row. Its rows must name the same files as the index's: they are
-                paired by position where the two tables list the files in the same order,
-                and otherwise by VOLUME_ID and FILE_SPECIFICATION_NAME. Where both tables
-                give a column, the index value is kept. The default,
-                `oops.Host.SUPPLEMENT`, reads the file in the directory of
-                `filepath` whose name matches except that "_index" is replaced by
-                "_supplemental_index" in upper or lower case, if there is one; the
-                archive has none for ISS. None reads no supplement.
+                into each row. Its rows must list the same files as the index's, in the
+                same order, by VOLUME_ID and FILE_SPECIFICATION_NAME where both tables
+                have those columns. Where both tables give a column, the index value is
+                kept. The default, `oops.Host.SUPPLEMENT`, reads the file in the
+                directory of `filepath` whose name matches except that "_index" is
+                replaced by "_supplemental_index" in upper or lower case, if there is
+                one; the archive has none for ISS. None reads the index alone.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
-            row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
-                row of the index. Include if `filepath` has already been read. If
-                provided, `supplement` and `label` are ignored.
+            row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
+                the index, one dictionary per row, if `filepath` has already been read;
+                each is filtered and built when the iteration reaches it. If provided,
+                `supplement` and `label` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -673,13 +701,15 @@ class CassiniISS(oops.Host):
             masks are not applied, because the metadata indexes declare real values as
             null constants (a BIAS_STRIP_MEAN or DARK_STRIP_MEAN of 0, which the image
             labels give). Instead these are missing: a PDS3 null constant, such as UNK
-            or NULL; the fill values -999, 1e32 and -1e32; 65534 and -2147483648 in the
-            columns whose labels give UNK or N/A for them; and an EMISSION_ANGLE,
-            INCIDENCE_ANGLE, CENTER_LATITUDE or CENTER_LONGITUDE of 0, written for an
-            image with no target geometry. A missing element of an array column is
-            None. The clock counts are spelled as the labels spell them, with three
-            digits after the point, where the tables drop trailing zeros. Those of an
-            early cruise image are computed as :meth:`from_file` describes.
+            or NULL; the fill values 1e32 and -1e32; -999 in the temperature, data rate
+            and compression columns, whose labels declare it or where it cannot be a
+            real value; 65534 and -2147483648 in the columns whose labels give UNK or
+            N/A for them; and an EMISSION_ANGLE, INCIDENCE_ANGLE, CENTER_LATITUDE or
+            CENTER_LONGITUDE of 0 in a row that has no target geometry (no PHASE_ANGLE),
+            where the tables write 0 for a missing angle. A missing element of an array
+            column is None. The clock counts are spelled as the labels spell them, with
+            three digits after the point, where the tables drop trailing zeros. Those of
+            an early cruise image are computed as :meth:`from_file` describes.
 
             The pointing is not checked, and every filtered row gives an observation.
             Where the C kernels cannot supply the camera's pointing at the midtime of
@@ -687,20 +717,24 @@ class CassiniISS(oops.Host):
             used.
 
         Raises:
-            FileNotFoundError: If `supplement` names a file that does not exist.
+            FileNotFoundError: If `supplement` gives a file whose label does not exist;
+                when the iteration starts, if a table file does not exist.
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID; raised when the iteration reaches that row.
-            HostIndexError: If `filepath` is a volume's own index, in its "index"
-                directory, rather than a metadata index; if the index or the supplement
-                cannot be read as an index table; if the supplement does not list the
-                same files as the index, or, where the two tables list the files in
-                different orders, either lists a file twice; or if `filter` names a
-                column that the index does not have.
+            HostIndexError: When called, if `filepath` is a volume's own index, in its
+                "index" directory, rather than a metadata index, or if the label of the
+                index or the supplement does not describe a table that can be read.
+                During the iteration, at the row concerned, if a row does not match the
+                table's label, or if the supplement does not list the same files as the
+                index in the same order.
             OopsSpiceError: If the spacecraft clock kernel cannot convert the clock counts
                 of an early cruise image; raised when the iteration reaches that row.
-            OopsTypeError: If a keyword argument is not one of those listed.
-            OopsValueError: If `select` is not None.
+            OopsTypeError: If a keyword argument is not one of those listed; when the
+                iteration reaches a row whose value cannot be compared with a range in
+                `filter`.
+            OopsValueError: If `select` is not None, or if `filter` uses a column that the
+                index does not have.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` cannot be read.
@@ -708,27 +742,20 @@ class CassiniISS(oops.Host):
         """
 
         # A mistaken keyword, such as "supplementary", must not be dropped silently (#20)
-        if kwargs:
-            raise oops.OopsTypeError(f'unexpected keyword argument for '
-                                     f'CassiniISS.from_index: {next(iter(kwargs))!r}')
-        if select is not None:
-            raise oops.OopsValueError(f'each row of a Cassini ISS index is one '
-                                      f'observation; select must be None, not '
-                                      f'{select!r}')
+        CassiniISS._check_keywords('from_index', kwargs)
+        oops.Host._check_select(select, unit='row of a Cassini ISS index')
 
-        _refuse_volume_index(filepath, CassiniISS.NAME, 'COISS_2001_index.lbl')
+        # The labels are read now and the rows as the iteration reaches them. ISS needs
+        # no supplement, so the default looks for one without requiring it, while one
+        # that is given must exist.
+        rows = CassiniISS._index_rows(filepath, supplement=supplement,
+                                      require_supplement=(supplement is not
+                                                          oops.Host.SUPPLEMENT),
+                                      label=label, row_dicts=row_dicts,
+                                      pds3_options=pds3_options, filter=filter)
+        volumes = oops.Host._volumes_directory(filepath)
 
         CassiniISS.initialize()
-
-        # Read and filter the index table. ISS needs no supplement, so the default looks
-        # for one without requiring it, while one that is named must exist.
-        if row_dicts is None:
-            require = supplement is not oops.Host.SUPPLEMENT
-            row_dicts = CassiniISS._read_index_rows(filepath, supplement=supplement,
-                                                    require_supplement=require,
-                                                    pds3_options=pds3_options,
-                                                    label=label)
-        row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
 
         overrides = {
             'target'      : target,
@@ -746,11 +773,10 @@ class CassiniISS(oops.Host):
 
         # Build each row's Snapshot when the iteration reaches it
         def snapshots():
-            for row_dict in row_dicts:
-                fpath = _index_file_path(filepath, row_dict)
-                items = CassiniISS._early_cruise_counts(CassiniISS._row_items(row_dict),
-                                                        fpath)
-                obs = CassiniISS._make_snapshot(items, filepath=fpath, data=None,
+            for row_dict in rows:
+                fpath = _index_file_path(volumes, row_dict)
+                obs = CassiniISS._make_snapshot(CassiniISS._row_items(row_dict),
+                                                filepath=fpath, data=None,
                                                 fast_distortion=fast_distortion,
                                                 return_all_planets=return_all_planets,
                                                 overrides=overrides,
@@ -799,6 +825,7 @@ class CassiniISS(oops.Host):
         """
 
         CassiniISS._require_items(dict_, filepath)
+        CassiniISS._early_cruise_counts(dict_, filepath)
         try:
             tstart = julian.tdb_from_iso(dict_['START_TIME'])
         except (TypeError, ValueError) as err:
@@ -940,7 +967,7 @@ class CassiniISS(oops.Host):
         params = {'dict': dict_}
 
         # Merge filter names, ignoring "CL1" and "CL2"; a FILTER_NAME with a missing
-        # element names no filter pair
+        # element does not give the filter pair
         filter1 = filter2 = None
         if 'FILTER_NAME' in dict_:
             filter1, filter2 = dict_['FILTER_NAME']
@@ -996,13 +1023,13 @@ class CassiniISS(oops.Host):
             directory.
 
         Raises:
-            PdsHostError: If the label's ^IMAGE pointer names no file.
+            PdsHostError: If the label's ^IMAGE pointer does not give a file name.
         """
 
         pointer = label.get('^IMAGE', None)
         if not isinstance(pointer, str):
-            raise oops.host.PdsHostError('^IMAGE names no image file in '
-                                         f'{label.filepath}')
+            raise oops.host.PdsHostError('^IMAGE does not give the name of the image '
+                                         f'file in {label.filepath}')
         return FCPath(label.filepath).parent / pointer
 
     @staticmethod
@@ -1022,7 +1049,7 @@ class CassiniISS(oops.Host):
             FileNotFoundError: If no image file of any of these names exists.
             HostFormatError: If the label was not read from a file, so that no image file
                 can be found.
-            PdsHostError: If the label's ^IMAGE pointer names no file.
+            PdsHostError: If the label's ^IMAGE pointer does not give a file name.
             VicarHostError: If the image file's VICAR header cannot be parsed.
         """
 
@@ -1150,7 +1177,7 @@ class CassiniISS(oops.Host):
                                                  pds3_options=pds3_options)
             except oops.host.WrongHostError:
                 raise
-            except ValueError as err:   # including VicarHostError, which names no file
+            except ValueError as err:   # VicarHostError too, whose message lacks the file
                 raise oops.host.VicarHostError(f'{err} in {fileinfo}') from err
 
         method = pds3_options['method']
@@ -1227,10 +1254,10 @@ class CassiniISS(oops.Host):
         The keys that the label parser derives from a keyword (see `_items` in
         _cassini.py) are left out of the label's keywords. The header's keywords are
         given their PDS3 names and forms (see :meth:`_pds3_dict_from_vicar`). Missing
-        values are removed from both (see `_without_nulls` in _cassini.py). An item that
-        only one source gives takes that source's value. An item that both give takes the
-        value of its source in `_RESOLUTION_RULES`, the label for every item not listed
-        there. The label's
+        values are removed from both (see `_without_nulls` in _cassini.py), -999 among
+        them in the keywords of `_FILL_KEYWORDS`. An item that only one source gives
+        takes that source's value. An item that both give takes the value of its source
+        in `_RESOLUTION_RULES`, the label for every item not listed there. The label's
         keywords come first, in label order, then the header's other keywords, in header
         order.
 
@@ -1246,10 +1273,11 @@ class CassiniISS(oops.Host):
 
         label = {}
         if label_dict is not None:
-            label = _without_nulls(_items(label_dict))
+            label = _without_nulls(_items(label_dict), _FILL_KEYWORDS)
         header = {}
         if header_dict is not None:
-            header = _without_nulls(CassiniISS._pds3_dict_from_vicar(header_dict))
+            header = _without_nulls(CassiniISS._pds3_dict_from_vicar(header_dict),
+                                    _FILL_KEYWORDS)
 
         merged = {}
         for (key, value) in label.items():
@@ -1272,12 +1300,17 @@ class CassiniISS(oops.Host):
         Returns:
             dict[str, Any]: The row's columns as `_row_items` in _cassini.py gives them
             without the table's masks, with the fill values of `_INDEX_FILL_VALUES` also
-            missing. The clock counts are given three digits after the point.
+            missing, and an angle of `_ZERO_WITHOUT_GEOMETRY` that is 0 missing in a row
+            without PHASE_ANGLE. The clock counts are given three digits after the point.
         """
 
         # The masks are not applied, because the metadata index labels declare real
         # values as null constants (see _INDEX_FILL_VALUES)
         items = _row_items(row_dict, masks=False, fill_values=_INDEX_FILL_VALUES)
+        if 'PHASE_ANGLE' not in items:
+            for key in _ZERO_WITHOUT_GEOMETRY:
+                if items.get(key) == 0:
+                    del items[key]
 
         # The tables drop a count's trailing zeros, which also changes the number of
         # clock ticks it reads as: "1473199010.12" for the label's "1473199010.120"
@@ -1302,11 +1335,11 @@ class CassiniISS(oops.Host):
         is its IMAGE_NUMBER, the whole seconds of the clock at the shutter's close, with
         zero ticks, as the labels give it; the start count is the clock count that the
         Cassini spacecraft clock kernel gives for the time EXPOSURE_DURATION milliseconds
-        earlier. Without an EXPOSURE_DURATION, no start count is given.
+        earlier.
 
         Parameters:
-            dict_ (dict[str, Any]): The metadata, without missing values; modified in
-                place.
+            dict_ (dict[str, Any]): The metadata, without missing values, including
+                EXPOSURE_DURATION; modified in place.
             filepath (FCPath | None): The image file, named in an error.
 
         Returns:
@@ -1324,10 +1357,6 @@ class CassiniISS(oops.Host):
         # The clock kernel names the partition, "1/1294562649.000"; the labels do not
         stop = number + '.000'
         dict_['SPACECRAFT_CLOCK_STOP_COUNT'] = stop
-        if 'EXPOSURE_DURATION' not in dict_:
-            dict_.pop('SPACECRAFT_CLOCK_START_COUNT', None)
-            return dict_
-
         tdb = _tdb_from_sclk(stop, filepath) - dict_['EXPOSURE_DURATION'] / 1000.
         dict_['SPACECRAFT_CLOCK_START_COUNT'] = _sclk_from_tdb(tdb, filepath)
         return dict_
@@ -1484,15 +1513,20 @@ class CassiniISS(oops.Host):
 
         Returns:
             bool | None: True if the label was read from a file whose path contains
-            "COISS", in any case; otherwise None, meaning the host must be inferred from
-            the index rows.
+            "COISS", in any case; False if the path contains "COUVIS" or "COVIMS", or if
+            the label gives an INSTRUMENT_ID that does not start with "ISS"; otherwise
+            None, meaning the host must be inferred from the index rows.
         """
 
-        # The label itself records nothing that identifies the instrument, but the PDS
-        # volume and RMS Node metadata names all start with COISS
-        if label.filepath is not None and 'COISS' in label.filepath.as_posix().upper():
-            return True
-        return None
+        # The ISS index labels record nothing that identifies the instrument, but the PDS
+        # volume and RMS Node metadata names all start with COISS. A UVIS or VIMS index
+        # is turned down from its path or label, so the dispatcher can tell from the label
+        # alone.
+        status = _detect_index_by_path(label, 'COISS')
+        if (status is None
+                and not str(label.get('INSTRUMENT_ID', 'ISS')).strip().startswith('ISS')):
+            return False
+        return status
 
     @staticmethod
     def _detect_in_row(row_dict):

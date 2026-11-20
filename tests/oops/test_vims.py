@@ -15,7 +15,7 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines, write_table
+from conftest import FakeSpice, FakeSpiceDB, claim_more_rows, pds3_lines, write_table
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from pdsparser import Pds3Label
 
@@ -67,25 +67,39 @@ def cube_core(samples: int, bands: int, lines: int) -> np.ndarray:
     return values.reshape(lines, bands, samples).swapaxes(1, 2)
 
 
-def cube_bytes(samples: int, bands: int, lines: int) -> bytes:
-    """A cube with one sample suffix and four band suffixes, as VIMS writes it."""
+def cube_bytes(samples: int, bands: int, lines: int,
+               backplanes: np.ndarray | None = None) -> bytes:
+    """A cube with one sample suffix and four band suffixes, as VIMS writes it.
+
+    Parameters:
+        samples: The number of samples.
+        bands: The number of bands.
+        lines: The number of lines.
+        backplanes: The values of the four band suffixes in (backplane, line, sample)
+            order; zeros if None.
+    """
 
     core = cube_core(samples, bands, lines)
+    if backplanes is None:
+        backplanes = np.zeros((BAND_SUFFIX_ITEMS, lines, samples), dtype='int32')
     chunks = []
     for line in range(lines):
         for band in range(bands):
             chunks.append(core[line, :, band].astype('>i2').tobytes())
             chunks.append(np.zeros(SAMPLE_SUFFIX_ITEMS, dtype='>i4').tobytes())
-        chunks.append(np.zeros(BAND_SUFFIX_ITEMS * (samples + SAMPLE_SUFFIX_ITEMS),
-                               dtype='>i4').tobytes())
+        suffix = np.zeros((BAND_SUFFIX_ITEMS, samples + SAMPLE_SUFFIX_ITEMS), dtype='>i4')
+        suffix[:, :samples] = backplanes[:, line, :]
+        chunks.append(suffix.tobytes())
     return b''.join(chunks)
 
 
 def write_pds3_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 352,
-                    lines: int = 2, **changes: Any) -> pathlib.Path:
+                    lines: int = 2, band_suffix_name: list[str] | None = None,
+                    backplanes: np.ndarray | None = None,
+                    **changes: Any) -> pathlib.Path:
     """Write a detached PDS3 label and its cube; return the label's path."""
 
-    data = cube_bytes(samples, bands, lines)
+    data = cube_bytes(samples, bands, lines, backplanes)
     (directory / 'v0000000001_1.qub').write_bytes(bytes(RECORD_BYTES) + data)
 
     text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
@@ -96,7 +110,8 @@ def write_pds3_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 3
     text += ['OBJECT = SPECTRAL_QUBE', '  AXES = 3', '  AXIS_NAME = (SAMPLE, BAND, LINE)',
              f'  CORE_ITEMS = ({samples}, {bands}, {lines})',
              f'  SUFFIX_ITEMS = ({SAMPLE_SUFFIX_ITEMS}, {BAND_SUFFIX_ITEMS}, 0)']
-    text += pds3_lines({'BAND_SUFFIX_NAME': BAND_SUFFIX_NAME}, indent='  ')
+    text += pds3_lines({'BAND_SUFFIX_NAME': band_suffix_name or BAND_SUFFIX_NAME},
+                       indent='  ')
     text += ['END_OBJECT = SPECTRAL_QUBE', 'END', '']
     path = directory / 'v0000000001_1.lbl'
     path.write_text('\r\n'.join(text), newline='')
@@ -396,7 +411,7 @@ def test_from_index_requires_supplement() -> None:
     with pytest.raises(HostIndexError,
                        match=re.escape('Cassini VIMS needs a supplemental index: '
                                        'INDEX.LBL')):
-        CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+        next(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row]))
 
 
 # The supplement is required, so None is refused rather than taken as "search for it"
@@ -420,7 +435,7 @@ def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
         labels.append(kwargs['label'])
         return []
 
-    monkeypatch.setattr(CassiniVIMS, '_read_index_rows', spy)
+    monkeypatch.setattr(CassiniVIMS, '_index_rows', spy)
     CassiniVIMS.from_index('INDEX.LBL', label=label)
     assert labels == [label]
 
@@ -712,17 +727,17 @@ def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
     (_VIMS_INDEX_KEYWORDS, 'COVIMS_0040'),
     ([], 'COVIMS_0040'),
 ], ids=['from-label', 'from-row'])
-def test_read_index_rows_accepts_vims_index(tmp_path: pathlib.Path, keywords: list[str],
-                                            volume_id: str) -> None:
+def test_index_rows_accepts_vims_index(tmp_path: pathlib.Path, keywords: list[str],
+                                       volume_id: str) -> None:
     path = write_index(tmp_path, keywords, volume_id)
-    rows = CassiniVIMS._read_index_rows(path, supplement=None)
+    rows = CassiniVIMS._index_rows(path, supplement=None)
     assert [row['VOLUME_ID'] for row in rows] == [volume_id]
 
 
-def test_read_index_rows_rejects_other_index(tmp_path: pathlib.Path) -> None:
+def test_index_rows_rejects_other_index(tmp_path: pathlib.Path) -> None:
     path = write_index(tmp_path, [], 'COISS_2001')
     with pytest.raises(WrongHostError, match='not a Cassini VIMS index'):
-        CassiniVIMS._read_index_rows(path, supplement=None)
+        CassiniVIMS._index_rows(path, supplement=None)
 
 ##########################################################################################
 # select
@@ -836,14 +851,23 @@ def test_from_index_builds_each_row_when_reached(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.parametrize(('column', 'value', 'masked'), [
     ('COMPRESSOR_ID', np.int64(-99), True),
-    ('INSTRUMENT_DATA_RATE', np.float64(-999.), False),
+    ('INSTRUMENT_DATA_RATE', np.float64(-999.), True),
     ('TELEMETRY_FORMAT_ID', np.str_('UNK'), False),
-], ids=['masked', 'fill', 'null-text'])
+], ids=['masked', 'masked-999', 'null-text'])
 def test_from_index_leaves_out_missing_values(column: str, value: Any,
                                               masked: bool) -> None:
     row = index_row(**{column: value, column + '_mask': np.bool_(masked)})
     [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
     assert column not in ir.dict
+
+
+def test_from_index_keeps_minus_999_where_the_label_declares_no_null() -> None:
+    """-999 is missing only where the table's label declares it a null constant."""
+
+    row = index_row(SC_SUN_POSITION_VECTOR=np.array([-999., 1., 2.]),
+                    SC_SUN_POSITION_VECTOR_mask=np.array([False, False, False]))
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert ir.dict['SC_SUN_POSITION_VECTOR'] == [-999., 1., 2.]
 
 
 def test_from_index_dict_is_json_without_masks() -> None:
@@ -981,5 +1005,158 @@ def test_from_file_reads_a_comment_that_spans_two_lines(tmp_path: pathlib.Path) 
         b'PACKING_FLAG = "OFF"', b'PACKING_FLAG = OFF/* Unpacked from\r\n    QUB*/'))
     (_, ir) = CassiniVIMS.from_file(path, astrometry=True)
     assert ir.dict['PACKING_FLAG'] == 'OFF'
+
+##########################################################################################
+# Index pairing, label checks, placeholders, and the time backplanes
+##########################################################################################
+
+
+def test_merge_supplement_by_file() -> None:
+    """Some VIMS supplements list the cubes in another order than their index."""
+
+    assert CassiniVIMS.MERGE_SUPPLEMENT_BY_FILE is True
+
+
+@pytest.mark.parametrize(('relpath', 'expected'), [
+    ('COVIMS_0040/index/index.lbl', True),
+    ('COISS_2001_index.lbl', False),
+    ('COUVIS_0040/INDEX/INDEX.LBL', False),
+], ids=['vims', 'iss', 'uvis'])
+def test_detection_in_index_from_the_path(tmp_path: pathlib.Path, relpath: str,
+                                          expected: bool) -> None:
+    path = tmp_path / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('PDS_VERSION_ID = PDS3\r\nEND\r\n', newline='')
+    assert CassiniVIMS._detect_in_index(Pds3Label(path)) is expected
+
+
+def test_from_file_of_another_instruments_parsed_label() -> None:
+    label = Pds3Label(['PDS_VERSION_ID = PDS3',
+                       'INSTRUMENT_HOST_NAME = "CASSINI ORBITER"',
+                       'INSTRUMENT_ID = "ISS"', 'END'])
+    with pytest.raises(WrongHostError, match='not a Cassini VIMS PDS3 label'):
+        CassiniVIMS.from_file(label, astrometry=True)
+
+
+@pytest.mark.parametrize('target_name', ['UNK', 'N/A', 'UNKNOWN', 'NULL', '---', ''])
+def test_placeholder_target_names_no_target(tmp_path: pathlib.Path,
+                                            target_name: str) -> None:
+    pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path, TARGET_NAME=target_name),
+                                 astrometry=True)
+    assert [obs.target for obs in pair] == ['NONE', 'NONE']
+
+
+def test_from_file_keeps_minus_999_where_it_can_be_real(tmp_path: pathlib.Path) -> None:
+    """-999 is missing only in the exposures, temperatures, rate and ratio."""
+
+    path = write_pds3_cube(tmp_path, SC_SUN_POSITION_VECTOR=[-999., 1., 2.])
+    (_, ir) = CassiniVIMS.from_file(path, astrometry=True)
+    assert ir.dict['SC_SUN_POSITION_VECTOR'] == [-999., 1., 2.]
+
+
+def test_from_file_marks_a_fill_exposure_none(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, POWER_STATE_FLAG=['ON', 'OFF'],
+                           EXPOSURE_DURATION=[100., -999.])
+    (_, ir) = CassiniVIMS.from_file(path, astrometry=True)
+    assert ir.dict['EXPOSURE_DURATION'] == [100., None]
+
+
+def test_from_file_without_interframe_delay_is_a_format_error(
+        tmp_path: pathlib.Path) -> None:
+    """A cube of one-line frames needs the delay between them."""
+
+    path = write_pds3_cube(tmp_path, SWATH_LENGTH=1)
+    label = path.read_bytes()
+    line = b'INTERFRAME_DELAY_DURATION = 520.0\r\n'
+    assert line in label
+    path.write_bytes(label.replace(line, b''))
+    with pytest.raises(HostFormatError, match='INTERFRAME_DELAY_DURATION is missing'):
+        CassiniVIMS.from_file(path, astrometry=True)
+
+
+def test_from_index_select_true_is_a_type_error() -> None:
+    with pytest.raises(oops.OopsTypeError, match='invalid select: True'):
+        CassiniVIMS.from_index('INDEX.LBL', row_dicts=[], select=True)
+
+
+def test_from_index_probes_pointing_at_the_cadence_midtime(
+        spice_check_times: list[float]) -> None:
+    """With a cadence override, a channel's pointing is probed at the override's
+    midtime."""
+
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    VIS_POWER_STATE_FLAG='OFF')
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    cadence = ir.cadence.time_shift(1000.)
+    spice_check_times.clear()
+    next(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row], cadence=cadence))
+    assert spice_check_times == [cadence.midtime]
+
+
+def write_vims_tables(directory: pathlib.Path) -> pathlib.Path:
+    """Write a two-row VIMS index and its supplement; return the index label's path."""
+
+    rows = [index_row(), index_row(FILE_NAME='v0000000002_1.qub',
+                                   OBSERVATION_ID='VIMS_000SA_TEST002_PRIME')]
+    columns = {name: [row[name] for row in rows] for name in rows[0]
+               if name != 'FILE_SPECIFICATION_NAME'}
+    columns['PATH_NAME'] = ['/data/2005001T000000'] * 2
+    index = write_table(directory, 'COVIMS_0001_index', columns)
+    write_table(directory, 'COVIMS_0001_supplemental_index', {
+        'VOLUME_ID'              : ['COVIMS_0001'] * 2,
+        'FILE_SPECIFICATION_NAME': ['data/2005001T000000/v0000000001_1.lbl',
+                                    'data/2005001T000000/v0000000002_1.lbl'],
+    })
+    return index
+
+
+def test_from_index_yields_the_rows_before_one_the_index_lacks(
+        tmp_path: pathlib.Path) -> None:
+    """Rows are read as the iteration proceeds: an index shorter than its label says
+    yields every row it holds before the error."""
+
+    index = write_vims_tables(tmp_path)
+    claim_more_rows(index, 2, 30)
+    pairs = CassiniVIMS.from_index(index)
+    assert [next(pairs)[1].observation_id, next(pairs)[1].observation_id] == [
+        'VIMS_000SA_TEST001_PRIME', 'VIMS_000SA_TEST002_PRIME']
+    with pytest.raises(HostIndexError, match='invalid index table'):
+        next(pairs)
+
+
+# The band suffixes of a cube with time backplanes, and the clock seconds of its first
+# sample
+_TIMED_SUFFIX_NAME = ['SLICE_TIME_SECONDS', 'SLICE_TIME_TICKS', 'X_SCAN_DRIVE_CURRENT',
+                      'Z_SCAN_DRIVE_CURRENT']
+_CLOCK_SECONDS = 1294638283
+
+
+def write_timed_cube(directory: pathlib.Path) -> pathlib.Path:
+    """Write a 4x2 cube whose time backplanes put each sample a second after the last,
+    half a second after a whole clock second."""
+
+    backplanes = np.zeros((BAND_SUFFIX_ITEMS, 2, 4), dtype='int32')
+    backplanes[0] = _CLOCK_SECONDS + np.arange(8).reshape(2, 4)
+    backplanes[1] = 7980        # ticks of 1/15959 s
+    return write_pds3_cube(directory, band_suffix_name=_TIMED_SUFFIX_NAME,
+                           backplanes=backplanes)
+
+
+def test_from_file_time_from_the_backplanes(tmp_path: pathlib.Path) -> None:
+    (_, ir) = CassiniVIMS.from_file(write_timed_cube(tmp_path))
+    assert ir.time_from_sclk is True
+
+
+def test_backplane_clock_fraction_is_in_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The clock kernel reads the digits after the point as 1/256 s ticks, so a
+    backplane's decimal fraction of a second is added in seconds."""
+
+    def scs2e(code: int, sclk: str) -> float:
+        (seconds, _, ticks) = sclk.partition('.')
+        return float(seconds) + int(ticks or '0') / 256.
+
+    monkeypatch.setattr(cspyce, 'scs2e', scs2e)
+    tdb = CassiniVIMS._tdb_from_clock_seconds(1640775127.5, FCPath('v1.qub'))
+    assert tdb == pytest.approx(1640775127.5, abs=1.e-6)
 
 ##########################################################################################

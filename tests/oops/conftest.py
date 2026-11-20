@@ -94,6 +94,23 @@ def write_table(directory: pathlib.Path, stem: str,
     return path
 
 
+def claim_more_rows(label: pathlib.Path, rows: int, claimed: int) -> None:
+    """Rewrite a table label to say that its table holds more rows than it does.
+
+    Parameters:
+        label: The label's path.
+        rows: The number of rows that the label gives now.
+        claimed: The number of rows that it is to give.
+    """
+
+    text = label.read_bytes()
+    for keyword in (b'ROWS', b'FILE_RECORDS'):
+        old = keyword + b' = %d\r\n' % rows
+        assert old in text
+        text = text.replace(old, keyword + b' = %d\r\n' % claimed)
+    label.write_bytes(text)
+
+
 def iso_from_tdb(tdb: float) -> str:
     """The ISO date-time, to the millisecond, of a time in seconds TDB."""
 
@@ -259,8 +276,9 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     Kernel-reading calls are replaced: time conversion uses julian, a SpicePath becomes
     a FixedPath at the origin, and a SpiceFrame becomes an identity Cmatrix on J2000.
     Any attempt to furnish a kernel through cspyce fails the test. The Path and Frame
-    registries are copied, and the Cmatrix wayframes start empty, so that frames
-    registered by one test never reach another.
+    registries, caches, and waypoint and wayframe pools are copied, and the Cmatrix
+    wayframes start empty, so that paths and frames made by one test never reach
+    another.
     """
 
     fake = FakeSpice()
@@ -304,6 +322,19 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     monkeypatch.setattr(oops.Path, '_PATH_CACHE', dict(oops.Path._PATH_CACHE))
     monkeypatch.setattr(oops.Frame, '_FRAME_REGISTRY', dict(oops.Frame._FRAME_REGISTRY))
     monkeypatch.setattr(oops.Frame, '_FRAME_CACHE', dict(oops.Frame._FRAME_CACHE))
+
+    # A path or frame defined as an earlier one was shares its waypoint or wayframe, and
+    # so its ID, so each class's pool is copied too; otherwise a fixed path made by one
+    # test could become the path of the next, every fake SPICE path being fixed at the
+    # origin
+    for path_class in oops.Path._PATH_SUBCLASSES:
+        if '_WAYPOINTS' in vars(path_class):
+            monkeypatch.setattr(path_class, '_WAYPOINTS', dict(path_class._WAYPOINTS))
+    for frame_class in oops.Frame._FRAME_SUBCLASSES:
+        for pool in ('_WAYFRAMES', '_FOR_NAME', '_FRAME_LOOKUP'):
+            if pool in vars(frame_class):
+                monkeypatch.setattr(frame_class, pool, dict(getattr(frame_class, pool)))
+
     # Every fake SPICE frame is the same Cmatrix, so without a pool of its own a test's
     # frame would share the wayframe, and the evaluation, of one an earlier test made
     monkeypatch.setattr(oops.frame.Cmatrix, '_WAYFRAMES', {})
@@ -353,5 +384,20 @@ def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
 
     CassiniISS.initialize()
     return fake_spicedb
+
+
+@pytest.fixture
+def spice_check_times(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The times at which the hosts check the SPICE pointing, recorded as they check."""
+
+    times: list[float] = []
+    check = oops.Host._check_spice_frame
+
+    def spy(frame: Any, time: Any, **kwargs: Any) -> Any:
+        times.append(float(time))
+        return check(frame, time, **kwargs)
+
+    monkeypatch.setattr(oops.Host, '_check_spice_frame', staticmethod(spy))
+    return times
 
 ##########################################################################################

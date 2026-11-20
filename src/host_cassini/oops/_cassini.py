@@ -16,7 +16,6 @@ from filecache import FCPath
 
 import oops
 from oops.body import Body
-from oops.host import HostIndexError
 
 
 # There are two C-matrix conventions here, related by _CMATRIX_ROTATION (a 180-degree spin
@@ -522,15 +521,13 @@ def _pds3_options_with_defaults(options):
             modified.
 
     Returns:
-        dict[str, Any]: A copy of `options` whose method is "fast" unless it names
-        another, and whose `sources` is False: the label text that the parser can keep for
-        each keyword is never wanted, in `label_dict` or anywhere else.
+        dict[str, Any]: A copy of `options` with the defaults of oops.Host, whose method
+        is "fast" unless it names another, but whose `sources` is always False: the label
+        text that the parser can keep for each keyword is never wanted, in `label_dict` or
+        anywhere else.
     """
 
-    options = {} if options is None else options.copy()
-    options.setdefault('method', 'fast')
-    options['sources'] = False
-    return options
+    return oops.Host._pds3_options_with_defaults(options) | {'sources': False}
 
 
 # The order in which the PDS3 label parsers are tried, from the one requested onward
@@ -544,7 +541,8 @@ def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=())
     or cannot convert one of its values, by each later method in the order "fast",
     "strict", "loose". A method that is not one of the three is tried alone. The repairs
     in `pds3_options`, a list of (pattern, replacement) pairs or a single pair, and then
-    `repairs`, are applied in every attempt. Parsed content is not parsed again.
+    `repairs`, are applied in every attempt. Parsed content is not parsed again, but must
+    describe a product of this host.
 
     Parameters:
         host (type): The host class, such as CassiniVIMS.
@@ -564,9 +562,13 @@ def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=())
         WrongHostError: If the file or the parsed content is not of this host.
     """
 
+    # Parsed content is checked as its file would be, so that another instrument's label
+    # raises WrongHostError here rather than a KeyError later
     if not isinstance(fileinfo, (str, pathlib.Path, FCPath)):
-        return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
-                                   pds3_options=pds3_options)
+        if not host._detect_in_pds3(fileinfo):
+            raise oops.Host._no_host_error([host], 'PDS3 label',
+                                           getattr(fileinfo, 'filepath', None))
+        return fileinfo
 
     method = pds3_options['method']
     if method in _PARSER_METHODS:
@@ -593,41 +595,19 @@ def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=())
     raise oops.host.PdsHostError(f'{error} in {fileinfo}') from error
 
 
-def _refuse_volume_index(index_path, host, example):
-    """Raise HostIndexError if an index is a volume's own index.
-
-    The hosts read the Ring-Moon Systems Node metadata indexes, which carry the
-    supplemental columns. A volume's own index, in its "index" directory (in either case),
-    is not supported.
-
-    Parameters:
-        index_path (str | pathlib.Path | FCPath): The path to the index file or its label.
-        host (str): The name of the host, such as "Cassini ISS", for the message.
-        example (str): The name of a metadata index of the instrument, for the message.
-
-    Raises:
-        HostIndexError: If the index is in a directory named "index".
-    """
-
-    if FCPath(index_path).parent.name.lower() == 'index':
-        raise HostIndexError(f'{host} reads the Ring-Moon Systems Node metadata index, '
-                             f'such as "{example}", not a volume\'s own index: '
-                             f'{index_path}')
-
-
-def _index_file_path(index_path, row_dict):
+def _index_file_path(volumes, row_dict):
     """The path to the file that one row of an index describes.
 
     The row's FILE_SPECIFICATION_NAME is relative to the root directory of its volume,
-    the directory named by its VOLUME_ID. An index in the "metadata" tree of the
-    holdings, such as metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may list files
-    of any volume of its series, so the volume is the row's VOLUME_ID in the "volumes"
-    tree beside it: volumes/COISS_2xxx/<VOLUME_ID>. For an index anywhere else, the
-    volume is the directory named by the row's VOLUME_ID inside the index's own
-    directory.
+    the directory named by its VOLUME_ID, inside the directory that holds the volumes.
+    An index in the "metadata" tree of the holdings, such as
+    metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may list files of any volume of
+    its series, so for it that directory is the series in the "volumes" tree beside it,
+    volumes/COISS_2xxx; for an index anywhere else it is the index's own directory.
+    ``oops.Host._volumes_directory`` gives it.
 
     Parameters:
-        index_path (str | pathlib.Path | FCPath): The path to the index file or its label.
+        volumes (FCPath): The directory that holds the volume directories.
         row_dict (dict[str, Any]): The row, which gives VOLUME_ID and
             FILE_SPECIFICATION_NAME.
 
@@ -635,14 +615,40 @@ def _index_file_path(index_path, row_dict):
         FCPath: The path or URL of the file.
     """
 
-    directory = FCPath(index_path).parent
     volume_id = str(row_dict['VOLUME_ID']).strip()
-    if directory.parent.parent.name.lower() == 'metadata':
-        series = directory.parent
-        root = series.parent.parent / 'volumes' / series.name / volume_id
-    else:
-        root = directory / volume_id
-    return root / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
+    return volumes / volume_id / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
+
+
+# The prefix of the volume names of each Cassini instrument that has a host here
+_VOLUME_PREFIXES = ('COISS', 'COUVIS', 'COVIMS')
+
+
+def _detect_index_by_path(label, prefix):
+    """Whether the path of an index label shows that it belongs to one instrument.
+
+    The volumes of the Cassini instruments are named COISS_nnnn, COUVIS_nnnn, and
+    COVIMS_nnnn, and the indexes, the volume's own and the metadata index alike, are
+    stored under those names.
+
+    Parameters:
+        label (Pds3Label | dict[str, Any]): The parsed label of an index; a dictionary
+            has no path.
+        prefix (str): The volume prefix of the instrument, such as "COUVIS".
+
+    Returns:
+        bool | None: True if the label's path contains `prefix`, in any case; False if it
+        contains the prefix of another Cassini instrument; otherwise None.
+    """
+
+    filepath = getattr(label, 'filepath', None)
+    if filepath is None:
+        return None
+    text = FCPath(filepath).as_posix().upper()
+    if prefix in text:
+        return True
+    if any(other in text for other in _VOLUME_PREFIXES if other != prefix):
+        return False
+    return None
 
 
 def _known_path(filepath):
@@ -710,29 +716,6 @@ def _sclk_from_tdb(tdb, filepath):
     return count.rpartition('/')[2]
 
 
-def _check_select(select, names=None):
-    """Raise the error that `select` would raise for its type, before anything is read.
-
-    Parameters:
-        select (Any): The `select` argument of a ``from_file`` or ``from_index``.
-        names (dict[str, int], optional): The names that `select` may use, upper case.
-
-    Raises:
-        OopsTypeError: If `select`, or an item of a tuple, is not an int, a slice, or a
-            string.
-        OopsValueError: If a string in `select` is not one of `names`.
-    """
-
-    if select is None:
-        return
-    for item in (select if isinstance(select, tuple) else (select,)):
-        if isinstance(item, str):
-            if names is None or item.upper() not in names:
-                raise oops.OopsValueError(f'unrecognized select name: {item!r}')
-        elif isinstance(item, bool) or not isinstance(item, (int, slice)):
-            raise oops.OopsTypeError(f'invalid select: {select!r}')
-
-
 def _common_subfields(meta, *, label_dict=None, time_from_sclk=False):
     """The subfields of a UVIS or VIMS observation that come from its metadata.
 
@@ -773,26 +756,23 @@ def _common_subfields(meta, *, label_dict=None, time_from_sclk=False):
 _NULL_STRINGS = {'UNK', 'UNKNOWN', 'N/A', 'NULL', '', '---'}
 
 # The number that the Cassini labels and indexes write for a value that was not
-# determined, which counts as missing like a null constant. In ISS products: the back
-# optics temperature of a camera with no back sensor, the COMPRESSION_RATIO of the early
-# cruise headers, and the temperatures of products whose headers were filled with
-# predictions, such as the DETECTOR_TEMPERATURE of -999 degrees C, below absolute zero,
-# in N1640662528_3_CALIB.LBL of calibrated/COISS_2059, whose DESCRIPTION says "Predicted
-# values used to populate header" (#10). The UVIS and VIMS index labels declare it the
-# null constant of their exposure, temperature and geometry columns.
+# determined. It is missing only in the keywords and columns that the host lists, where
+# it is a declared null constant or cannot be a real value, such as a temperature, a data
+# rate or a compression ratio; elsewhere, as in a position vector, -999 can be real.
 _FILL_VALUE = -999.
 
 
-def _is_null(value):
+def _is_null(value, fill=False):
     """True if a value states nothing.
 
     Parameters:
         value (Any): The value of a keyword or column.
+        fill (bool, optional): True if -999 is a fill value in this keyword or column.
 
     Returns:
         bool: True if `value` is None; one of "UNK", "UNKNOWN", "N/A", "NULL", "---" or
-        the empty string, in any case and with any surrounding blanks; the fill value
-        -999; or a non-empty list, tuple or set of nothing but these.
+        the empty string, in any case and with any surrounding blanks; -999 if `fill` is
+        True; or a non-empty list, tuple or set of nothing but these.
     """
 
     if value is None:
@@ -802,17 +782,19 @@ def _is_null(value):
     if isinstance(value, bool):
         return False
     if isinstance(value, (int, float)):
-        return value == _FILL_VALUE
+        return fill and value == _FILL_VALUE
     if isinstance(value, (list, tuple, set, frozenset)) and len(value) > 0:
-        return all(_is_null(item) for item in value)
+        return all(_is_null(item, fill) for item in value)
     return False
 
 
-def _without_nulls(dict_):
+def _without_nulls(dict_, fill_keys=frozenset()):
     """A copy of a dictionary without its missing values.
 
     Parameters:
         dict_ (dict[str, Any]): The keywords of a label or the columns of an index row.
+        fill_keys (collections.abc.Container[str], optional): The keywords in which -999
+            is a fill value, at any depth.
 
     Returns:
         dict[str, Any]: The keywords whose values are not missing in the sense of
@@ -825,12 +807,13 @@ def _without_nulls(dict_):
 
     result = {}
     for (key, value) in dict_.items():
-        if _is_null(value):
+        fill = key in fill_keys
+        if _is_null(value, fill):
             continue
         if isinstance(value, dict):
-            value = _without_nulls(value)
+            value = _without_nulls(value, fill_keys)
         elif isinstance(value, list):
-            value = [None if _is_null(item) else item for item in value]
+            value = [None if _is_null(item, fill) else item for item in value]
         result[key] = value
     return result
 
@@ -904,8 +887,8 @@ def _label_dict(label_dict):
         dict[str, Any]: The label's content.
     """
 
-    # Consumers write the metadata out as JSON, which takes no datetime or set (#16);
-    # the derived keys are dropped only after the times and sets are read from them
+    # Consumers write the metadata out as JSON, which cannot hold a datetime or a set
+    # (#16); the derived keys are dropped only after the times and sets are read from them
     return _items(_json_form(label_dict))
 
 

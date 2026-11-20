@@ -13,7 +13,7 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines, write_table
+from conftest import FakeSpice, FakeSpiceDB, claim_more_rows, pds3_lines, write_table
 from pdsparser import Pds3Label
 
 import host_cassini.oops.uvis as uvis
@@ -383,10 +383,11 @@ def test_target_from_label(tmp_path: pathlib.Path, target_name: str, target: str
     assert obs.lightsource == 'SUN'
 
 
-def test_null_target_names_no_target(tmp_path: pathlib.Path) -> None:
-    """A null TARGET_NAME tracks no target and gives no label_target."""
+@pytest.mark.parametrize('target_name', ['N/A', 'UNK', 'UNKNOWN', 'NULL', '---', ''])
+def test_null_target_names_no_target(tmp_path: pathlib.Path, target_name: str) -> None:
+    """A placeholder TARGET_NAME gives the target NONE and leaves out label_target."""
 
-    obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME='N/A'))
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME=target_name))
     assert obs.target == 'NONE'
     assert 'label_target' not in obs.subfields
 
@@ -481,7 +482,9 @@ _INDEX_LABEL = ['PDS_VERSION_ID = PDS3', 'OBJECT = INDEX_TABLE',
     ('COUVIS_0999_index.lbl', True),
     ('couvis_0001/index/index.lbl', True),
     ('INDEX/INDEX.LBL', None),
-], ids=['couvis-directory', 'couvis-file', 'lowercase', 'no-couvis'])
+    ('COISS_2001_index.lbl', False),
+    ('COVIMS_0040/index/index.lbl', False),
+], ids=['couvis-directory', 'couvis-file', 'lowercase', 'no-couvis', 'iss', 'vims'])
 def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
                             expected: bool | None) -> None:
     path = tmp_path / relpath
@@ -492,6 +495,34 @@ def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
 
 def test_detection_in_index_without_a_path() -> None:
     assert CassiniUVIS._detect_in_index(Pds3Label(_INDEX_LABEL[:-1])) is None
+
+
+def test_detection_in_index_of_another_instrument() -> None:
+    label = Pds3Label(['PDS_VERSION_ID = PDS3', 'INSTRUMENT_ID = "VIMS"', 'END'])
+    assert CassiniUVIS._detect_in_index(label) is False
+
+
+def test_volumes_own_index_is_refused_alike_through_oops_host(
+        tmp_path: pathlib.Path) -> None:
+    """oops.Host.from_index finds UVIS from the path of a volume's own index, without
+    reading a row, so the refusal is the one the class gives."""
+
+    path = tmp_path / 'COUVIS_0040/INDEX/INDEX.LBL'
+    path.parent.mkdir(parents=True)
+    path.write_text('\r\n'.join(_INDEX_LABEL), newline='')
+    messages = []
+    for host in (CassiniUVIS, oops.Host):
+        with pytest.raises(oops.host.HostIndexError,
+                           match="Cassini UVIS reads the Ring-Moon Systems Node") as info:
+            host.from_index(path)
+        messages.append(str(info.value))
+    assert messages[0] == messages[1]
+
+
+def test_merge_supplement_by_file() -> None:
+    """Most UVIS supplements list the products in another order than their index."""
+
+    assert CassiniUVIS.MERGE_SUPPLEMENT_BY_FILE is True
 
 
 @pytest.mark.parametrize(('data_set_id', 'expected'), [
@@ -572,6 +603,13 @@ def test_from_index_hdac_interval_is_its_dwell_time() -> None:
     assert obs.time[1] - obs.time[0] == pytest.approx(5 * 4.)
 
 
+def test_from_index_row_without_a_positive_interval_is_a_format_error() -> None:
+    row = qube_row(PRODUCT_ID='HSP2005_001_00_00', DATA_OBJECT_TYPE='TIME_SERIES',
+                   INTEGRATION_DURATION=0., LINE_SAMPLES=5)
+    with pytest.raises(oops.host.HostFormatError, match='that is not positive: '):
+        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
+
+
 def test_from_index_row_without_a_column_is_a_format_error() -> None:
     row = qube_row()
     del row['LINE_SAMPLES']
@@ -580,12 +618,12 @@ def test_from_index_row_without_a_column_is_a_format_error() -> None:
         next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
 
 
-def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) -> None:
-    """The index names each product by FILE_NAME and the supplement by VOLUME_ID and
-    FILE_SPECIFICATION_NAME."""
+def write_tables(directory: pathlib.Path) -> pathlib.Path:
+    """Write a two-row UVIS index and a supplement that lists its products in the other
+    order; return the index label's path."""
 
     specs = [_UVIS_SPEC, _UVIS_SPEC.replace('00_00', '00_10')]
-    index = write_table(tmp_path, 'COUVIS_0001_index', {
+    index = write_table(directory, 'COUVIS_0001_index', {
         'FILE_NAME'           : ['/COUVIS_0001/' + spec for spec in specs],
         'START_TIME'          : [START_TIME] * 2,
         'STOP_TIME'           : [STOP_TIME] * 2,
@@ -593,7 +631,7 @@ def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) 
         'INTEGRATION_DURATION': [2.] * 2,
         'SLIT_STATE'          : ['HIGH_RESOLUTION'] * 2,
     })
-    write_table(tmp_path, 'COUVIS_0001_supplemental_index', {
+    write_table(directory, 'COUVIS_0001_supplemental_index', {
         'VOLUME_ID'                 : ['COUVIS_0001'] * 2,
         'FILE_SPECIFICATION_NAME'   : specs[::-1],
         'PRODUCT_ID'                : ['FUV2005_001_00_10', 'FUV2005_001_00_00'],
@@ -607,9 +645,38 @@ def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) 
         'LINE_BINNING_FACTOR'       : [64] * 2,
         'LINE_SAMPLES'              : [4, 3],
     })
-    snapshots = CassiniUVIS.from_index(index)
+    return index
+
+
+def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) -> None:
+    """The index names each product by FILE_NAME and the supplement by VOLUME_ID and
+    FILE_SPECIFICATION_NAME."""
+
+    snapshots = CassiniUVIS.from_index(write_tables(tmp_path))
     assert [(obs.dict['PRODUCT_ID'], obs.samples) for obs in snapshots] == [
         ('FUV2005_001_00_00', 3), ('FUV2005_001_00_10', 4)]
+
+
+def test_from_index_yields_the_rows_before_one_the_index_lacks(
+        tmp_path: pathlib.Path) -> None:
+    """Rows are read as the iteration proceeds: an index shorter than its label says
+    yields every row it holds before the error."""
+
+    index = write_tables(tmp_path)
+    claim_more_rows(index, 2, 30)
+    snapshots = CassiniUVIS.from_index(index)
+    assert [next(snapshots).dict['PRODUCT_ID'], next(snapshots).dict['PRODUCT_ID']] == [
+        'FUV2005_001_00_00', 'FUV2005_001_00_10']
+    with pytest.raises(oops.host.HostIndexError, match='invalid index table'):
+        next(snapshots)
+
+
+def test_from_index_row_without_the_supplement_raises_at_the_row() -> None:
+    row = qube_row()
+    del row['FILE_SPECIFICATION_NAME']
+    with pytest.raises(oops.host.HostIndexError,
+                       match=r'Cassini UVIS needs a supplemental index: INDEX\.LBL'):
+        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
 
 
 # The supplement is required, so None is refused rather than taken as "search for it"
@@ -633,7 +700,7 @@ def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
         labels.append(kwargs['label'])
         return []
 
-    monkeypatch.setattr(CassiniUVIS, '_read_index_rows', spy)
+    monkeypatch.setattr(CassiniUVIS, '_index_rows', spy)
     CassiniUVIS.from_index('INDEX.LBL', label=label)
     assert labels == [label]
 
@@ -709,14 +776,22 @@ def test_from_index_builds_each_row_when_reached(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.parametrize(('column', 'value', 'masked'), [
     ('SUB_SOLAR_LATITUDE', np.float64(-99.), True),
-    ('CENTRAL_BODY_DISTANCE', np.float64(-999.), False),
+    ('CENTRAL_BODY_DISTANCE', np.float64(-999.), True),
     ('TARGET_NAME', np.str_('UNK'), False),
-], ids=['masked', 'fill', 'null-text'])
+], ids=['masked', 'masked-999', 'null-text'])
 def test_from_index_leaves_out_missing_values(column: str, value: Any,
                                               masked: bool) -> None:
     row = qube_row(**{column: value, column + '_mask': np.bool_(masked)})
     [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row])
     assert column not in obs.dict
+
+
+def test_from_index_keeps_minus_999_where_the_label_declares_no_null() -> None:
+    """-999 is missing only where the table's label declares it a null constant."""
+
+    row = qube_row(ODC_ID=np.int64(-999), ODC_ID_mask=np.bool_(False))
+    [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row])
+    assert obs.dict['ODC_ID'] == -999
 
 
 def test_from_index_dict_is_json_without_masks() -> None:
@@ -803,15 +878,81 @@ def test_from_file_parsed_label_without_a_path_cannot_be_read_in_full(
         CassiniUVIS.from_file(label)
 
 
-def test_from_file_falls_back_to_the_strict_parser(tmp_path: pathlib.Path) -> None:
-    """A label that the fast parser rejects is read by the strict one."""
+def append_to_label(path: pathlib.Path, *lines: str) -> None:
+    """Add lines to the end of a label written by write_label, before its END."""
 
-    path = write_qube(tmp_path)
-    next_line_value = b'DESCRIPTION = \r\n    "Extended header missing."\r\nEND\r\n'
     label = path.read_bytes()
     assert label.endswith(b'\r\nEND\r\n')
-    path.write_bytes(label.replace(b'\r\nEND\r\n', b'\r\n' + next_line_value))
+    extra = ''.join(line + '\r\n' for line in lines).encode('ascii')
+    path.write_bytes(label[:-len(b'END\r\n')] + extra + b'END\r\n')
+
+
+def test_from_file_falls_back_after_a_value_error(tmp_path: pathlib.Path) -> None:
+    """A value that the fast parser cannot convert, day 366 of a year of 365 days, is
+    read by the strict parser."""
+
+    path = write_qube(tmp_path)
+    append_to_label(path, 'PRODUCT_CREATION_TIME = 2005-366T00:00:00')
     obs = CassiniUVIS.from_file(path, astrometry=True)
-    assert obs.dict['DESCRIPTION'] == 'Extended header missing.'
+    assert 'PRODUCT_CREATION_TIME' in obs.label_dict
+
+
+def test_from_file_falls_back_to_a_later_parser(tmp_path: pathlib.Path) -> None:
+    """A label that the requested parser rejects, an unquoted value with a slash for the
+    strict parser, is read by a later one."""
+
+    path = write_qube(tmp_path)
+    append_to_label(path, 'PROCESSING_NOTE = A/B')
+    obs = CassiniUVIS.from_file(path, astrometry=True, pds3_options={'method': 'strict'})
+    assert obs.dict['PROCESSING_NOTE'] == 'A/B'
+
+
+def test_from_file_applies_a_single_repair(tmp_path: pathlib.Path) -> None:
+    """A single (pattern, replacement) pair is a repair, as a list of pairs is."""
+
+    path = write_qube(tmp_path)
+    append_to_label(path, 'DESCRIPTION = "Extended header missing."')
+    obs = CassiniUVIS.from_file(path, astrometry=True,
+                                pds3_options={'repairs': ('Extended', 'Repaired')})
+    assert obs.dict['DESCRIPTION'] == 'Repaired header missing.'
+
+
+def test_from_file_of_another_instruments_parsed_label() -> None:
+    label = Pds3Label(['PDS_VERSION_ID = PDS3',
+                       'INSTRUMENT_HOST_NAME = "CASSINI ORBITER"',
+                       'INSTRUMENT_ID = "ISS"', 'END'])
+    with pytest.raises(oops.host.WrongHostError, match='not a Cassini UVIS PDS3 label'):
+        CassiniUVIS.from_file(label, astrometry=True)
+
+
+def test_from_file_leaves_out_a_null_inside_an_object(tmp_path: pathlib.Path) -> None:
+    window = {'UL_CORNER_LINE': 0, 'LR_CORNER_LINE': 63, 'LINE_BIN': 64,
+              'UL_CORNER_BAND': 0, 'LR_CORNER_BAND': 7, 'BAND_BIN': 1,
+              'CORE_VALID_MINIMUM': 'N/A'}
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, window=window), astrometry=True)
+    assert 'CORE_VALID_MINIMUM' not in obs.dict['QUBE']
+
+
+@pytest.mark.parametrize('key', ['START_TIME', 'STOP_TIME'])
+def test_from_index_row_without_a_time_is_a_format_error(key: str) -> None:
+    row = qube_row()
+    del row[key]
+    with pytest.raises(oops.host.HostFormatError, match=f'{key} is missing from '):
+        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
+
+
+def test_from_index_select_true_is_a_type_error() -> None:
+    with pytest.raises(oops.OopsTypeError, match='invalid select: True'):
+        CassiniUVIS.from_index('INDEX.LBL', row_dicts=[], select=True)
+
+
+def test_from_index_probes_pointing_at_the_cadence_midtime(
+        spice_check_times: list[float]) -> None:
+    """With a cadence override, a row's pointing is probed at the override's midtime."""
+
+    [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()])
+    cadence = obs.cadence.time_shift(1000.)
+    next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()], cadence=cadence))
+    assert spice_check_times[-1] == cadence.midtime
 
 ##########################################################################################
