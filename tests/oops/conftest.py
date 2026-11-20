@@ -90,7 +90,7 @@ def write_table(directory: pathlib.Path, stem: str,
         start += width + 1
     label += ['END_OBJECT = INDEX_TABLE', 'END', '']
     path = directory / f'{stem}.lbl'
-    path.write_text('\r\n'.join(label))
+    path.write_text('\r\n'.join(label), newline='')
     return path
 
 

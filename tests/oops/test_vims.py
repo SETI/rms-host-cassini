@@ -99,7 +99,7 @@ def write_pds3_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 3
     text += pds3_lines({'BAND_SUFFIX_NAME': BAND_SUFFIX_NAME}, indent='  ')
     text += ['END_OBJECT = SPECTRAL_QUBE', 'END', '']
     path = directory / 'v0000000001_1.lbl'
-    path.write_text('\r\n'.join(text))
+    path.write_text('\r\n'.join(text), newline='')
     return path
 
 

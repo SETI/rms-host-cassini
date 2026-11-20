@@ -77,7 +77,7 @@ def write_label(directory: pathlib.Path, name: str, keywords: dict[str, Any],
             'FILE_RECORDS = 1']
     text += pds3_lines(keywords) + obj + ['END', '']
     path = directory / (name + '.LBL')
-    path.write_text('\r\n'.join(text))
+    path.write_text('\r\n'.join(text), newline='')
     return path
 
 
@@ -486,7 +486,7 @@ def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
                             expected: bool | None) -> None:
     path = tmp_path / relpath
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('\r\n'.join(_INDEX_LABEL))
+    path.write_text('\r\n'.join(_INDEX_LABEL), newline='')
     assert CassiniUVIS._detect_in_index(Pds3Label(path)) is expected
 
 
@@ -808,7 +808,9 @@ def test_from_file_falls_back_to_the_strict_parser(tmp_path: pathlib.Path) -> No
 
     path = write_qube(tmp_path)
     next_line_value = b'DESCRIPTION = \r\n    "Extended header missing."\r\nEND\r\n'
-    path.write_bytes(path.read_bytes().replace(b'\r\nEND\r\n', b'\r\n' + next_line_value))
+    label = path.read_bytes()
+    assert label.endswith(b'\r\nEND\r\n')
+    path.write_bytes(label.replace(b'\r\nEND\r\n', b'\r\n' + next_line_value))
     obs = CassiniUVIS.from_file(path, astrometry=True)
     assert obs.dict['DESCRIPTION'] == 'Extended header missing.'
 

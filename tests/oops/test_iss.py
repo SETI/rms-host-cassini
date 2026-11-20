@@ -191,7 +191,7 @@ def test_detection_in_index(tmp_path: pathlib.Path, relpath: str,
                             expected: bool | None) -> None:
     path = tmp_path / relpath
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('\r\n'.join(_INDEX_LABEL))
+    path.write_text('\r\n'.join(_INDEX_LABEL), newline='')
     assert CassiniISS._detect_in_index(Pds3Label(path)) is expected
 
 
@@ -767,7 +767,7 @@ def test_from_file_rejects_label_naming_no_image_file(tmp_path: pathlib.Path) ->
     path = write_pds3_image(tmp_path)
     lines = ['^IMAGE = 2' if line.startswith('^IMAGE') else line
              for line in path.read_text().splitlines()]
-    path.write_text('\r\n'.join(lines))
+    path.write_text('\r\n'.join(lines), newline='')
     with pytest.raises(oops.host.PdsHostError, match=r'\^IMAGE names no image file in '):
         CassiniISS.from_file(path, astrometry=True)
 
@@ -1646,7 +1646,7 @@ def write_index(directory: pathlib.Path) -> pathlib.Path:
         start += field_width + 1
     text += ['END_OBJECT = IMAGE_INDEX_TABLE', 'END', '']
     path = directory / 'INDEX.LBL'
-    path.write_text('\r\n'.join(text))
+    path.write_text('\r\n'.join(text), newline='')
     return path
 
 
