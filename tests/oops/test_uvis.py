@@ -425,6 +425,15 @@ def test_tracker_follows_label_target(tmp_path: pathlib.Path) -> None:
     assert type(oops.Frame.as_primary_frame(obs.frame)) is oops.frame.TrackerFrame
 
 
+@pytest.mark.usefixtures('saturn_path')
+def test_from_file_checks_pointing_where_a_tracker_evaluates_it(
+        tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
+    """A tracker evaluates the frame once, at the time it selects."""
+
+    obs = CassiniUVIS.from_file(write_qube(tmp_path), tracker='start')
+    assert spice_check_times == [pytest.approx(obs.time[0], abs=1.e-3)]
+
+
 _TWO_WINDOWS = {'UL_CORNER_LINE': [0, 32], 'LR_CORNER_LINE': [15, 63],
                 'LINE_BIN': [1, 1], 'UL_CORNER_BAND': [0, 4], 'LR_CORNER_BAND': [3, 7],
                 'BAND_BIN': [1, 1]}

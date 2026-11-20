@@ -1424,6 +1424,29 @@ def test_label_correction_leaves_a_label_without_defects(tmp_path: pathlib.Path)
     assert CassiniISS._correct_label_text(text, FCPath(tmp_path)) == text
 
 
+def test_label_correction_moves_a_next_line_value_up(tmp_path: pathlib.Path) -> None:
+    """A quoted value on the line after its keyword joins that line, in the text with
+    <LF> line terminators that oops passes to the correction."""
+
+    text = 'A =\n    "x = 1"\n'
+    assert CassiniISS._correct_label_text(text, FCPath(tmp_path)) == 'A = "x = 1"\n'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_reads_a_next_line_value_that_only_the_fast_parser_reads(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A label file with <CR><LF> line terminators whose next-line value holds "=" is read
+    in full by the fast parser alone once the value is moved up, as N1683362654_1.LBL of
+    COISS_2068 is, which the strict and loose parsers reject for another reason."""
+
+    monkeypatch.setattr(oops.Host, '_parse_pds3', fail_after_fast(oops.Host._parse_pds3))
+    path = write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_EQUALS)
+    assert b'METHOD_DESC = \r\n' in path.read_bytes()
+    obs = CassiniISS.from_file(path, astrometry=True)
+    assert obs.label_dict['METHOD_DESC'] == ('ISSPT2.6.5 STAR:TYPE=A MAG=0.100000\n'
+                                             '    ISS_056ST_MONITOR001_PRIME_2')
+
+
 def without_next_line_repair(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leave the next-line repair out of the label correction."""
 
@@ -1925,9 +1948,28 @@ def test_from_index_applies_a_declared_null_other_than_zero(tmp_path: pathlib.Pa
     assert 'BIAS_STRIP_MEAN' not in obs.dict
 
 
+def test_from_index_applies_a_special_constant_other_than_the_null_constant(
+        tmp_path: pathlib.Path) -> None:
+    """A corrected label may declare its fill value with another key, such as the
+    NOT_APPLICABLE_CONSTANT that the labels give other columns."""
+
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 5.),
+                                         'NOT_APPLICABLE_CONSTANT = -1.'),))
+    obs = next(CassiniISS.from_index(path))
+    assert 'BIAS_STRIP_MEAN' not in obs.dict
+
+
+def test_index_fill_rules_read_a_label_given_as_a_dictionary(
+        tmp_path: pathlib.Path) -> None:
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 5.),
+                                         'NULL_CONSTANT = -1.'),))
+    (masked, _) = CassiniISS._index_fill_rules(Pds3Label(path, method='fast').as_dict())
+    assert 'BIAS_STRIP_MEAN' in masked
+
+
 def test_from_index_keeps_a_fill_value_where_the_label_declares_another(
         tmp_path: pathlib.Path) -> None:
-    """65534 is missing only in a column whose label declares no null constant."""
+    """65534 is missing only in a column whose label does not declare a null constant."""
 
     path = write_index(tmp_path, extra=(('SEQUENCE_NUMBER', 'ASCII_INTEGER', 5,
                                          (65534, 1), 'NULL_CONSTANT = 99999'),))

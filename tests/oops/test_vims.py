@@ -659,6 +659,15 @@ def test_tracker_follows_label_target(tmp_path: pathlib.Path) -> None:
     assert [type(frame) for frame in frames] == [oops.frame.TrackerFrame] * 2
 
 
+@pytest.mark.usefixtures('saturn_path')
+def test_from_file_checks_pointing_where_a_tracker_evaluates_it(
+        tmp_path: pathlib.Path, spice_check_times: list[float]) -> None:
+    """A tracker evaluates each channel's frame once, at the time it selects."""
+
+    pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path), tracker='start')
+    assert spice_check_times == [pytest.approx(obs.time[0], abs=1.e-3) for obs in pair]
+
+
 def test_target_override(tmp_path: pathlib.Path) -> None:
     pair = CassiniVIMS.from_file(write_pds3_cube(tmp_path), target='TITAN')
     assert [obs.target for obs in pair] == ['TITAN', 'TITAN']
