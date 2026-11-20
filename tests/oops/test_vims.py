@@ -828,7 +828,7 @@ def test_from_index_builds_each_row_when_reached(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(('column', 'value', 'masked'), [
-    ('PHASE_ANGLE', np.float64(-1.e32), True),
+    ('COMPRESSOR_ID', np.int64(-99), True),
     ('INSTRUMENT_DATA_RATE', np.float64(-999.), False),
     ('TELEMETRY_FORMAT_ID', np.str_('UNK'), False),
 ], ids=['masked', 'fill', 'null-text'])
@@ -947,6 +947,23 @@ def test_from_file_parsed_label_without_a_path_cannot_be_read_in_full(
     label.filepath = None
     with pytest.raises(HostFormatError, match='no file path is known'):
         CassiniVIMS.from_file(label)
+
+
+def test_host_from_file_reads_a_comment_that_spans_two_lines(
+        tmp_path: pathlib.Path) -> None:
+    """oops.Host.from_file reaches the host for a label that only its repair reads."""
+
+    path = write_pds3_cube(tmp_path)
+    path.write_bytes(path.read_bytes().replace(
+        b'PACKING_FLAG = "OFF"', b'PACKING_FLAG = OFF/* Unpacked from\r\n    QUB*/'))
+    (_, ir) = oops.Host.from_file(path, astrometry=True)
+    assert ir.instrument == 'VIMS'
+
+
+def test_detection_in_file_needs_a_readable_label(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / 'v0000000001_1.lbl'
+    path.write_text('NOT A LABEL')
+    assert CassiniVIMS._detect_in_file(path) is False
 
 
 def test_from_file_reads_a_comment_that_spans_two_lines(tmp_path: pathlib.Path) -> None:

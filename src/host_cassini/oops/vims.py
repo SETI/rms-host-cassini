@@ -1424,6 +1424,30 @@ class CassiniVIMS(oops.Host):
         return False
 
     @staticmethod
+    def _detect_in_file(filepath):
+        """True if a file is a VIMS label that only this host can read.
+
+        :meth:`oops.Host.from_file <oops.host.host_.Host.from_file>` asks this when no
+        PDS3 parser reads a label as it is, as for the labels with a comment that spans
+        two lines, which this host repairs in memory.
+
+        Parameters:
+            filepath (str | pathlib.Path | FCPath): The path to the file.
+
+        Returns:
+            bool: True if the file is a PDS3 or ISIS label that :meth:`from_file` reads,
+            with its repairs, as that of a Cassini VIMS cube.
+        """
+
+        try:
+            label = _read_pds3_fileinfo(CassiniVIMS, filepath, astrometry=True,
+                                        pds3_options=_pds3_options_with_defaults(None),
+                                        repairs=(_TWO_LINE_COMMENT,))
+        except (oops.host.HostError, oops.OopsValueError, OSError):
+            return False
+        return CassiniVIMS._detect_in_pds3(label)
+
+    @staticmethod
     def _detect_in_index(label):
         """Whether the given index label describes Cassini VIMS data.
 
