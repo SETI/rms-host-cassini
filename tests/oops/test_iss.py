@@ -11,6 +11,7 @@ import subprocess
 import sys
 from typing import Any, cast
 
+import cspyce
 from filecache import FCPath
 import julian
 import numpy as np
@@ -965,8 +966,8 @@ def test_from_index_computes_the_early_cruise_counts(tmp_path: pathlib.Path, sta
     """Both counts of an early cruise row follow from its image number and exposure.
 
     The metadata index gives the label's counts; the volume index gives the image number
-    as the start count and the image number less the exposure in centiseconds as the stop
-    count.
+    as the start count and the image number less the exposure in tenths of a second as
+    the stop count.
     """
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
@@ -1375,6 +1376,22 @@ def test_from_file_label_repairs(tmp_path: pathlib.Path, extra_lines: list[str],
 
 
 @pytest.mark.usefixtures('initialized_iss')
+def test_host_from_file_reads_a_label_only_iss_repairs(tmp_path: pathlib.Path) -> None:
+    """oops.Host.from_file reaches the host for a label that only its repairs read."""
+
+    path = write_pds3_image(tmp_path, extra_lines=_SPLIT)
+    assert oops.Host.from_file(path, astrometry=True).detector == 'NAC'
+
+
+@pytest.mark.parametrize('name', ['N0000000001_1.IMG', 'N0000000001_1.LBL'])
+def test_detection_in_file_needs_a_readable_label(tmp_path: pathlib.Path,
+                                                  name: str) -> None:
+    path = tmp_path / name
+    path.write_text('NOT A LABEL')
+    assert CassiniISS._detect_in_file(path) is False
+
+
+@pytest.mark.usefixtures('initialized_iss')
 @pytest.mark.parametrize(('extra_lines', 'method'), [
     (_NEXT_LINE_VALUE, 'strict'),
     (_NEXT_LINE_VALUE + _UNQUOTED_NULL, 'loose'),
@@ -1680,32 +1697,54 @@ def test_from_index_raises_a_row_error_when_reached(tmp_path: pathlib.Path) -> N
 
 def test_from_index_filepaths(tmp_path: pathlib.Path,
                               index_snapshots: list[oops.observation.Snapshot]) -> None:
-    """With the index beside the data, its directory is the volume root."""
+    """An index outside the metadata tree is in the directory that holds the volumes."""
 
-    image_path = tmp_path / 'data/1484506648_1484573295/N1484506648_1.IMG'
+    image_path = tmp_path / 'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'
     obs = index_snapshots[0]
     assert obs.filepath == FCPath(image_path)
     assert obs.basename == 'N1484506648_1.IMG'
-    assert obs.abspath == image_path.resolve()
     assert obs.image_url == image_path.as_posix()
     assert index_snapshots[1].basename == 'W1484506649_1.IMG'
 
 
+def test_from_index_missing_local_image_has_no_abspath(
+        index_snapshots: list[oops.observation.Snapshot]) -> None:
+    assert 'abspath' not in index_snapshots[0].subfields
+
+
+def test_from_index_local_image_has_an_abspath(tmp_path: pathlib.Path) -> None:
+    image_path = tmp_path / 'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b'')
+    obs = next(CassiniISS.from_index(write_index(tmp_path)))
+    assert obs.abspath == image_path.resolve()
+
+
+def test_from_index_creates_no_directories(tmp_path: pathlib.Path) -> None:
+    """Building the rows of an index whose volumes are absent creates nothing."""
+
+    index = tmp_path / 'metadata' / 'COISS_2xxx' / 'COISS_2009' / 'COISS_2009_index.lbl'
+    index.parent.mkdir(parents=True)
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    before = sorted(tmp_path.rglob('*'))
+    list(CassiniISS.from_index(index, row_dicts=rows))
+    assert sorted(tmp_path.rglob('*')) == before
+
+
 @pytest.mark.parametrize(('index_path', 'image_path'), [
-    ('volumes/COISS_2xxx/COISS_2009/index/index.lbl',
-     'volumes/COISS_2xxx/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
-    ('volumes/COISS_2xxx/COISS_2009/INDEX/INDEX.LBL',
-     'volumes/COISS_2xxx/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
     ('metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl',
      'volumes/COISS_2xxx/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
-], ids=['volume-index', 'volume-index-upper', 'cumulative-metadata-index'])
+    ('copy/COISS_2009_index.lbl',
+     'copy/COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'),
+], ids=['cumulative-metadata-index', 'elsewhere'])
 def test_from_index_finds_the_image_from_the_index(tmp_path: pathlib.Path,
                                                    index_path: str,
                                                    image_path: str) -> None:
-    """A row's image file is its specification within its volume, wherever the index is.
+    """A row's image file is its specification within the volume of its VOLUME_ID.
 
-    An index in a volume's index directory belongs to that volume; one in the metadata
-    tree lists rows of any volume of its series, each found by its VOLUME_ID.
+    An index in the metadata tree lists rows of any volume of its series, each found in
+    the volumes tree beside it; any other index is in the directory that holds the
+    volumes.
     """
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
@@ -1717,8 +1756,9 @@ def test_from_index_remote_image_has_no_abspath(tmp_path: pathlib.Path) -> None:
     """A remote image that was never fetched has a URL but no abspath."""
 
     rows = oops.Host._read_index_rows(write_index(tmp_path))
-    index_url = 'https://rms-test.invalid/holdings/volumes/COISS_2xxx/COISS_2009/index'
-    obs = next(CassiniISS.from_index(index_url + '/index.lbl', row_dicts=rows[:1]))
+    index_url = 'https://rms-test.invalid/holdings/metadata/COISS_2xxx/COISS_2009'
+    obs = next(CassiniISS.from_index(index_url + '/COISS_2009_index.lbl',
+                                     row_dicts=rows[:1]))
     assert obs.image_url == ('https://rms-test.invalid/holdings/volumes/COISS_2xxx/'
                              'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG')
     assert 'abspath' not in obs.subfields
@@ -1765,7 +1805,7 @@ def test_host_from_index_dispatches_to_iss(tmp_path: pathlib.Path) -> None:
 
 
 def test_host_from_index_dispatches_by_coiss_path(tmp_path: pathlib.Path) -> None:
-    directory = tmp_path / 'COISS_2001' / 'index'
+    directory = tmp_path / 'metadata' / 'COISS_2xxx' / 'COISS_2001'
     directory.mkdir(parents=True)
     snapshots = oops.Host.from_index(write_index(directory))
     assert [obs.detector for obs in snapshots] == ['NAC', 'WAC']
@@ -1836,6 +1876,7 @@ def test_from_index_keeps_a_value_declared_null(tmp_path: pathlib.Path, column: 
 
 @pytest.mark.parametrize(('column', 'value'), [
     ('SEQUENCE_NUMBER', 65534),
+    ('ORDER_NUMBER', 65534),
     ('MISSING_LINES', -2147483648),
     ('EXPECTED_MAXIMUM', 1.e32),
     ('PHASE_ANGLE', -1.e32),
@@ -1844,8 +1885,8 @@ def test_from_index_keeps_a_value_declared_null(tmp_path: pathlib.Path, column: 
     ('CENTER_LATITUDE', 0.),
     ('CENTER_LONGITUDE', 0.),
     ('CENTRAL_BODY_DISTANCE', 'NULL'),
-], ids=['65534', 'int32-min', '1e32', 'minus-1e32', 'emission-0', 'incidence-0',
-        'center-latitude-0', 'center-longitude-0', 'null-text'])
+], ids=['65534', 'order-number-65534', 'int32-min', '1e32', 'minus-1e32', 'emission-0',
+        'incidence-0', 'center-latitude-0', 'center-longitude-0', 'null-text'])
 def test_from_index_leaves_out_fill_values(tmp_path: pathlib.Path, column: str,
                                            value: Any) -> None:
     """A fill value of the index tables is missing, whether or not the label declares it.
@@ -1884,12 +1925,10 @@ def test_from_index_spells_clock_counts_as_the_labels(tmp_path: pathlib.Path, co
 
 def test_from_index_skips_the_pointing_check(tmp_path: pathlib.Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
-    """A row is kept, unchecked, even when the C kernels hold no pointing for it."""
+    """A row is kept, and nothing raises, even when the C kernels hold no pointing."""
 
-    times = remove_pointing(monkeypatch)
-    snapshots = list(CassiniISS.from_index(write_index(tmp_path)))
-    assert len(snapshots) == 2
-    assert times == []
+    remove_pointing(monkeypatch)
+    assert len(list(CassiniISS.from_index(write_index(tmp_path)))) == 2
 
 
 @pytest.mark.parametrize('select', [0, slice(None), 'NAC'])
@@ -1940,5 +1979,230 @@ def test_from_index_reads_the_supplement_given(tmp_path: pathlib.Path) -> None:
         CassiniISS.from_index(write_index(tmp_path),
                               supplement=tmp_path / 'missing_supplemental_index.lbl')
 
+##########################################################################################
+# The rules that every host follows
+##########################################################################################
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(oops.OopsTypeError, match=r"CassiniISS\.from_file: 'astrometery'"):
+        CassiniISS.from_file(write_pds3_image(tmp_path), astrometery=True)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_refuses_select_before_reading(tmp_path: pathlib.Path) -> None:
+    """A select other than None is refused before the file is opened."""
+
+    with pytest.raises(oops.OopsValueError, match='select must be None, not 0'):
+        CassiniISS.from_file(tmp_path / 'missing.IMG', select=0)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_accepts_select_none(tmp_path: pathlib.Path) -> None:
+    assert CassiniISS.from_file(write_pds3_image(tmp_path), select=None).detector == 'NAC'
+
+
+def _write_foreign_host(path: pathlib.Path) -> None:
+    """Rewrite the HOST of a VICAR file as a machine other than this one."""
+
+    content = path.read_bytes()
+    host = f"HOST='{vicar.vicarimage._HOST}'".encode()
+    other = b"HOST='SUN-SOLR'".ljust(len(host))
+    path.write_bytes(content.replace(host, other, 1))
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('astrometry', [False, True])
+def test_from_file_header_dict_keeps_the_files_host(tmp_path: pathlib.Path,
+                                                    astrometry: bool) -> None:
+    """header_dict gives the HOST that the file writes, never the reading machine's."""
+
+    path = write_vicar_image(tmp_path)
+    _write_foreign_host(path)
+    obs = CassiniISS.from_file(path, astrometry=astrometry)
+    assert obs.header_dict['HOST'] == 'SUN-SOLR'
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_remote_label_astrometry_cached_image_has_an_abspath(
+        tmp_path: pathlib.Path) -> None:
+    """An image file that an earlier read put in the local cache has an abspath."""
+
+    label = Pds3Label(write_pds3_image(tmp_path), method='fast')
+    label.filepath = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.LBL')
+    cached = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.IMG')
+    local = cast(pathlib.Path, cached.get_local_path())
+    local.write_bytes(b'')
+    obs = CassiniISS.from_file(label, astrometry=True)
+    assert obs.abspath == local.resolve()
+
+
+def test_from_index_cached_remote_image_has_an_abspath(tmp_path: pathlib.Path) -> None:
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    index_url = 'https://rms-test.invalid/holdings/metadata/COISS_2xxx/COISS_2009'
+    image = FCPath('https://rms-test.invalid/holdings/volumes/COISS_2xxx/COISS_2009/data/'
+                   '1484506648_1484573295/N1484506648_1.IMG')
+    local = cast(pathlib.Path, image.get_local_path())
+    local.write_bytes(b'')
+    obs = next(CassiniISS.from_index(index_url + '/COISS_2009_index.lbl',
+                                     row_dicts=rows[:1]))
+    assert obs.abspath == local.resolve()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_snapshot_time_is_not_from_the_clock() -> None:
+    assert snapshot().time_from_sclk is False
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('function', ['scs2e', 'sce2s'])
+def test_from_file_early_cruise_clock_error_is_a_spice_error(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, function: str) -> None:
+    """A clock count the clock kernel cannot convert raises OopsSpiceError."""
+
+    def fail(*args: Any) -> None:
+        raise ValueError('SPICE(INVALIDSCLKSTRING) -- bad clock count')
+
+    monkeypatch.setattr(cspyce, function, fail)
+    with pytest.raises(oops.OopsSpiceError,
+                       match=r'Cassini clock .*N0000000001_1\.IMG: '
+                             r'SPICE\(INVALIDSCLKSTRING\)$'):
+        CassiniISS.from_file(write_pds3_image(tmp_path, **_EARLY_COUNTS))
+
+
+@pytest.mark.parametrize(('number', 'start'), [
+    ('1343357427', '1343357425.000'),
+    ('1343357428', '1343357423.000'),
+], ids=['last-early-image', 'next-image'])
+def test_from_index_early_cruise_boundary(tmp_path: pathlib.Path, number: str,
+                                          start: str) -> None:
+    """The last early cruise image gets a computed start count; the next keeps its own."""
+
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | {'IMAGE_NUMBER': number, 'EXPOSURE_DURATION': 2000.,
+                     'SPACECRAFT_CLOCK_START_COUNT': '1343357423.000',
+                     'SPACECRAFT_CLOCK_STOP_COUNT': number + '.000'}
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    assert obs.spacecraft_clock_start_count == start
+
+
+def test_from_index_frame_without_pointing_raises_a_spice_error(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row is built without pointing; its frame raises OopsSpiceError when used."""
+
+    remove_pointing(monkeypatch)
+    obs = next(CassiniISS.from_index(write_index(tmp_path)))
+    with pytest.raises(oops.OopsSpiceError,
+                       match=r'^no Cassini ISS NAC pointing at 2005-01-15T18:30:00\.500 '
+                             r'for .*N1484506648_1\.IMG: SPICE\(CKINSUFFDATA\)$'):
+        obs.frame.wrt(oops.Frame.J2000).transform_at_time(obs.midtime)
+
+
+def test_from_index_frame_with_pointing_is_the_camera_frame(
+        tmp_path: pathlib.Path) -> None:
+    obs = next(CassiniISS.from_index(write_index(tmp_path)))
+    assert obs.frame == oops.Frame.as_wayframe('CASSINI_ISS_NAC')
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize('value', ['UNKNOWN', '', '---'])
+def test_from_file_leaves_out_each_placeholder(tmp_path: pathlib.Path,
+                                               value: str) -> None:
+    obs = CassiniISS.from_file(write_pds3_image(tmp_path, OBSERVATION_ID=value))
+    assert 'OBSERVATION_ID' not in obs.dict
+
+
+@pytest.mark.parametrize('value', ['UNKNOWN', '', '---'])
+def test_from_index_leaves_out_each_placeholder(tmp_path: pathlib.Path,
+                                                value: str) -> None:
+    rows = oops.Host._read_index_rows(write_index(tmp_path))
+    row = rows[0] | {'OBSERVATION_ID': np.str_(value)}
+    obs = next(CassiniISS.from_index(tmp_path / 'index.lbl', row_dicts=[row]))
+    assert 'OBSERVATION_ID' not in obs.dict
+
+
+@pytest.mark.parametrize('relpath', ['COISS_2009/index/index.lbl',
+                                     'COISS_2009/INDEX/INDEX.LBL'])
+def test_from_index_refuses_a_volumes_own_index(tmp_path: pathlib.Path,
+                                                relpath: str) -> None:
+    """A volume's own index raises HostIndexError before anything is read."""
+
+    with pytest.raises(oops.host.HostIndexError,
+                       match='reads the Ring-Moon Systems Node metadata index'):
+        CassiniISS.from_index(tmp_path / relpath)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_parsed_label_without_a_path_has_no_file_subfields(
+        tmp_path: pathlib.Path) -> None:
+    label = Pds3Label(write_pds3_image(tmp_path), method='fast')
+    label.filepath = None
+    obs = CassiniISS.from_file(label, astrometry=True)
+    assert {'filepath', 'basename', 'abspath', 'image_url'}.isdisjoint(obs.subfields)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_parsed_label_without_a_path_cannot_be_read_in_full(
+        tmp_path: pathlib.Path) -> None:
+    label = Pds3Label(write_pds3_image(tmp_path), method='fast')
+    label.filepath = None
+    with pytest.raises(oops.host.HostFormatError, match='no file path is known'):
+        CassiniISS.from_file(label)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_parsed_header_without_a_path_cannot_be_read_in_full(
+        tmp_path: pathlib.Path) -> None:
+    header = vicar.VicarLabel(write_vicar_image(tmp_path))
+    header.filepath = None
+    with pytest.raises(oops.host.HostFormatError, match='no file path is known'):
+        CassiniISS.from_file(header)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_parsed_image_without_a_path_needs_no_file(
+        tmp_path: pathlib.Path) -> None:
+    image = vicar.VicarImage(write_vicar_image(tmp_path))
+    image.filepath = None
+    obs = CassiniISS.from_file(image)
+    assert obs.data.shape == (256, 256)
+    assert {'filepath', 'basename', 'abspath', 'image_url'}.isdisjoint(obs.subfields)
+
+
+@pytest.mark.usefixtures('initialized_iss')
+@pytest.mark.parametrize(('item', 'label', 'header', 'expected'), [
+    ('DARK_STRIP_MEAN', 1.5, 2.5, 1.5),
+    ('DETECTOR_TEMPERATURE', -89.5, -89.25, -89.5),
+    ('FILTER_TEMPERATURE', 0.5, 0.25, 0.5),
+    ('INST_CMPRS_RATIO', 2.5, 2.25, 2.5),
+    ('SENSOR_HEAD_ELEC_TEMPERATURE', 1.5, 1.25, 1.5),
+    ('INSTRUMENT_DATA_RATE', 182.783997, 182.784, 182.783997),
+    ('INST_CMPRS_RATE', [1.5, 2.5], [1.25, 2.25], [1.5, 2.5]),
+    ('DATA_SET_ID', 'CO-S-ISSNA/ISSWA-2-EDR-V1.0', 'CO-X-ISSNA/ISSWA-2-EDR-V0.9',
+     'CO-S-ISSNA/ISSWA-2-EDR-V1.0'),
+    ('MISSION_NAME', 'CASSINI-HUYGENS', 'CASSINI', 'CASSINI-HUYGENS'),
+    ('INSTRUMENT_NAME', NAC_NAME, 'ISS NARROW ANGLE CAMERA', NAC_NAME),
+    ('PRODUCT_CREATION_TIME', '2010-001T00:00:00.000', '2005-001T00:00:00.000Z',
+     '2010-001T00:00:00.000'),
+    ('EARTH_RECEIVED_START_TIME', '2005-016T13:01:59.864', '2005-016T13:01:59.865Z',
+     '2005-016T13:01:59.864'),
+    ('EARTH_RECEIVED_STOP_TIME', '2005-016T13:02:00.864', '2005-016T13:02:00.865Z',
+     '2005-016T13:02:00.864'),
+])
+def test_from_file_takes_each_fixed_source(tmp_path: pathlib.Path, item: str, label: Any,
+                                           header: Any, expected: Any) -> None:
+    """Each item with a fixed source takes it where the label and the header disagree."""
+
+    path = write_pds3_image(tmp_path, header={item: header}, **{item: label})
+    assert CassiniISS.from_file(path).dict[item] == expected
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_label_dict_keeps_a_sets_label_order(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_image(tmp_path,
+                            extra_lines=['IMAGE_OBSERVATION_TYPE = {"SCIENCE", "OPNAV"}'])
+    assert CassiniISS.from_file(path).label_dict['IMAGE_OBSERVATION_TYPE'] == [
+        'SCIENCE', 'OPNAV']
 
 ##########################################################################################

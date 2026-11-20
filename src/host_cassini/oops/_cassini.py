@@ -2,6 +2,8 @@
 # host_cassini/oops/_cassini.py
 ##########################################################################################
 
+import datetime
+import pathlib
 import re
 
 import numpy as np
@@ -14,6 +16,7 @@ from filecache import FCPath
 
 import oops
 from oops.body import Body
+from oops.host import HostIndexError
 
 
 # There are two C-matrix conventions here, related by _CMATRIX_ROTATION (a 180-degree spin
@@ -28,6 +31,9 @@ from oops.body import Body
 # _CMATRIX_ROTATION to build the observation frame. The generic
 # Snapshot.get_spice_cmatrix() uses this matrix as attribute `spice_to_frame`.
 _CMATRIX_ROTATION = oops.Matrix3([[-1,0,0],[0,-1,0],[0,0,1]])
+
+# The NAIF ID of the Cassini spacecraft clock
+_CASSINI_SCLK = -82
 
 
 class _Cassini:
@@ -109,8 +115,10 @@ class _Cassini:
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
             gapfill (bool, optional): True to include gapfill CKs. False otherwise.
-            planets (list, optional): A list of planets to pass to
-                :meth:`~oops.Body.define_solar_system`. None or 0 means all.
+            planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
+                sequence of such numbers, whose systems
+                :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
+                nine.
             asof (str, optional): Only use SPICE kernels that existed before this date;
                 None to ignore.
             mst_pck (bool, optional): True to include MST PCKs, which update the rotation
@@ -525,15 +533,97 @@ def _pds3_options_with_defaults(options):
     return options
 
 
+# The order in which the PDS3 label parsers are tried, from the one requested onward
+_PARSER_METHODS = ('fast', 'strict', 'loose')
+
+
+def _read_pds3_fileinfo(host, fileinfo, *, astrometry, pds3_options, repairs=()):
+    """The parsed PDS3 label of a UVIS or VIMS product, read with the parser fallbacks.
+
+    The label is parsed with the method in `pds3_options` and, if that parser rejects it
+    or cannot convert one of its values, by each later method in the order "fast",
+    "strict", "loose". A method that is not one of the three is tried alone. The repairs
+    in `pds3_options`, a list of (pattern, replacement) pairs or a single pair, and then
+    `repairs`, are applied in every attempt. Parsed content is not parsed again.
+
+    Parameters:
+        host (type): The host class, such as CassiniVIMS.
+        fileinfo (str | pathlib.Path | FCPath | Pds3Label): The path to the label or the
+            file holding it, or the parsed label.
+        astrometry (bool): True to read no data array.
+        pds3_options (dict[str, Any]): The options for the PDS3 label parser, including
+            its method.
+        repairs (tuple[tuple[str, str], ...], optional): The host's own repairs.
+
+    Returns:
+        Pds3Label: The parsed label.
+
+    Raises:
+        OSError: If the file cannot be read.
+        PdsHostError: If no parser can read the label; the message names the file.
+        WrongHostError: If the file or the parsed content is not of this host.
+    """
+
+    if not isinstance(fileinfo, (str, pathlib.Path, FCPath)):
+        return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
+                                   pds3_options=pds3_options)
+
+    method = pds3_options['method']
+    if method in _PARSER_METHODS:
+        methods = _PARSER_METHODS[_PARSER_METHODS.index(method):]
+    else:
+        methods = (method,)
+
+    given_repairs = pds3_options.get('repairs', [])
+    if (isinstance(given_repairs, tuple) and len(given_repairs) == 2
+            and all(isinstance(item, str) for item in given_repairs)):
+        given_repairs = [given_repairs]     # one (pattern, replacement) pair
+
+    error = None
+    for method in methods:
+        options = pds3_options | {'method': method,
+                                  'repairs': list(given_repairs) + list(repairs)}
+        try:
+            return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
+                                       pds3_options=options)
+        except (oops.host.PdsHostError, oops.OopsValueError) as err:
+            # An OopsValueError is a value that this parser could not convert, which a
+            # later parser may still read
+            error = err
+    raise oops.host.PdsHostError(f'{error} in {fileinfo}') from error
+
+
+def _refuse_volume_index(index_path, host, example):
+    """Raise HostIndexError if an index is a volume's own index.
+
+    The hosts read the Ring-Moon Systems Node metadata indexes, which carry the
+    supplemental columns. A volume's own index, in its "index" directory (in either case),
+    is not supported.
+
+    Parameters:
+        index_path (str | pathlib.Path | FCPath): The path to the index file or its label.
+        host (str): The name of the host, such as "Cassini ISS", for the message.
+        example (str): The name of a metadata index of the instrument, for the message.
+
+    Raises:
+        HostIndexError: If the index is in a directory named "index".
+    """
+
+    if FCPath(index_path).parent.name.lower() == 'index':
+        raise HostIndexError(f'{host} reads the Ring-Moon Systems Node metadata index, '
+                             f'such as "{example}", not a volume\'s own index: '
+                             f'{index_path}')
+
+
 def _index_file_path(index_path, row_dict):
     """The path to the file that one row of an index describes.
 
-    The row's FILE_SPECIFICATION_NAME is relative to the root directory of its volume. An
-    index in a volume's "index" directory (in either case) belongs to that volume, whose
-    root is the directory above it. An index in the "metadata" tree of the holdings, such
-    as metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may list files of any volume
-    of its series, so the root is the row's VOLUME_ID in the "volumes" tree beside it:
-    volumes/COISS_2xxx/<VOLUME_ID>. Any other index is taken to be in its volume's root
+    The row's FILE_SPECIFICATION_NAME is relative to the root directory of its volume,
+    the directory named by its VOLUME_ID. An index in the "metadata" tree of the
+    holdings, such as metadata/COISS_2xxx/COISS_2999/COISS_2999_index.lbl, may list files
+    of any volume of its series, so the volume is the row's VOLUME_ID in the "volumes"
+    tree beside it: volumes/COISS_2xxx/<VOLUME_ID>. For an index anywhere else, the
+    volume is the directory named by the row's VOLUME_ID inside the index's own
     directory.
 
     Parameters:
@@ -546,37 +636,341 @@ def _index_file_path(index_path, row_dict):
     """
 
     directory = FCPath(index_path).parent
-    if directory.name.lower() == 'index':
-        root = directory.parent
-    elif directory.parent.parent.name.lower() == 'metadata':
+    volume_id = str(row_dict['VOLUME_ID']).strip()
+    if directory.parent.parent.name.lower() == 'metadata':
         series = directory.parent
-        root = (series.parent.parent / 'volumes' / series.name
-                / str(row_dict['VOLUME_ID']).strip())
+        root = series.parent.parent / 'volumes' / series.name / volume_id
     else:
-        root = directory
+        root = directory / volume_id
     return root / str(row_dict['FILE_SPECIFICATION_NAME']).strip()
 
 
-def _drop_unfetched_abspath(item, filepath):
-    """Remove `abspath` from the observations of an index row whose file is not local.
-
-    The local cache path of a remote file that was never fetched holds nothing, so it is
-    not given.
+def _known_path(filepath):
+    """The path of parsed content, or None if it came from no file.
 
     Parameters:
-        item (Observation | tuple | None): The observation of the row, a tuple of them
-            (each possibly None), or None.
-        filepath (FCPath): The path or URL of the row's file.
+        filepath (str | pathlib.Path | FCPath | None): The `filepath` attribute of a
+            parsed label or header.
 
     Returns:
-        Observation | tuple | None: `item`, modified in place.
+        FCPath | None: The path, or None if `filepath` is None or empty.
     """
 
-    if filepath.is_local() or filepath.get_local_path().exists():
-        return item
-    for obs in (item if isinstance(item, tuple) else (item,)):
-        if obs is not None and 'abspath' in obs.subfields:
-            obs.delete_subfield('abspath')
-    return item
+    if filepath is None or str(filepath) in ('', '.'):
+        return None
+    return FCPath(filepath)
+
+
+# The classes of exception that cspyce raises for a SPICE error
+_SPICE_ERRORS = (LookupError, OSError, RuntimeError, ValueError)
+
+
+def _tdb_from_sclk(count, filepath):
+    """The time in seconds TDB of a Cassini spacecraft clock count.
+
+    Parameters:
+        count (str): The clock count, such as "1294562649.000" or "1/1294562649.000".
+        filepath (FCPath | str | None): The file, named in the error.
+
+    Returns:
+        float: The time in seconds TDB.
+
+    Raises:
+        OopsSpiceError: If the spacecraft clock kernel cannot convert the count.
+    """
+
+    try:
+        return cspyce.scs2e(_CASSINI_SCLK, count)
+    except _SPICE_ERRORS as err:
+        raise oops.OopsSpiceError.from_spice_error(
+            err, description=f'no Cassini clock time for count {count}',
+            filepath=filepath) from err
+
+
+def _sclk_from_tdb(tdb, filepath):
+    """The Cassini spacecraft clock count of a time, without its partition.
+
+    Parameters:
+        tdb (float): The time in seconds TDB.
+        filepath (FCPath | str | None): The file, named in the error.
+
+    Returns:
+        str: The clock count, such as "1294562649.000".
+
+    Raises:
+        OopsSpiceError: If the spacecraft clock kernel cannot convert the time.
+    """
+
+    try:
+        count = cspyce.sce2s(_CASSINI_SCLK, tdb)
+    except _SPICE_ERRORS as err:
+        raise oops.OopsSpiceError.from_spice_error(
+            err, description='no Cassini clock count', time=tdb,
+            filepath=filepath) from err
+    return count.rpartition('/')[2]
+
+
+def _check_select(select, names=None):
+    """Raise the error that `select` would raise for its type, before anything is read.
+
+    Parameters:
+        select (Any): The `select` argument of a ``from_file`` or ``from_index``.
+        names (dict[str, int], optional): The names that `select` may use, upper case.
+
+    Raises:
+        OopsTypeError: If `select`, or an item of a tuple, is not an int, a slice, or a
+            string.
+        OopsValueError: If a string in `select` is not one of `names`.
+    """
+
+    if select is None:
+        return
+    for item in (select if isinstance(select, tuple) else (select,)):
+        if isinstance(item, str):
+            if names is None or item.upper() not in names:
+                raise oops.OopsValueError(f'unrecognized select name: {item!r}')
+        elif isinstance(item, bool) or not isinstance(item, (int, slice)):
+            raise oops.OopsTypeError(f'invalid select: {select!r}')
+
+
+def _common_subfields(meta, *, label_dict=None, time_from_sclk=False):
+    """The subfields of a UVIS or VIMS observation that come from its metadata.
+
+    Parameters:
+        meta (dict[str, Any]): The metadata, without missing values, as the `dict`
+            subfield gives it.
+        label_dict (dict[str, Any], optional): The content of the detached PDS3 label,
+            when it was read.
+        time_from_sclk (bool, optional): True if the observation's time came from a
+            spacecraft clock count.
+
+    Returns:
+        dict[str, Any]: The subfields `dict` and `time_from_sclk`; `label_dict` when it is
+        given; and `label_target`, `observation_id`, `spacecraft_clock_start_count` and
+        `spacecraft_clock_stop_count`, each when `meta` gives its item, the clock counts
+        only as text.
+    """
+
+    subfields = {'dict': meta, 'time_from_sclk': time_from_sclk}
+    if label_dict is not None:
+        subfields['label_dict'] = label_dict
+    for (item, name) in (('TARGET_NAME', 'label_target'),
+                         ('OBSERVATION_ID', 'observation_id')):
+        if item in meta:
+            subfields[name] = meta[item]
+    for (item, name) in (('SPACECRAFT_CLOCK_START_COUNT', 'spacecraft_clock_start_count'),
+                         ('SPACECRAFT_CLOCK_STOP_COUNT', 'spacecraft_clock_stop_count')):
+        if isinstance(meta.get(item), str):
+            subfields[name] = meta[item]
+    return subfields
+
+##########################################################################################
+# Metadata in JSON form, without missing values
+##########################################################################################
+
+# The PDS3 null constants and the other text that the archive writes for "no value",
+# compared without regard to case or surrounding blanks
+_NULL_STRINGS = {'UNK', 'UNKNOWN', 'N/A', 'NULL', '', '---'}
+
+# The number that the Cassini labels and indexes write for a value that was not
+# determined, which counts as missing like a null constant. In ISS products: the back
+# optics temperature of a camera with no back sensor, the COMPRESSION_RATIO of the early
+# cruise headers, and the temperatures of products whose headers were filled with
+# predictions, such as the DETECTOR_TEMPERATURE of -999 degrees C, below absolute zero,
+# in N1640662528_3_CALIB.LBL of calibrated/COISS_2059, whose DESCRIPTION says "Predicted
+# values used to populate header" (#10). The UVIS and VIMS index labels declare it the
+# null constant of their exposure, temperature and geometry columns.
+_FILL_VALUE = -999.
+
+
+def _is_null(value):
+    """True if a value states nothing.
+
+    Parameters:
+        value (Any): The value of a keyword or column.
+
+    Returns:
+        bool: True if `value` is None; one of "UNK", "UNKNOWN", "N/A", "NULL", "---" or
+        the empty string, in any case and with any surrounding blanks; the fill value
+        -999; or a non-empty list, tuple or set of nothing but these.
+    """
+
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().upper() in _NULL_STRINGS
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value == _FILL_VALUE
+    if isinstance(value, (list, tuple, set, frozenset)) and len(value) > 0:
+        return all(_is_null(item) for item in value)
+    return False
+
+
+def _without_nulls(dict_):
+    """A copy of a dictionary without its missing values.
+
+    Parameters:
+        dict_ (dict[str, Any]): The keywords of a label or the columns of an index row.
+
+    Returns:
+        dict[str, Any]: The keywords whose values are not missing in the sense of
+        :func:`_is_null`. In a list some of whose elements are missing, each of them is
+        None: every list in a Cassini label or index row is a sequence whose positions
+        carry meaning, such as the front and back temperatures of OPTICS_TEMPERATURE,
+        the two filters of FILTER_NAME, or the three components of a vector. Each
+        dictionary inside is treated the same way.
+    """
+
+    result = {}
+    for (key, value) in dict_.items():
+        if _is_null(value):
+            continue
+        if isinstance(value, dict):
+            value = _without_nulls(value)
+        elif isinstance(value, list):
+            value = [None if _is_null(item) else item for item in value]
+        result[key] = value
+    return result
+
+
+def _json_form(dict_):
+    """A copy of a parsed PDS3 dictionary with its times as text and sets as lists.
+
+    Parameters:
+        dict_ (dict[str, Any]): A dictionary from ``Pds3Label.as_dict()``, or one of the
+            OBJECT or GROUP dictionaries inside it.
+
+    Returns:
+        dict[str, Any]: The dictionary, with each date, time, or date-time value replaced
+        by the text of its "_fmt" key, each set replaced by the list of its "_list" key,
+        each tuple replaced by a list, and each dictionary inside it converted the same
+        way.
+    """
+
+    result = {}
+    for (key, value) in dict_.items():
+        if isinstance(value, dict):
+            value = _json_form(value)
+        elif isinstance(value, (datetime.date, datetime.time)):     # incl. datetime
+            value = dict_.get(key + '_fmt', value.isoformat())
+        elif isinstance(value, (set, frozenset)):
+            value = dict_.get(key + '_list', sorted(value))
+        elif isinstance(value, tuple):
+            value = list(value)
+        result[key] = value
+    return result
+
+
+def _items(dict_):
+    """A copy of a parsed PDS3 dictionary without the keys the parser adds.
+
+    The PDS3 keywords are upper case. The keys that the parser adds are not: those it
+    derives from a keyword, named by the keyword plus a lower-case suffix, such as
+    "START_TIME_fmt", "DETECTOR_TEMPERATURE_unit" or "^IMAGE_offset", and its "objects"
+    and "groups" lists. They state nothing of their own.
+
+    Parameters:
+        dict_ (dict[str, Any]): The content of a PDS3 label, or an OBJECT or GROUP
+            dictionary inside it.
+
+    Returns:
+        dict[str, Any]: The upper-case keywords of `dict_`, without any whose value is
+        None, such as END. Each dictionary inside is treated the same way.
+    """
+
+    result = {}
+    for (key, value) in dict_.items():
+        if key != key.upper() or value is None:
+            continue
+        result[key] = _items(value) if isinstance(value, dict) else value
+    return result
+
+
+def _label_dict(label_dict):
+    """The content of a parsed PDS3 label, as the `label_dict` subfield gives it.
+
+    This is every keyword of the label's ``as_dict()``, in label order, with each date or
+    time as the text that the label gives it (the parser's "_fmt" form, such as
+    "2005-016T13:01:59.864") and each set as the list of its members in label order, so
+    that the dictionary can be written as JSON. END, any other key whose value is None,
+    and the lower-case keys that the parser adds (see :func:`_items`) are left out.
+
+    Parameters:
+        label_dict (dict[str, Any]): The ``as_dict()`` of the parsed PDS3 label.
+
+    Returns:
+        dict[str, Any]: The label's content.
+    """
+
+    # Consumers write the metadata out as JSON, which takes no datetime or set (#16);
+    # the derived keys are dropped only after the times and sets are read from them
+    return _items(_json_form(label_dict))
+
+
+def _row_items(row_dict, *, masks, fill_values=None):
+    """The metadata of one row of an index table, in Python types.
+
+    Parameters:
+        row_dict (dict[str, Any]): The row, as the index reader gives it: NumPy values
+            and, for each column, a "_mask" entry.
+        masks (bool): True to treat each value that the table's label declares a null
+            constant (its "_mask" entry) as missing.
+        fill_values (dict[str, Any], optional): Further values that are missing, by
+            column name.
+
+    Returns:
+        dict[str, Any]: The row's columns, each value converted to a Python value or, for
+        an array column, a list, and text stripped of its padding. Each missing value,
+        declared by `masks` or `fill_values` or in the sense of :func:`_is_null`, is
+        removed; such an element of an array is None. The "_mask" entries are left out.
+    """
+
+    fill_values = fill_values or {}
+    items = {}
+    for (key, value) in row_dict.items():
+        if key.endswith('_mask') and key[:-5] in row_dict:
+            continue
+        value = np.asarray(value).tolist()
+        mask = np.asarray(row_dict.get(key + '_mask', False)).tolist() if masks else False
+        fill = fill_values.get(key)
+        if isinstance(value, list):
+            if not isinstance(mask, list):
+                mask = [mask] * len(value)
+            value = [None if masked else _index_value(item, fill)
+                     for (item, masked) in zip(value, mask, strict=True)]
+        else:
+            value = None if mask else _index_value(value, fill)
+        items[key] = value
+    return _without_nulls(items)
+
+
+def _index_value(value, fill):
+    """A value of an index row, or None if it is a fill value.
+
+    Parameters:
+        value (Any): The value, or one element of an array column's value, as a Python
+            value.
+        fill (Any): The column's own fill value, or None.
+
+    Returns:
+        Any: None for 1e32 or -1e32, which are missing in every Cassini index, or for
+        `fill`; text stripped of its padding; any other value unchanged.
+    """
+
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and (abs(value) == _INDEX_FILL_BOUND
+                                            or (fill is not None and value == fill)):
+        return None
+    return value
+
+
+# The fill value that every Cassini index writes, positive or negative, for a quantity
+# that was not determined (#28)
+_INDEX_FILL_BOUND = 1.e32
 
 ##########################################################################################

@@ -18,6 +18,7 @@ import julian
 import oops
 import pytest
 import spicedb
+from filecache import FileCache, file_cache_path
 from oops.body import Body
 
 from host_cassini.oops._cassini import _Cassini
@@ -258,7 +259,8 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     Kernel-reading calls are replaced: time conversion uses julian, a SpicePath becomes
     a FixedPath at the origin, and a SpiceFrame becomes an identity Cmatrix on J2000.
     Any attempt to furnish a kernel through cspyce fails the test. The Path and Frame
-    registries are copied so that frames registered by one test never reach another.
+    registries are copied, and the Cmatrix wayframes start empty, so that frames
+    registered by one test never reach another.
     """
 
     fake = FakeSpice()
@@ -302,8 +304,25 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     monkeypatch.setattr(oops.Path, '_PATH_CACHE', dict(oops.Path._PATH_CACHE))
     monkeypatch.setattr(oops.Frame, '_FRAME_REGISTRY', dict(oops.Frame._FRAME_REGISTRY))
     monkeypatch.setattr(oops.Frame, '_FRAME_CACHE', dict(oops.Frame._FRAME_CACHE))
+    # Every fake SPICE frame is the same Cmatrix, so without a pool of its own a test's
+    # frame would share the wayframe, and the evaluation, of one an earlier test made
+    monkeypatch.setattr(oops.frame.Cmatrix, '_WAYFRAMES', {})
     monkeypatch.setattr(Body, 'BODY_REGISTRY', dict(Body.BODY_REGISTRY))
     return fake
+
+
+@pytest.fixture(autouse=True)
+def private_filecache(tmp_path: pathlib.Path,
+                      monkeypatch: pytest.MonkeyPatch) -> FileCache:
+    """Give every test its own file cache, so no test sees what another cached.
+
+    FCPath objects that name no FileCache of their own share one default cache, normally
+    the global one under the system's temporary directory.
+    """
+
+    cache = FileCache(cache_root=tmp_path / 'filecache')
+    monkeypatch.setattr(file_cache_path, '_DEFAULT_FILECACHE', cache)
+    return cache
 
 
 @pytest.fixture(autouse=True)

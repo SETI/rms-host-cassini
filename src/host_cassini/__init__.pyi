@@ -15,7 +15,7 @@ The detectors and support methods that a Host subclass overrides or calls, such 
 """
 
 import pathlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 from filecache import FCPath
@@ -35,16 +35,19 @@ from oops.path import Path
 __all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
 class CassiniISS(Host):
-    # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
-    # Raises FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame`
-    # is given; the message ends with the SPICE error code), HostFormatError (a required
-    # item missing or invalid), PdsHostError, VicarHostError, OSError and WrongHostError.
+    # The runtime names the first parameter `fileinfo`, where Host names it `filepath`,
+    # and `select` must be None, because an image is one observation. Raises
+    # FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame` is
+    # given; the message ends with the SPICE error code), HostFormatError (a required item
+    # missing or invalid), oops.OopsTypeError (an unknown keyword), oops.OopsValueError
+    # (`select` not None), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
         | VicarImage, *,
         fast_distortion: bool | None = True, return_all_planets: bool = False,
-        pds3_options: dict[str, Any] | None = None, astrometry: bool = False,
+        pds3_options: dict[str, Any] | None = None, select: None = None,
+        astrometry: bool = False,
         target: str | Body | None = None, lightsource: LightSource | None = None,
         path: str | Path | None = None, frame: str | Frame | None = None,
         cadence: Cadence | None = None, fov: FOV | None = None,
@@ -74,9 +77,10 @@ class CassiniISS(Host):
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None, **kwargs: Any) -> Iterator[Snapshot]: ...
     @staticmethod
-    def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
-        asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
-        mst_pck: bool = True, irregulars: bool = True) -> None: ...
+    def initialize(*, ck: str = 'reconstructed',
+        planets: int | Sequence[int] | None = None, asof: str | None = None,
+        spk: str = 'reconstructed', gapfill: bool = True, mst_pck: bool = True,
+        irregulars: bool = True) -> None: ...
 
 class CassiniUVIS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`,
@@ -116,9 +120,10 @@ class CassiniUVIS(Host):
         parallel: Observation | None = None,
         **kwargs: Any) -> Iterator[Observation | ObsArray]: ...
     @staticmethod
-    def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
-        asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
-        mst_pck: bool = True, irregulars: bool = True) -> None: ...
+    def initialize(*, ck: str = 'reconstructed',
+        planets: int | Sequence[int] | None = None, asof: str | None = None,
+        spk: str = 'reconstructed', gapfill: bool = True, mst_pck: bool = True,
+        irregulars: bool = True) -> None: ...
 
 class CassiniVIMS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
@@ -161,8 +166,9 @@ class CassiniVIMS(Host):
     def meshgrid_and_times(obs: Observation, *, oversample: float = 6,
         extend: float = 1.5) -> tuple[Meshgrid, Scalar]: ...
     @staticmethod
-    def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
-        asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
-        mst_pck: bool = True, irregulars: bool = True) -> None: ...
+    def initialize(*, ck: str = 'reconstructed',
+        planets: int | Sequence[int] | None = None, asof: str | None = None,
+        spk: str = 'reconstructed', gapfill: bool = True, mst_pck: bool = True,
+        irregulars: bool = True) -> None: ...
 
 ##########################################################################################

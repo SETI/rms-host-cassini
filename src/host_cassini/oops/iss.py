@@ -7,11 +7,9 @@ The :doc:`user guide </user_guide/user_guide>` describes the products it reads, 
 merges the two labels of each product, and the errors it raises.
 """
 
-import datetime
 import re
 
 import numpy as np
-import cspyce
 import julian
 
 from filecache import FCPath
@@ -19,9 +17,11 @@ from pdsparser import Pds3Label
 from vicar     import VicarError, VicarImage, VicarLabel
 
 import oops
-from ._cassini import (_Cassini, _CMATRIX_ROTATION, _drop_unfetched_abspath,
-                       _fix_cassini_ring_target, _index_file_path,
-                       _pds3_options_with_defaults)
+from ._cassini import (_Cassini, _CMATRIX_ROTATION, _fix_cassini_ring_target,
+                       _index_file_path, _is_null, _items,
+                       _known_path, _label_dict, _pds3_options_with_defaults,
+                       _refuse_volume_index, _row_items, _sclk_from_tdb, _tdb_from_sclk,
+                       _without_nulls)
 
 __all__ = ['CassiniISS']
 
@@ -173,27 +173,14 @@ _EARLY_VICAR_INSTRUMENT_NAMES = {
     'ISSWA': 'IMAGING SCIENCE SUBSYSTEM WIDE ANGLE',
 }
 
-# The PDS3 null constants, compared without regard to case or surrounding blanks. A value
-# that is one of these states nothing: the item is missing from that source.
-_PDS3_NULLS = {'UNK', 'N/A', 'NULL'}
-
-# The number that both sources write for a reading that was not made, which counts as
-# missing like a null constant: the back optics temperature of a camera with no back
-# sensor, the COMPRESSION_RATIO of the early cruise headers, and the temperatures of
-# products whose headers were filled with predictions, such as the DETECTOR_TEMPERATURE
-# of -999 degrees C, below absolute zero, in N1640662528_3_CALIB.LBL of
-# calibrated/COISS_2059, whose DESCRIPTION says "Predicted values used to populate
-# header" (#10).
-_FILL_VALUE = -999.
-
-# The fill values of the index tables, besides the PDS3 null constants and -999. The index
-# tables in the metadata tree declare these as null constants, and the image labels give
-# their items as UNK or N/A; the tables in the volumes' index directories write the same
-# values but declare no null constants. The masks that the table reader builds from the
-# declared constants are not used, because those labels also declare 0 the null constant
-# of BIAS_STRIP_MEAN and DARK_STRIP_MEAN, which the image labels give as the value
-# (38,006 rows). 1e32 and -1e32 are missing in every column (#28).
-_INDEX_FILL_BOUND = 1.e32
+# The fill values of the index tables, besides the text that the archive writes for "no
+# value", -999, 1e32 and -1e32 (see _cassini._row_items). The index tables in the
+# metadata tree declare these as null constants, and the image labels give their items
+# as UNK or N/A; the tables in the volumes' index directories write the same values but
+# declare no null constants. The masks that the table reader builds from the declared
+# constants are not used, because those labels also declare 0 the null constant of
+# BIAS_STRIP_MEAN and DARK_STRIP_MEAN, which the image labels give as the value (38,006
+# rows) (#28).
 _INDEX_FILL_VALUES = {
     'COMMAND_SEQUENCE_NUMBER'     : 65534,
     'ELECTRONICS_BIAS'            : 65534,
@@ -225,9 +212,6 @@ _CLOCK_COUNT = re.compile(r'(\d+)(?:\.(\d{0,3}))?')
 # headers give no start count. The next image, N1347928997_3 (2000-09-18), gives both
 # counts correctly (#10, #27).
 _LAST_EARLY_CRUISE_IMAGE = 1343357427
-
-# The NAIF ID of the Cassini spacecraft clock
-_CASSINI_SCLK = -82
 
 # Items without which no Snapshot can be built.
 _REQUIRED_ITEMS = ('START_TIME', 'EXPOSURE_DURATION', 'INSTRUMENT_MODE_ID',
@@ -343,9 +327,10 @@ class CassiniISS(oops.Host):
 
     @staticmethod
     def from_file(fileinfo, *, fast_distortion=True, return_all_planets=False,
-                  pds3_options=None, astrometry=False, target=None, lightsource=None,
-                  path=None, frame=None, cadence=None, fov=None, calibrations=None,
-                  timeshift=None, navigation=None, tracker=None, parallel=None, **kwargs):
+                  pds3_options=None, select=None, astrometry=False, target=None,
+                  lightsource=None, path=None, frame=None, cadence=None, fov=None,
+                  calibrations=None, timeshift=None, navigation=None, tracker=None,
+                  parallel=None, **kwargs):
         """A Snapshot object based on a given Cassini ISS image file.
 
         What is read depends on the input. Given the VICAR image file, only that file is
@@ -356,8 +341,9 @@ class CassiniISS(oops.Host):
         locates.
 
         The metadata comes from whichever of the label and the header were read. An item
-        that a source gives as a PDS3 null value ("UNK", "N/A" or "NULL", in any case) or
-        as the fill value -999 counts as missing from it, and an item missing from every
+        that a source gives as text that the archive writes for no value ("UNK",
+        "UNKNOWN", "N/A", "NULL", "---" or the empty string, in any case) or as the fill
+        value -999 counts as missing from it, and an item missing from every
         source read is left out: its subfield is absent, never None. Where the label and
         the header give different values for an item, the item's fixed source supplies
         it, the same source for every image: the header for MISSION_PHASE_NAME, which
@@ -378,7 +364,9 @@ class CassiniISS(oops.Host):
             fileinfo (str | pathlib.Path | FCPath | Pds3Label | VicarLabel | VicarImage):
                 The path to the VICAR image file or to its detached PDS3 label, or the
                 parsed content of either as a Pds3Label, VicarLabel, or VicarImage, each
-                read as the file it came from.
+                read as the file it came from. Parsed content that came from no file has
+                no file subfields, and a full read of it that needs the image file
+                raises an error.
             fast_distortion (bool | None, optional): True to use a pre-inverted
                 polynomial; False to use a dynamically solved polynomial; None to use a
                 :class:`~oops.fov.FlatFOV`.
@@ -390,6 +378,8 @@ class CassiniISS(oops.Host):
                 misreads is parsed again by each later one of "fast", "strict" and
                 "loose", and a label with a known archive defect is repaired in memory.
                 `repairs` may be a list of (pattern, replacement) pairs or a single pair.
+            select (None, optional): Must be None. An ISS image is a single observation,
+                so there is nothing to select from; any other value raises an error.
             astrometry (bool, optional):
                 True to specify that the returned Observations will only be used for
                 timing and astrometry. In this case, no data arrays are read and returned
@@ -428,17 +418,19 @@ class CassiniISS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments; they are accepted and ignored. This
-                includes `select`.
+            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             Snapshot: The observation, with these subfields inserted:
 
-            * `host`, `instrument`, `detector`, `sampling`, `texp`, `spice_kernels`,
-              `spice_to_frame`, `spice_frame_name`, `spice_frame_id`, `filepath`,
-              `basename` and `image_url`, always.
-            * `abspath`, unless `fileinfo` is a remote PDS3 label read with `astrometry`,
-              whose image file is never retrieved.
+            * `host`, `instrument`, `detector`, `sampling`, `texp`, `time_from_sclk`
+              (always False: the time never comes from a clock count), `spice_kernels`,
+              `spice_to_frame`, `spice_frame_name` and `spice_frame_id`, always.
+            * `filepath`, `basename` and `image_url`, unless `fileinfo` is parsed content
+              that came from no file.
+            * `abspath`, when the image file is local or already in the local cache. A
+              remote PDS3 label read with `astrometry` does not retrieve its image
+              file, so the image has an `abspath` only if an earlier read cached it.
             * `data`, unless `astrometry` is True.
             * `filter`, `filter1` and `filter2`; `gain_mode`; `label_target`;
               `observation_id`; and `spacecraft_clock_start_count` and
@@ -479,12 +471,17 @@ class CassiniISS(oops.Host):
             HostFormatError: If START_TIME, EXPOSURE_DURATION, INSTRUMENT_MODE_ID or
                 INSTRUMENT_NAME is missing from every source read, or START_TIME or
                 INSTRUMENT_MODE_ID is invalid; the message names the item and the image
-                file.
+                file. Also if a full read needs the image file of parsed content that
+                came from no file.
             OopsSpiceError: If no frame override is given and the C kernels hold no
                 pointing for the camera at the midtime of the observation. The message
                 reads "no Cassini ISS NAC pointing at <time> for <image file>: <code>",
                 ending with the SPICE error code, such as "SPICE(CKINSUFFDATA)"; the
                 `spice_code` and `filepath` attributes hold the code and the image file.
+                Also if the spacecraft clock kernel cannot convert the clock counts of an
+                early cruise image.
+            OopsTypeError: If a keyword argument is not one of those listed.
+            OopsValueError: If `select` is not None.
             OSError: If the file cannot be read.
             PdsHostError: If the PDS3 label cannot be parsed, or its ^IMAGE pointer names
                 no file; the message names the label.
@@ -493,6 +490,15 @@ class CassiniISS(oops.Host):
             WrongHostError: If the file, or the parsed content given, is not of a Cassini
                 ISS image.
         """
+
+        # A mistaken keyword, such as "astrometery", must not be dropped silently, and
+        # an argument error is raised before anything is read, as in from_index (#20)
+        if kwargs:
+            raise oops.OopsTypeError(f'unexpected keyword argument for '
+                                     f'CassiniISS.from_file: {next(iter(kwargs))!r}')
+        if select is not None:
+            raise oops.OopsValueError(f'a Cassini ISS image is one observation; select '
+                                      f'must be None, not {select!r}')
 
         CassiniISS.initialize()  # define everything the first time through; use defaults
                                  # unless initialize() was called explicitly.
@@ -506,34 +512,43 @@ class CassiniISS(oops.Host):
         label = None
         header = None
         data = None
-        fetched = True
         if isinstance(fileinfo, Pds3Label):
             label = fileinfo
             if astrometry:
                 # Only the label is read; the image file need not exist
-                filepath = CassiniISS._image_path(label)
-                fetched = filepath.is_local()
+                filepath = (None if _known_path(label.filepath) is None
+                            else CassiniISS._image_path(label))
             else:
                 # The image file is a VICAR file, and its own header, not the label's
                 # ^IMAGE pointer, locates the array. The pointer is one record off in
                 # every calibrated file, where it leaves out the binary header record,
                 # and in the raw files of COISS_1006 whose VICAR label fills one record,
                 # where it points one record past the first line (#6).
-                (filepath, header) = CassiniISS._read_image_of_label(label)
-                data = header.data_2d
+                (filepath, header, image) = CassiniISS._read_image_of_label(label)
+                data = image.data_2d
         else:
+            filepath = _known_path(fileinfo.filepath)
             header = fileinfo
+            if isinstance(fileinfo, VicarImage) and filepath is not None:
+                # rms-vicar writes the reading machine into HOST and BHOST when it reads
+                # the array, so the header is read again as the file writes it
+                header = CassiniISS._read_vicar_label(filepath)
             if not astrometry:
-                if not isinstance(header, VicarImage):
-                    # A VicarImage built from a VicarLabel has no array; re-read the file
-                    header = CassiniISS._read_vicar_image(FCPath(header.filepath))
-                data = header.data_2d
-            filepath = FCPath(fileinfo.filepath)
+                if isinstance(fileinfo, VicarImage):
+                    image = fileinfo
+                elif filepath is None:
+                    raise oops.host.HostFormatError('no file path is known for this '
+                                                    'Cassini ISS VICAR header, so its '
+                                                    'image array cannot be read')
+                else:
+                    # A VicarLabel holds no array; the file is read in full
+                    image = CassiniISS._read_vicar_image(filepath)
+                data = image.data_2d
 
-        label_dict = None if label is None else CassiniISS._label_dict(label)
+        label_dict = None if label is None else _label_dict(label.as_dict())
         header_dict = None if header is None else CassiniISS._header_dict(header)
         dict_ = CassiniISS._early_cruise_counts(
-            CassiniISS._merged_dict(label_dict, header_dict))
+            CassiniISS._merged_dict(label_dict, header_dict), filepath)
 
         overrides = {
             'target'      : target,
@@ -546,7 +561,7 @@ class CassiniISS(oops.Host):
             'timeshift'   : timeshift,
             'navigation'  : navigation,
             'tracker'     : tracker,
-            'parallel'    : parallel,
+            '/seti/newnav/capped-run.sh parallel'    : parallel,
         }
 
         snapshot = CassiniISS._make_snapshot(dict_, filepath=filepath, data=data,
@@ -557,10 +572,6 @@ class CassiniISS(oops.Host):
             snapshot.insert_subfield('label_dict', label_dict)
         if header_dict is not None:
             snapshot.insert_subfield('header_dict', header_dict)
-        if not fetched:
-            # The image file of a remote label was never retrieved, so the local cache
-            # path that names it holds nothing (#13)
-            snapshot.delete_subfield('abspath')
         return snapshot
 
     @staticmethod
@@ -651,12 +662,11 @@ class CassiniISS(oops.Host):
             inserted; `abspath` when the image file is local or has already been fetched;
             and `filter`, `filter1`, `filter2`, `gain_mode`, `label_target`,
             `observation_id`, `spacecraft_clock_start_count` and
-            `spacecraft_clock_stop_count` where the row gives their columns. `filepath`
-            and `image_url` are the full path or URL of the row's image file: its
-            FILE_SPECIFICATION_NAME within its volume, whose root is the directory above
-            an "index" directory holding the index, the volume named by VOLUME_ID in the
-            "volumes" tree beside a "metadata" tree holding it, or otherwise the index's
-            own directory.
+            `spacecraft_clock_stop_count` where the row gives their columns; and
+            `time_from_sclk`, always False. `filepath` and `image_url` are the full path
+            or URL of the row's image file: its FILE_SPECIFICATION_NAME within the
+            volume named by VOLUME_ID, which is in the "volumes" tree beside a "metadata"
+            tree holding the index, or otherwise in the index's own directory.
 
             `dict` is the row in Python types (a list for an array column), with its
             text stripped of padding and without the table's "_mask" entries. The
@@ -666,24 +676,33 @@ class CassiniISS(oops.Host):
             or NULL; the fill values -999, 1e32 and -1e32; 65534 and -2147483648 in the
             columns whose labels give UNK or N/A for them; and an EMISSION_ANGLE,
             INCIDENCE_ANGLE, CENTER_LATITUDE or CENTER_LONGITUDE of 0, written for an
-            image with no target geometry. A
-            missing element of an array column is None. The clock counts are spelled
-            as the labels spell them, with three digits after the point, where the
-            tables drop trailing zeros. Those of an early cruise image are computed as
-            :meth:`from_file` describes. The pointing is not checked, and every
-            filtered row gives an observation.
+            image with no target geometry. A missing element of an array column is
+            None. The clock counts are spelled as the labels spell them, with three
+            digits after the point, where the tables drop trailing zeros. Those of an
+            early cruise image are computed as :meth:`from_file` describes.
+
+            The pointing is not checked, and every filtered row gives an observation.
+            Where the C kernels cannot supply the camera's pointing at the midtime of
+            an observation, its frame raises :exc:`oops.OopsSpiceError` when it is
+            used.
 
         Raises:
             FileNotFoundError: If `supplement` names a file that does not exist.
             HostFormatError: If a row lacks START_TIME, EXPOSURE_DURATION,
                 INSTRUMENT_MODE_ID or INSTRUMENT_NAME, or gives an invalid START_TIME or
                 INSTRUMENT_MODE_ID; raised when the iteration reaches that row.
-            HostIndexError: If the supplement does not list the same files as the index,
-                or, where the two tables list the files in different orders, either lists
-                a file twice.
+            HostIndexError: If `filepath` is a volume's own index, in its "index"
+                directory, rather than a metadata index; if the index or the supplement
+                cannot be read as an index table; if the supplement does not list the
+                same files as the index, or, where the two tables list the files in
+                different orders, either lists a file twice; or if `filter` names a
+                column that the index does not have.
+            OopsSpiceError: If the spacecraft clock kernel cannot convert the clock counts
+                of an early cruise image; raised when the iteration reaches that row.
             OopsTypeError: If a keyword argument is not one of those listed.
             OopsValueError: If `select` is not None.
-            PdsHostError: If the PDS3 label cannot be parsed.
+            PdsHostError: If the PDS3 label of the index or the supplement cannot be
+                parsed.
             OSError: If `filepath` cannot be read.
             WrongHostError: If `filepath` is not a Cassini ISS index file.
         """
@@ -696,6 +715,8 @@ class CassiniISS(oops.Host):
             raise oops.OopsValueError(f'each row of a Cassini ISS index is one '
                                       f'observation; select must be None, not '
                                       f'{select!r}')
+
+        _refuse_volume_index(filepath, CassiniISS.NAME, 'COISS_2001_index.lbl')
 
         CassiniISS.initialize()
 
@@ -727,13 +748,14 @@ class CassiniISS(oops.Host):
         def snapshots():
             for row_dict in row_dicts:
                 fpath = _index_file_path(filepath, row_dict)
-                items = CassiniISS._early_cruise_counts(CassiniISS._row_items(row_dict))
+                items = CassiniISS._early_cruise_counts(CassiniISS._row_items(row_dict),
+                                                        fpath)
                 obs = CassiniISS._make_snapshot(items, filepath=fpath, data=None,
                                                 fast_distortion=fast_distortion,
                                                 return_all_planets=return_all_planets,
                                                 overrides=overrides,
                                                 check_pointing=False)
-                yield _drop_unfetched_abspath(obs, fpath)
+                yield obs
 
         return snapshots()
 
@@ -818,7 +840,20 @@ class CassiniISS(oops.Host):
             'calibrations': [],         # TBD
         }
 
-        # Apply standard overrides
+        # An index row's pointing is not checked, but a camera frame that the C kernels
+        # cannot supply raises OopsSpiceError when it is used, not a cspyce error; at the
+        # midtime of the observation, after any cadence override
+        if using_cks and not check_pointing:
+            midtime = (overrides['cadence'] or params['cadence']).midtime
+            checked = oops.Host._check_spice_frame(
+                'CASSINI_ISS_' + camera + '_FLIPPED', midtime,
+                description=f'no Cassini ISS {camera} pointing', filepath=filepath,
+                defer=True)
+            if isinstance(checked, oops.frame.SpiceErrorFrame):
+                params['frame'] = checked
+
+        # Apply standard overrides. Parsed content from no file has no file subfields,
+        # and `abspath` is given only when the file is on the local disk.
         oops.Host._apply_overrides(params, filepath, **overrides)
 
         obs = oops.observation.Snapshot(('v','u'), **params)
@@ -882,13 +917,9 @@ class CassiniISS(oops.Host):
         """
 
         # The SPICE frame, which the C kernels define; the camera frame is fixed to it
-        frame = oops.Frame.as_frame('CASSINI_ISS_' + camera + '_FLIPPED')
-        try:
-            frame.transform_at_time(time)
-        except (LookupError, OSError, RuntimeError, ValueError) as err:
-            raise oops.OopsSpiceError.from_spice_error(
-                err, description=f'no Cassini ISS {camera} pointing', time=time,
-                filepath=filepath) from err
+        oops.Host._check_spice_frame('CASSINI_ISS_' + camera + '_FLIPPED', time,
+                                     description=f'no Cassini ISS {camera} pointing',
+                                     filepath=filepath)
 
     @staticmethod
     def _get_subfields(dict_):
@@ -940,9 +971,10 @@ class CassiniISS(oops.Host):
                 params['gain_mode'] = gain_mode
                 break
 
-        # Other parameters
+        # Other parameters; the time is never taken from a clock count
         params['host'] = 'Cassini'
         params['instrument'] = 'ISS'
+        params['time_from_sclk'] = False
         params['detector'] = 'WAC' if 'WIDE' in dict_['INSTRUMENT_NAME'] else 'NAC'
         params['texp'] = dict_['EXPOSURE_DURATION'] / 1000.
         params['sampling'] = dict_['INSTRUMENT_MODE_ID']  # "FULL", "SUM2", or "SUM4"
@@ -957,7 +989,7 @@ class CassiniISS(oops.Host):
         """The path to the image file that a detached PDS3 label describes.
 
         Parameters:
-            label (Pds3Label): The parsed PDS3 label of an ISS image.
+            label (Pds3Label): The parsed PDS3 label of an ISS image, read from a file.
 
         Returns:
             FCPath: The file named by the label's ^IMAGE pointer, in the label's
@@ -981,32 +1013,36 @@ class CassiniISS(oops.Host):
             label (Pds3Label): The parsed PDS3 label of an ISS image.
 
         Returns:
-            tuple[FCPath, VicarImage]: The path to the image file and its content. The
-            file is the one named by the label's ^IMAGE pointer, in the label's directory;
-            if no file of that name exists, the same name in upper or lower case is used
-            if that exists.
+            tuple[FCPath, VicarLabel, VicarImage]: The path to the image file, its VICAR
+            header as the file writes it, and its content. The file is the one named by
+            the label's ^IMAGE pointer, in the label's directory; if no file of that name
+            exists, the same name in upper or lower case is used if that exists.
 
         Raises:
             FileNotFoundError: If no image file of any of these names exists.
+            HostFormatError: If the label was not read from a file, so that no image file
+                can be found.
             PdsHostError: If the label's ^IMAGE pointer names no file.
             VicarHostError: If the image file's VICAR header cannot be parsed.
         """
+
+        if _known_path(label.filepath) is None:
+            raise oops.host.HostFormatError('no file path is known for this Cassini ISS '
+                                            'PDS3 label, so its image file cannot be '
+                                            'found')
 
         # A copy of the archive may have renamed its files to the other case (#14)
         filepath = CassiniISS._image_path(label)
         alternatives = dict.fromkeys((filepath.name.upper(), filepath.name.lower()))
         alternatives.pop(filepath.name, None)
-        try:
-            return (filepath, CassiniISS._read_vicar_image(filepath))
-        except FileNotFoundError as err:
-            error = err
-
-        for name in alternatives:
-            path = filepath.with_name(name)
+        error = None
+        for path in [filepath] + [filepath.with_name(name) for name in alternatives]:
             try:
-                return (path, CassiniISS._read_vicar_image(path))
-            except FileNotFoundError:
+                image = CassiniISS._read_vicar_image(path)
+            except FileNotFoundError as err:
+                error = error or err        # the error for the name the label gives
                 continue
+            return (path, CassiniISS._read_vicar_label(path), image)
 
         raise error
 
@@ -1018,7 +1054,9 @@ class CassiniISS(oops.Host):
             filepath (FCPath): The path to the image file.
 
         Returns:
-            VicarImage: The image array and header.
+            VicarImage: The image array and header. rms-vicar writes the reading machine
+            into the header's HOST and BHOST; :meth:`_read_vicar_label` gives the header
+            as the file writes it.
 
         Raises:
             FileNotFoundError: If the file does not exist.
@@ -1030,6 +1068,26 @@ class CassiniISS(oops.Host):
         # reshape fail with a ValueError (#18)
         try:
             return VicarImage(filepath, strict=False)
+        except (VicarError, ValueError) as err:
+            raise oops.host.VicarHostError(f'{err} in {filepath}') from err
+
+    @staticmethod
+    def _read_vicar_label(filepath):
+        """The VICAR header of an image file, as the file writes it.
+
+        Parameters:
+            filepath (FCPath): The path to the image file.
+
+        Returns:
+            VicarLabel: The header.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            VicarHostError: If the VICAR header cannot be parsed.
+        """
+
+        try:
+            return VicarLabel(filepath, strict=False)
         except (VicarError, ValueError) as err:
             raise oops.host.VicarHostError(f'{err} in {filepath}') from err
 
@@ -1142,53 +1200,6 @@ class CassiniISS(oops.Host):
         raise oops.host.PdsHostError(f'{error} in {fileinfo}') from error
 
     @staticmethod
-    def _label_dict(label):
-        """The content of a parsed PDS3 label, as the `label_dict` subfield gives it.
-
-        This is every keyword of the label's ``as_dict()``, in label order, with each
-        date or time as the text that the label gives it (the parser's "_fmt" form, such
-        as "2005-016T13:01:59.864") and each set as the list of its members in label
-        order, so that the dictionary can be written as JSON. END, any other key whose
-        value is None, and the lower-case keys that the parser adds (see :meth:`_items`)
-        are left out.
-
-        Parameters:
-            label (Pds3Label): The parsed PDS3 label.
-
-        Returns:
-            dict[str, Any]: The label's content.
-        """
-
-        # Consumers write the metadata out as JSON, which takes no datetime or set (#16);
-        # the derived keys are dropped only after the times and sets are read from them
-        return CassiniISS._items(CassiniISS._json_form(label.as_dict()))
-
-    @staticmethod
-    def _json_form(dict_):
-        """A copy of a parsed PDS3 dictionary with its times as text and sets as lists.
-
-        Parameters:
-            dict_ (dict[str, Any]): A dictionary from ``Pds3Label.as_dict()``, or one of
-                the OBJECT or GROUP dictionaries inside it.
-
-        Returns:
-            dict[str, Any]: The dictionary, with each date, time, or date-time value
-            replaced by the text of its "_fmt" key, each set replaced by the list of its
-            "_list" key, and each dictionary inside it converted the same way.
-        """
-
-        result = {}
-        for (key, value) in dict_.items():
-            if isinstance(value, dict):
-                value = CassiniISS._json_form(value)
-            elif isinstance(value, (datetime.date, datetime.time)):  # incl. datetime
-                value = dict_[key + '_fmt']
-            elif isinstance(value, (set, frozenset)):
-                value = dict_[key + '_list']
-            result[key] = value
-        return result
-
-    @staticmethod
     def _header_dict(header):
         """The content of a VICAR header, as the `header_dict` subfield gives it.
 
@@ -1213,12 +1224,13 @@ class CassiniISS(oops.Host):
     def _merged_dict(label_dict, header_dict):
         """The metadata of an image, merged from its PDS3 label and its VICAR header.
 
-        The keys that the label parser derives from a keyword (see :meth:`_items`) are
-        left out of the label's keywords. The header's keywords are given their PDS3
-        names and forms (see :meth:`_pds3_dict_from_vicar`). Missing values are removed
-        from both (see :meth:`_without_nulls`). An item that only one source gives takes
-        that source's value. An item that both give takes the value of its source in
-        `_RESOLUTION_RULES`, the label for every item not listed there. The label's
+        The keys that the label parser derives from a keyword (see `_items` in
+        _cassini.py) are left out of the label's keywords. The header's keywords are
+        given their PDS3 names and forms (see :meth:`_pds3_dict_from_vicar`). Missing
+        values are removed from both (see `_without_nulls` in _cassini.py). An item that
+        only one source gives takes that source's value. An item that both give takes the
+        value of its source in `_RESOLUTION_RULES`, the label for every item not listed
+        there. The label's
         keywords come first, in label order, then the header's other keywords, in header
         order.
 
@@ -1234,11 +1246,10 @@ class CassiniISS(oops.Host):
 
         label = {}
         if label_dict is not None:
-            label = CassiniISS._without_nulls(CassiniISS._items(label_dict))
+            label = _without_nulls(_items(label_dict))
         header = {}
         if header_dict is not None:
-            header = CassiniISS._without_nulls(
-                CassiniISS._pds3_dict_from_vicar(header_dict))
+            header = _without_nulls(CassiniISS._pds3_dict_from_vicar(header_dict))
 
         merged = {}
         for (key, value) in label.items():
@@ -1251,60 +1262,22 @@ class CassiniISS(oops.Host):
         return merged
 
     @staticmethod
-    def _items(dict_):
-        """A copy of a parsed PDS3 dictionary without the keys the parser adds.
-
-        The PDS3 keywords are upper case. The keys that the parser adds are not: those it
-        derives from a keyword, named by the keyword plus a lower-case suffix, such as
-        "START_TIME_fmt", "DETECTOR_TEMPERATURE_unit" or "^IMAGE_offset", and its
-        "objects" and "groups" lists. They state nothing of their own, and the VICAR
-        header has none.
-
-        Parameters:
-            dict_ (dict[str, Any]): The content of a PDS3 label, or an OBJECT or GROUP
-                dictionary inside it.
-
-        Returns:
-            dict[str, Any]: The upper-case keywords of `dict_`, without any whose value
-            is None, such as END. Each dictionary inside is treated the same way.
-        """
-
-        result = {}
-        for (key, value) in dict_.items():
-            if key != key.upper() or value is None:
-                continue
-            result[key] = CassiniISS._items(value) if isinstance(value, dict) else value
-        return result
-
-    @staticmethod
     def _row_items(row_dict):
-        """The metadata of one row of an index table, in Python types.
+        """The metadata of one row of an ISS index table, in Python types.
 
         Parameters:
             row_dict (dict[str, Any]): The row, as the index reader gives it: NumPy values
                 and, for each column, a "_mask" entry.
 
         Returns:
-            dict[str, Any]: The row's columns, each value converted to a Python value or,
-            for an array column, a list, and text stripped of its padding. A fill value
-            of the index tables (see `_INDEX_FILL_VALUES`) and every missing value in the
-            sense of :meth:`_without_nulls` is removed; such an element of an array is
-            None. The clock counts are given three digits after the point. The "_mask"
-            entries are left out and the masks are not applied.
+            dict[str, Any]: The row's columns as `_row_items` in _cassini.py gives them
+            without the table's masks, with the fill values of `_INDEX_FILL_VALUES` also
+            missing. The clock counts are given three digits after the point.
         """
 
         # The masks are not applied, because the metadata index labels declare real
         # values as null constants (see _INDEX_FILL_VALUES)
-        items = {}
-        for (key, value) in row_dict.items():
-            if key.endswith('_mask') and key[:-5] in row_dict:
-                continue
-            value = np.asarray(value).tolist()
-            if isinstance(value, list):
-                value = [CassiniISS._index_value(key, item) for item in value]
-            else:
-                value = CassiniISS._index_value(key, value)
-            items[key] = value
+        items = _row_items(row_dict, masks=False, fill_values=_INDEX_FILL_VALUES)
 
         # The tables drop a count's trailing zeros, which also changes the number of
         # clock ticks it reads as: "1473199010.12" for the label's "1473199010.120"
@@ -1314,41 +1287,17 @@ class CassiniISS(oops.Host):
             if match:
                 items[key] = f'{match[1]}.{(match[2] or "").ljust(3, "0")}'
 
-        return CassiniISS._without_nulls(items)
+        return items
 
     @staticmethod
-    def _index_value(key, value):
-        """A value of an index row, or None if it is one of the tables' fill values.
-
-        Parameters:
-            key (str): The column name.
-            value (Any): The value, or one element of an array column's value, as a
-                Python value.
-
-        Returns:
-            Any: None for 1e32 or -1e32, or for the fill value of the column in
-            `_INDEX_FILL_VALUES`; text stripped of its padding; any other value
-            unchanged.
-        """
-
-        if isinstance(value, str):
-            return value.strip()
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)) and (abs(value) == _INDEX_FILL_BOUND
-                                                or value == _INDEX_FILL_VALUES.get(key)):
-            return None
-        return value
-
-    @staticmethod
-    def _early_cruise_counts(dict_):
+    def _early_cruise_counts(dict_, filepath):
         """The metadata of an image with the clock counts of an early cruise image fixed.
 
         The labels of the early cruise images give a start count that is the stop count
         less the exposure in milliseconds counted as seconds, and their headers give no
         start count. The ISS index tables of COISS_1001 in the volumes' index directories
         give the image number as the start count, and as the stop count the image number
-        less the exposure in centiseconds counted as seconds. For an image whose
+        less the exposure in tenths of a second counted as seconds. For an image whose
         IMAGE_NUMBER is no later than that of the last early cruise image, the stop count
         is its IMAGE_NUMBER, the whole seconds of the clock at the shutter's close, with
         zero ticks, as the labels give it; the start count is the clock count that the
@@ -1358,9 +1307,13 @@ class CassiniISS(oops.Host):
         Parameters:
             dict_ (dict[str, Any]): The metadata, without missing values; modified in
                 place.
+            filepath (FCPath | None): The image file, named in an error.
 
         Returns:
             dict[str, Any]: `dict_`.
+
+        Raises:
+            OopsSpiceError: If the spacecraft clock kernel cannot convert the counts.
         """
 
         number = dict_.get('IMAGE_NUMBER')
@@ -1375,61 +1328,9 @@ class CassiniISS(oops.Host):
             dict_.pop('SPACECRAFT_CLOCK_START_COUNT', None)
             return dict_
 
-        tdb = cspyce.scs2e(_CASSINI_SCLK, stop) - dict_['EXPOSURE_DURATION'] / 1000.
-        start = cspyce.sce2s(_CASSINI_SCLK, tdb)
-        dict_['SPACECRAFT_CLOCK_START_COUNT'] = start.rpartition('/')[2]
+        tdb = _tdb_from_sclk(stop, filepath) - dict_['EXPOSURE_DURATION'] / 1000.
+        dict_['SPACECRAFT_CLOCK_START_COUNT'] = _sclk_from_tdb(tdb, filepath)
         return dict_
-
-    @staticmethod
-    def _without_nulls(dict_):
-        """A copy of a dictionary without its missing values.
-
-        Parameters:
-            dict_ (dict[str, Any]): The keywords of a label.
-
-        Returns:
-            dict[str, Any]: The keywords whose values are not missing in the sense of
-            :meth:`_is_null`. In a list some of whose elements are missing, each of them
-            is None: every list in an ISS label is a sequence whose positions carry
-            meaning, such as the front and back temperatures of OPTICS_TEMPERATURE or the
-            two filters of FILTER_NAME. Each dictionary inside is treated the same way.
-        """
-
-        result = {}
-        for (key, value) in dict_.items():
-            if CassiniISS._is_null(value):
-                continue
-            if isinstance(value, dict):
-                value = CassiniISS._without_nulls(value)
-            elif isinstance(value, list):
-                value = [None if CassiniISS._is_null(item) else item for item in value]
-            result[key] = value
-        return result
-
-    @staticmethod
-    def _is_null(value):
-        """True if a value states nothing.
-
-        Parameters:
-            value (Any): The value of a keyword.
-
-        Returns:
-            bool: True if `value` is None; a PDS3 null constant, "UNK", "N/A" or "NULL",
-            in any case and with any surrounding blanks; the fill value -999; or a
-            non-empty list, tuple or set of nothing but these.
-        """
-
-        if value is None:
-            return True
-        if isinstance(value, str):
-            return value.strip().upper() in _PDS3_NULLS
-        if isinstance(value, bool):
-            return False
-        if isinstance(value, (int, float)):
-            return value == _FILL_VALUE
-        if isinstance(value, (list, tuple, set, frozenset)) and len(value) > 0:
-            return all(CassiniISS._is_null(item) for item in value)
-        return False
 
     @staticmethod
     def _pds3_dict_from_vicar(dict_):
@@ -1496,7 +1397,7 @@ class CassiniISS(oops.Host):
 
         # The image number is the whole seconds of the clock count at the shutter's
         # close, which the labels of these images give with zero ticks
-        if 'IMAGE_NUMBER' in pds3 and not CassiniISS._is_null(pds3['IMAGE_NUMBER']):
+        if 'IMAGE_NUMBER' in pds3 and not _is_null(pds3['IMAGE_NUMBER']):
             pds3['SPACECRAFT_CLOCK_STOP_COUNT'] = f'{pds3["IMAGE_NUMBER"]}.000'
         return pds3
 
@@ -1550,6 +1451,31 @@ class CassiniISS(oops.Host):
                     and label.get('INSTRUMENT_ID', '').startswith('ISS')))
 
     @staticmethod
+    def _detect_in_file(filepath):
+        """True if a file is the PDS3 label of an ISS image that only this host can read.
+
+        :meth:`oops.Host.from_file <oops.host.host_.Host.from_file>` asks this when no
+        PDS3 parser reads a label as it is, as for the calibrated labels whose
+        DESCRIPTION this host repairs in memory (#11).
+
+        Parameters:
+            filepath (str | pathlib.Path | FCPath): The path to the file.
+
+        Returns:
+            bool: True if the file is a PDS3 label that :meth:`from_file` reads, with its
+            repairs, as the label of a Cassini ISS image.
+        """
+
+        if FCPath(filepath).suffix.lower() != '.lbl':
+            return False
+        try:
+            label = CassiniISS._parse_fileinfo(
+                filepath, astrometry=True, pds3_options=_pds3_options_with_defaults(None))
+        except (oops.host.HostError, oops.OopsValueError, OSError):
+            return False
+        return isinstance(label, Pds3Label) and CassiniISS._detect_in_pds3(label)
+
+    @staticmethod
     def _detect_in_index(label):
         """Whether the given index label describes Cassini ISS data.
 
@@ -1593,8 +1519,10 @@ class CassiniISS(oops.Host):
                 'predicted' (case-insensitive); 'none' to load no C kernels automatically,
                 leaving their handling to the caller. 'reconstructed' also loads the
                 reconstructed C kernels of the Jupiter flyby.
-            planets (list, optional): A list of planets to pass to
-                :meth:`~oops.Body.define_solar_system`. None or 0 means all.
+            planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
+                sequence of such numbers, whose systems
+                :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
+                nine.
             asof (str, optional): Only use SPICE kernels that existed before this date;
                 None to ignore.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or

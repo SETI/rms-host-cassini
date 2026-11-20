@@ -3,10 +3,13 @@
 ##########################################################################################
 """Tests for the Cassini VIMS host, host_cassini.oops.vims."""
 
+import json
 import pathlib
 import re
+from collections.abc import Callable
 from typing import Any
 
+import cspyce
 from filecache import FCPath
 import julian
 import numpy as np
@@ -128,6 +131,14 @@ def write_isis_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 3
 
 
 Observations = tuple[oops.Observation, oops.Observation]
+
+
+def row_label(row: dict[str, Any]) -> dict[str, Any]:
+    """The label that the VIMS host builds from an index row."""
+
+    label: dict[str, Any] = CassiniVIMS._label_from_index_row(
+        row, FCPath('v0000000001_1.qub'))
+    return label
 
 
 def index_row(**changes: Any) -> dict[str, Any]:
@@ -269,7 +280,7 @@ def test_image_times(image_pair: Observations) -> None:
 def test_image_label_has_fmt_content(image_pair: Observations) -> None:
     qube = image_pair[0].dict['SPECTRAL_QUBE']
     assert qube['CORE_NAME'] == 'RAW DATA NUMBER'
-    assert image_pair[0].dict['QUBE'] is qube
+    assert image_pair[0].dict['QUBE'] == qube
 
 
 def test_from_file_leaves_parsed_label_unchanged(tmp_path: pathlib.Path) -> None:
@@ -427,7 +438,7 @@ def test_from_index_rejects_an_unknown_keyword() -> None:
     ('SAMPLING_MODE_ID', ('NORMAL', 'NORMAL')),
 ])
 def test_label_from_index_row_pairs_channels(key: str, expected: tuple[Any, Any]) -> None:
-    assert CassiniVIMS._label_from_index_row(index_row())[key] == expected
+    assert row_label(index_row())[key] == expected
 
 
 def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) -> None:
@@ -453,7 +464,7 @@ def test_from_index_pairs_a_supplement_in_another_order(tmp_path: pathlib.Path) 
 
 
 def test_label_from_index_row_core_items() -> None:
-    label = CassiniVIMS._label_from_index_row(index_row())
+    label = row_label(index_row())
     assert label['SPECTRAL_QUBE']['CORE_ITEMS'] == (4, 352, 2)
     assert label['QUBE'] is label['SPECTRAL_QUBE']
 
@@ -465,19 +476,19 @@ def test_label_from_index_row_core_items() -> None:
 def test_label_from_index_row_full_buffer(mode: str,
                                           core_items: tuple[int, int, int]) -> None:
     row = index_row(INSTRUMENT_MODE_ID=mode, SWATH_WIDTH=1, SWATH_LENGTH=1)
-    assert CassiniVIMS._label_from_index_row(row)['QUBE']['CORE_ITEMS'] == core_items
+    assert row_label(row)['QUBE']['CORE_ITEMS'] == core_items
 
 
 def test_label_from_index_row_uses_core_columns() -> None:
     row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
                     CORE_SAMPLES=1, CORE_BANDS=352, CORE_LINES=24)
-    assert CassiniVIMS._label_from_index_row(row)['QUBE']['CORE_ITEMS'] == (1, 352, 24)
+    assert row_label(row)['QUBE']['CORE_ITEMS'] == (1, 352, 24)
 
 
 def test_label_from_index_row_uses_exposure_columns() -> None:
     row = index_row(IR_EXPOSURE=-999., IR_EXPOSURE_DURATION=160.,
                     VIS_EXPOSURE_DURATION=1000.)
-    label = CassiniVIMS._label_from_index_row(row)
+    label = row_label(row)
     assert label['EXPOSURE_DURATION'] == (160., 1000.)
     assert label['POWER_STATE_FLAG'] == ('ON', 'ON')
 
@@ -499,7 +510,7 @@ def test_from_index_blank_backplane_sclk_uses_start_time() -> None:
 
 def test_label_from_index_row_leaves_row_unchanged() -> None:
     row = index_row()
-    CassiniVIMS._label_from_index_row(row)
+    row_label(row)
     assert row == index_row()
 
 
@@ -774,5 +785,177 @@ def test_meshgrid_and_times_rejects_other_instruments(image_pair: Observations) 
     obs.insert_subfield('instrument', 'ISS')
     with pytest.raises(WrongHostError, match='not a VIMS observation: ISS'):
         CassiniVIMS.meshgrid_and_times(obs)
+
+##########################################################################################
+# The rules that every host follows
+##########################################################################################
+
+
+def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(oops.OopsTypeError, match=r"CassiniVIMS\.from_file: 'selection'"):
+        CassiniVIMS.from_file(write_pds3_cube(tmp_path), selection='IR')
+
+
+@pytest.mark.parametrize(('select', 'error'), [('UV', oops.OopsValueError),
+                                               (1.5, oops.OopsTypeError)])
+def test_from_file_checks_select_before_reading(tmp_path: pathlib.Path, select: Any,
+                                                error: type[Exception]) -> None:
+    with pytest.raises(error, match='select'):
+        CassiniVIMS.from_file(tmp_path / 'missing.lbl', select=select)
+
+
+@pytest.mark.parametrize(('select', 'error'), [('BOGUS', oops.OopsValueError),
+                                               (1.5, oops.OopsTypeError)])
+def test_from_index_checks_select_when_called(select: Any,
+                                              error: type[Exception]) -> None:
+    with pytest.raises(error, match='select'):
+        CassiniVIMS.from_index('INDEX.LBL', row_dicts=[], select=select)
+
+
+def test_from_index_builds_each_row_when_reached(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[Any] = []
+    make_observations = CassiniVIMS._make_observations
+
+    def spy(label: dict[str, Any], filepath: Any, **kwargs: Any) -> Any:
+        built.append(filepath)
+        return make_observations(label, filepath, **kwargs)
+
+    monkeypatch.setattr(CassiniVIMS, '_make_observations', spy)
+    rows = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row(), index_row()])
+    assert built == []
+    next(rows)
+    assert len(built) == 1
+
+
+@pytest.mark.parametrize(('column', 'value', 'masked'), [
+    ('PHASE_ANGLE', np.float64(-1.e32), True),
+    ('INSTRUMENT_DATA_RATE', np.float64(-999.), False),
+    ('TELEMETRY_FORMAT_ID', np.str_('UNK'), False),
+], ids=['masked', 'fill', 'null-text'])
+def test_from_index_leaves_out_missing_values(column: str, value: Any,
+                                              masked: bool) -> None:
+    row = index_row(**{column: value, column + '_mask': np.bool_(masked)})
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert column not in ir.dict
+
+
+def test_from_index_dict_is_json_without_masks() -> None:
+    row = index_row(SWATH_WIDTH=np.int64(4), TARGET_NAME=np.str_('SATURN  '),
+                    SWATH_WIDTH_mask=np.False_)
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert json.loads(json.dumps(ir.dict, allow_nan=False)) == ir.dict
+    assert not any(key.endswith('_mask') for key in ir.dict)
+    assert ir.dict['TARGET_NAME'] == 'SATURN'
+
+
+@pytest.mark.parametrize(('write', 'name'), [(write_pds3_cube, 'label_dict'),
+                                             (write_isis_cube, 'header_dict')],
+                         ids=['label', 'cube'])
+def test_from_file_keeps_the_label_read(tmp_path: pathlib.Path,
+                                        write: Callable[..., pathlib.Path],
+                                        name: str) -> None:
+    """The detached label is label_dict, and the cube's own ISIS label header_dict."""
+
+    (_, ir) = CassiniVIMS.from_file(write(tmp_path, TARGET_NAME='UNK'))
+    raw = getattr(ir, name)
+    keywords = raw if name == 'label_dict' else raw['QUBE']
+    assert keywords['TARGET_NAME'] == 'UNK'
+    assert 'TARGET_NAME' not in ir.dict
+    assert json.loads(json.dumps(raw, allow_nan=False)) == raw
+
+
+def test_from_file_dict_is_json(image_pair: Observations) -> None:
+    value = image_pair[1].dict
+    assert json.loads(json.dumps(value, allow_nan=False)) == value
+
+
+def test_from_file_clock_counts(tmp_path: pathlib.Path) -> None:
+    (_, ir) = CassiniVIMS.from_file(write_pds3_cube(
+        tmp_path, SPACECRAFT_CLOCK_START_COUNT='1/1640775127.032',
+        SPACECRAFT_CLOCK_STOP_COUNT='1/1640775211.002'))
+    assert ir.spacecraft_clock_start_count == '1/1640775127.032'
+    assert ir.spacecraft_clock_stop_count == '1/1640775211.002'
+
+
+def test_from_file_time_is_not_from_the_clock(image_pair: Observations) -> None:
+    assert image_pair[1].time_from_sclk is False
+
+
+def test_from_index_backplane_count_gives_the_time() -> None:
+    row = index_row(BACKPLANE_SCLK_START_COUNT='157766400.000')
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    assert ir.time_from_sclk is True
+
+
+def test_from_index_backplane_count_error_is_a_spice_error(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*args: Any) -> None:
+        raise ValueError('SPICE(INVALIDSCLKSTRING) -- bad clock count')
+
+    monkeypatch.setattr(cspyce, 'scs2e', fail)
+    rows = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row(
+        BACKPLANE_SCLK_START_COUNT='157766400.000')])
+    with pytest.raises(oops.OopsSpiceError, match=r'SPICE\(INVALIDSCLKSTRING\)$'):
+        next(rows)
+
+
+def test_from_index_refuses_a_volumes_own_index(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(oops.host.HostIndexError,
+                       match='reads the Ring-Moon Systems Node metadata index'):
+        CassiniVIMS.from_index(tmp_path / 'COVIMS_0001' / 'index' / 'index.lbl')
+
+
+def remove_ir_pointing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the SPICE frames of VIMS raise as cspyce does with no C kernel data."""
+
+    def no_pointing(time: float, *args: Any, **kwargs: Any) -> None:
+        raise OSError('SPICE(CKINSUFFDATA) -- insufficient C kernel data')
+
+    CassiniVIMS._define_frames()
+    frame = oops.Frame.as_frame('CASSINI_VIMS_V')
+    monkeypatch.setattr(frame, 'transform_at_time', no_pointing)
+
+
+def test_from_file_without_pointing(tmp_path: pathlib.Path,
+                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    remove_ir_pointing(monkeypatch)
+    with pytest.raises(oops.OopsSpiceError,
+                       match=r'^no Cassini VIMS CASSINI_VIMS_V pointing at .* for '
+                             r'.*v0000000001_1\.lbl: SPICE\(CKINSUFFDATA\)$'):
+        CassiniVIMS.from_file(write_pds3_cube(tmp_path))
+
+
+def test_from_index_frame_without_pointing_raises_when_used(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    remove_ir_pointing(monkeypatch)
+    [(vis, _)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()])
+    with pytest.raises(oops.OopsSpiceError, match=r'SPICE\(CKINSUFFDATA\)$'):
+        vis.frame.wrt(oops.Frame.J2000).transform_at_time(vis.midtime)
+
+
+def test_from_file_parsed_label_without_a_path_has_no_file_subfields(
+        tmp_path: pathlib.Path) -> None:
+    label = Pds3Label(write_pds3_cube(tmp_path), method='fast')
+    label.filepath = None
+    (_, ir) = CassiniVIMS.from_file(label, astrometry=True)
+    assert {'filepath', 'basename', 'abspath', 'image_url'}.isdisjoint(ir.subfields)
+
+
+def test_from_file_parsed_label_without_a_path_cannot_be_read_in_full(
+        tmp_path: pathlib.Path) -> None:
+    label = Pds3Label(write_pds3_cube(tmp_path), method='fast')
+    label.filepath = None
+    with pytest.raises(HostFormatError, match='no file path is known'):
+        CassiniVIMS.from_file(label)
+
+
+def test_from_file_reads_a_comment_that_spans_two_lines(tmp_path: pathlib.Path) -> None:
+    """A comment that opens on a value's line and closes on the next is repaired."""
+
+    path = write_pds3_cube(tmp_path)
+    path.write_bytes(path.read_bytes().replace(
+        b'PACKING_FLAG = "OFF"', b'PACKING_FLAG = OFF/* Unpacked from\r\n    QUB*/'))
+    (_, ir) = CassiniVIMS.from_file(path, astrometry=True)
+    assert ir.dict['PACKING_FLAG'] == 'OFF'
 
 ##########################################################################################

@@ -3,6 +3,7 @@
 ##########################################################################################
 """Tests for the Cassini UVIS host, host_cassini.oops.uvis."""
 
+import json
 import pathlib
 from collections.abc import Callable
 from typing import Any
@@ -374,12 +375,20 @@ def test_spice_frame(tmp_path: pathlib.Path,
 
 
 @pytest.mark.parametrize(('target_name', 'target'), [('SATURN', 'SATURN'),
-                                                     ('N/A', 'NONE'), ('STAR', 'NONE')])
+                                                     ('STAR', 'NONE')])
 def test_target_from_label(tmp_path: pathlib.Path, target_name: str, target: str) -> None:
     obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME=target_name))
     assert obs.target == target
     assert obs.label_target == target_name
     assert obs.lightsource == 'SUN'
+
+
+def test_null_target_names_no_target(tmp_path: pathlib.Path) -> None:
+    """A null TARGET_NAME tracks no target and gives no label_target."""
+
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME='N/A'))
+    assert obs.target == 'NONE'
+    assert 'label_target' not in obs.subfields
 
 
 @pytest.mark.parametrize(('obs_id', 'star'), [
@@ -650,5 +659,151 @@ def test_from_index_unfetched_file_has_no_abspath(tmp_path: pathlib.Path) -> Non
              'COUVIS_0001_index.lbl')
     [obs] = CassiniUVIS.from_index(index, row_dicts=[qube_row()])
     assert 'abspath' not in obs.subfields
+
+##########################################################################################
+# The rules that every host follows
+##########################################################################################
+
+
+def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(oops.OopsTypeError, match=r"CassiniUVIS\.from_file: 'enclosed'"):
+        CassiniUVIS.from_file(write_qube(tmp_path), enclosed=True)
+
+
+@pytest.mark.parametrize(('select', 'error'), [('VIS', oops.OopsValueError),
+                                               (1.5, oops.OopsTypeError)])
+def test_from_file_checks_select_before_reading(tmp_path: pathlib.Path, select: Any,
+                                                error: type[Exception]) -> None:
+    with pytest.raises(error, match='select'):
+        CassiniUVIS.from_file(tmp_path / 'missing.LBL', select=select)
+
+
+@pytest.mark.parametrize(('select', 'error'), [('VIS', oops.OopsValueError),
+                                               (1.5, oops.OopsTypeError)])
+def test_from_index_checks_select_when_called(select: Any,
+                                              error: type[Exception]) -> None:
+    with pytest.raises(error, match='select'):
+        CassiniUVIS.from_index('INDEX.LBL', row_dicts=[], select=select)
+
+
+def test_from_index_builds_each_row_when_reached(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[Any] = []
+    make_observations = CassiniUVIS._make_observations
+
+    def spy(label: dict[str, Any], filepath: Any, **kwargs: Any) -> Any:
+        built.append(filepath)
+        return make_observations(label, filepath, **kwargs)
+
+    monkeypatch.setattr(CassiniUVIS, '_make_observations', spy)
+    rows = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row(), qube_row()])
+    assert built == []
+    next(rows)
+    assert len(built) == 1
+
+
+@pytest.mark.parametrize(('column', 'value', 'masked'), [
+    ('SUB_SOLAR_LATITUDE', np.float64(-99.), True),
+    ('CENTRAL_BODY_DISTANCE', np.float64(-999.), False),
+    ('TARGET_NAME', np.str_('UNK'), False),
+], ids=['masked', 'fill', 'null-text'])
+def test_from_index_leaves_out_missing_values(column: str, value: Any,
+                                              masked: bool) -> None:
+    row = qube_row(**{column: value, column + '_mask': np.bool_(masked)})
+    [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row])
+    assert column not in obs.dict
+
+
+def test_from_index_dict_is_json_without_masks() -> None:
+    row = qube_row(LINE_SAMPLES=np.int64(3), PRODUCT_ID=np.str_('FUV2005_001_00_00  '),
+                   LINE_SAMPLES_mask=np.False_)
+    [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row])
+    assert json.loads(json.dumps(obs.dict, allow_nan=False)) == obs.dict
+    assert not any(key.endswith('_mask') for key in obs.dict)
+    assert obs.dict['PRODUCT_ID'] == 'FUV2005_001_00_00'
+
+
+@pytest.mark.parametrize('name', ['dict', 'label_dict'])
+def test_from_file_dicts_are_json(tmp_path: pathlib.Path, name: str) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path))
+    value = getattr(obs, name)
+    assert json.loads(json.dumps(value, allow_nan=False)) == value
+
+
+def test_from_file_label_dict_is_the_label(tmp_path: pathlib.Path) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME='UNK'))
+    assert obs.label_dict['TARGET_NAME'] == 'UNK'
+    assert 'TARGET_NAME' not in obs.dict
+
+
+def test_from_file_clock_counts(tmp_path: pathlib.Path) -> None:
+    obs = CassiniUVIS.from_file(write_qube(
+        tmp_path, SPACECRAFT_CLOCK_START_COUNT='1/1485311337.0',
+        SPACECRAFT_CLOCK_STOP_COUNT='UNK'))
+    assert obs.spacecraft_clock_start_count == '1/1485311337.0'
+    assert 'spacecraft_clock_stop_count' not in obs.subfields
+
+
+def test_time_is_not_from_the_clock(tmp_path: pathlib.Path) -> None:
+    assert CassiniUVIS.from_file(write_qube(tmp_path)).time_from_sclk is False
+
+
+def test_from_index_refuses_a_volumes_own_index(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(oops.host.HostIndexError,
+                       match='reads the Ring-Moon Systems Node metadata index'):
+        CassiniUVIS.from_index(tmp_path / 'COUVIS_0001' / 'INDEX' / 'INDEX.LBL')
+
+
+def remove_fuv_pointing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the SPICE frame of the FUV detector raise as cspyce does with no CK data."""
+
+    def no_pointing(time: float, *args: Any, **kwargs: Any) -> None:
+        raise OSError('SPICE(CKINSUFFDATA) -- insufficient C kernel data')
+
+    CassiniUVIS._define_frames()
+    frame = oops.Frame.as_frame('CASSINI_UVIS_FUV')
+    monkeypatch.setattr(frame, 'transform_at_time', no_pointing)
+
+
+def test_from_file_without_pointing(tmp_path: pathlib.Path,
+                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    remove_fuv_pointing(monkeypatch)
+    with pytest.raises(oops.OopsSpiceError,
+                       match=r'^no Cassini UVIS CASSINI_UVIS_FUV pointing at .* for '
+                             r'.*FUV2005_001_00_00\.LBL: SPICE\(CKINSUFFDATA\)$'):
+        CassiniUVIS.from_file(write_qube(tmp_path))
+
+
+def test_from_index_frame_without_pointing_raises_when_used(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    remove_fuv_pointing(monkeypatch)
+    [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()])
+    with pytest.raises(oops.OopsSpiceError, match=r'SPICE\(CKINSUFFDATA\)$'):
+        obs.frame.wrt(oops.Frame.J2000).transform_at_time(obs.midtime)
+
+
+def test_from_file_parsed_label_without_a_path_has_no_file_subfields(
+        tmp_path: pathlib.Path) -> None:
+    label = Pds3Label(write_qube(tmp_path), method='fast')
+    label.filepath = None
+    obs = CassiniUVIS.from_file(label, astrometry=True)
+    assert {'filepath', 'basename', 'abspath', 'image_url'}.isdisjoint(obs.subfields)
+
+
+def test_from_file_parsed_label_without_a_path_cannot_be_read_in_full(
+        tmp_path: pathlib.Path) -> None:
+    label = Pds3Label(write_qube(tmp_path), method='fast')
+    label.filepath = None
+    with pytest.raises(oops.host.HostFormatError, match='no file path is known'):
+        CassiniUVIS.from_file(label)
+
+
+def test_from_file_falls_back_to_the_strict_parser(tmp_path: pathlib.Path) -> None:
+    """A label that the fast parser rejects is read by the strict one."""
+
+    path = write_qube(tmp_path)
+    next_line_value = b'DESCRIPTION = \r\n    "Extended header missing."\r\nEND\r\n'
+    path.write_bytes(path.read_bytes().replace(b'\r\nEND\r\n', b'\r\n' + next_line_value))
+    obs = CassiniUVIS.from_file(path, astrometry=True)
+    assert obs.dict['DESCRIPTION'] == 'Extended header missing.'
 
 ##########################################################################################

@@ -93,14 +93,37 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   calibrated files. Labels the parser rejects, cannot convert, or misreads go
   through `_parse_fileinfo()`'s fallbacks (from the requested method on through fast,
   strict, loose) and in-memory repairs (#11).
-- Missing C-kernel pointing raises `oops.OopsSpiceError`, checked only in `from_file`
-  and only when the frame comes from SPICE (no `frame` override); `from_index` never
-  checks.
-- Every `from_index()` names each row's file by its full path or URL:
-  `_index_file_path()` in `_cassini.py` takes the volume root from where the index
-  lives (the directory above `index/`, or `volumes/<series>/<VOLUME_ID>` for an index
-  in the `metadata/` tree), and `_drop_unfetched_abspath()` drops `abspath` when a
-  remote file was never fetched. All three follow the `oops.Host.from_index` contract
+- Missing C-kernel pointing raises `oops.OopsSpiceError`, checked in `from_file` with
+  `oops.Host._check_spice_frame()` only when the frame comes from SPICE (no `frame`
+  override). `from_index` calls it with `defer=True`, so a row whose pointing SPICE lacks
+  gets an `oops.frame.SpiceErrorFrame`, which raises `OopsSpiceError` when evaluated. ISS
+  checks the `_FLIPPED` SpiceFrame, since its camera frame is a fixed Cmatrix on it.
+  Clock conversions go through `_tdb_from_sclk()`/`_sclk_from_tdb()`, which turn a
+  cspyce error into `OopsSpiceError`.
+- Every `from_file()` rejects an unknown keyword with `OopsTypeError` and checks
+  `select` before reading (ISS: must be None; UVIS/VIMS: `_check_select()`). ISS builds
+  `header_dict` from a `VicarLabel` read from the file, since rms-vicar writes the
+  reading machine into HOST and BHOST when it reads the array.
+  `CassiniISS._detect_in_file()` lets `oops.Host.from_file` reach the host for a label
+  that only its repairs make readable.
+- The null rules (`_is_null`, `_without_nulls`, `_row_items`, `_label_dict` in
+  `_cassini.py`) are shared by the three instruments: "UNK", "UNKNOWN", "N/A", "NULL",
+  "---" and "" (any case, padded) and -999 are missing; index rows also drop 1e32 and
+  -1e32. ISS rows ignore the table masks (see `_row_items` below); UVIS and VIMS rows
+  apply them, since their labels declare real null constants (-99, -9.9e99, -1, N/A).
+  UVIS and VIMS `from_file` publish `dict` (no nulls), `label_dict` or (VIMS cube)
+  `header_dict`, the clock counts, and `time_from_sclk`; their file subfields still name
+  the label (#32). They parse with the fast/strict/loose fallback of
+  `_read_pds3_fileinfo()`, and VIMS repairs two-line comments (`_TWO_LINE_COMMENT`).
+- Every `from_index()` refuses a volume's own index (one in an `index` directory, any
+  case) with `HostIndexError` at call time (`_refuse_volume_index()`), as the other three
+  hosts do, and names each row's file by its full path or URL: `_index_file_path()` in
+  `_cassini.py` puts the volume `<VOLUME_ID>` in `volumes/<series>/` for an index in the
+  `metadata/` tree and in the index's own directory otherwise (Galileo's rule). `abspath`
+  comes from `oops.Host._apply_overrides()`, which gives it only when the file, or the
+  cache's copy of a remote file, exists, and never creates a directory; parsed content
+  with no path (`_known_path()` is None) has no file subfields. All three follow the
+  `oops.Host.from_index` contract
   (#20): `supplement` defaults to `oops.Host.SUPPLEMENT` (UVIS and VIMS require it, so
   None raises `HostIndexError` unless `row_dicts` is given; ISS has none and ignores a
   missing one), `label=` reaches `_read_index_rows()`, and an unknown keyword raises
