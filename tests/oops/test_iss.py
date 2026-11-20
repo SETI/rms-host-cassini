@@ -2087,7 +2087,7 @@ def test_from_index_spells_clock_counts_as_the_labels(tmp_path: pathlib.Path, co
 
 def test_from_index_skips_the_pointing_check(tmp_path: pathlib.Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
-    """A row is kept, and nothing raises, even when the C kernels hold no pointing."""
+    """A row is kept, and nothing raises, even when the C kernels lack the pointing."""
 
     remove_pointing(monkeypatch)
     assert len(list(CassiniISS.from_index(write_index(tmp_path)))) == 2

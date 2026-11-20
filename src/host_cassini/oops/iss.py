@@ -189,11 +189,13 @@ _FILL_KEYWORDS = frozenset({'DETECTOR_TEMPERATURE', 'FILTER_TEMPERATURE',
 # column (see _cassini._row_items), and so is -999 in the columns of _FILL_KEYWORDS,
 # where it cannot be a real value whatever the label declares. Survey of the 127 ISS
 # metadata index labels, 2026-11-19: 125 declare a null constant for 65 of their columns,
-# and two, COISS_2115 and COISS_2116, declare none at all. The 125 declare -999 for every
-# column of _FILL_KEYWORDS except INST_CMPRS_RATIO, for which they declare -1e32 while
-# 128 rows give -999; until the index is corrected, that -999 is missing through
-# _FILL_KEYWORDS, which a corrected table, writing its declared fill, does not need.
-# SETI/rms-data-projects#253 item 16.
+# and the labels of COISS_2115 and COISS_2116 do not declare any. The 125 declare -999
+# for every column of _FILL_KEYWORDS except two: INST_CMPRS_RATE, for which the 10
+# COISS_1xxx labels declare 1e32, the value their tables write, and the other 115
+# declare -999 (survey of 2026-11-20); and INST_CMPRS_RATIO, for which all 125 declare
+# -1e32 while 128 rows give -999. Until the index is corrected, that -999 is missing
+# through _FILL_KEYWORDS, which a corrected table, writing its declared fill, does not
+# need. SETI/rms-data-projects#253 item 16.
 #
 # The keys of a PDS3 column that declare a special constant, each of which the table
 # reader treats as missing, as rms-pdstable reads them
@@ -210,9 +212,10 @@ _SPECIAL_CONSTANT_KEYS = ('INVALID_CONSTANT', 'MISSING_CONSTANT', 'UNKNOWN_CONST
 _DECLARED_ZERO = 0
 
 # Until the index is corrected, the fill values that the 125 labels declare are also
-# missing in a column for which a label declares no null constant, as COISS_2115 and
-# COISS_2116 declare none for any column; the image labels give these items as UNK or
-# N/A. A column whose label declares a constant follows that declaration instead.
+# missing in a column for which a label does not declare a null constant, as the labels
+# of COISS_2115 and COISS_2116 do not for any column; the image labels give these items
+# as UNK or N/A. A column whose label declares a constant follows that declaration
+# instead.
 # SETI/rms-data-projects#253 item 15; #28.
 _UNDECLARED_FILL_VALUES = {
     'COMMAND_SEQUENCE_NUMBER'     : 65534,
@@ -527,13 +530,14 @@ class CassiniISS(oops.Host):
                 INSTRUMENT_MODE_ID is invalid; the message names the item and the image
                 file. Also if a full read needs the image file of parsed content that
                 came from no file.
-            OopsSpiceError: If no frame override is given and the C kernels hold no
-                pointing for the camera at the midtime of the observation. The message
-                reads "no Cassini ISS NAC pointing at <time> for <image file>: <code>",
-                ending with the SPICE error code, such as "SPICE(CKINSUFFDATA)"; the
-                `spice_code` and `filepath` attributes hold the code and the image file.
-                Also if the spacecraft clock kernel cannot convert the clock counts of an
-                early cruise image.
+            OopsSpiceError: If no frame override is given and the C kernels lack the
+                camera's pointing at the time at which the observation evaluates its
+                frame, as described above. The message reads "no Cassini ISS NAC
+                pointing at <time> for <image file>: <code>", ending with the SPICE
+                error code, such as "SPICE(CKINSUFFDATA)"; the `spice_code` and
+                `filepath` attributes hold the code and the image file. Also if the
+                spacecraft clock kernel cannot convert the clock counts of an early
+                cruise image.
             OopsTypeError: If a keyword argument is not one of those listed.
             OopsValueError: If `select` is not None.
             OSError: If the file cannot be read.
@@ -592,7 +596,7 @@ class CassiniISS(oops.Host):
                                                     'Cassini ISS VICAR header, so its '
                                                     'image array cannot be read')
                 else:
-                    # A VicarLabel holds no array; the file is read in full
+                    # A VicarLabel lacks the array, so the file is read in full
                     image = CassiniISS._read_vicar_image(filepath)
                 data = image.data_2d
 
@@ -855,8 +859,8 @@ class CassiniISS(oops.Host):
                 `timeshift`, `navigation`, `tracker` and `parallel`, keyed by name, each
                 None to keep the default.
             check_pointing (bool): True to require that the C kernels give the camera's
-                pointing at the midtime of the observation, when no frame override is
-                given.
+                pointing at the time at which the observation evaluates its frame, when
+                no frame override is given.
 
         Returns:
             Snapshot: The observation, with the subfields listed in :meth:`from_file`.
@@ -864,8 +868,8 @@ class CassiniISS(oops.Host):
         Raises:
             HostFormatError: If a required item is missing or invalid.
             OopsSpiceError: If `check_pointing` is True, no frame override is given, and
-                the C kernels hold no pointing for the camera at the midtime of the
-                observation.
+                the C kernels lack the camera's pointing at the time at which the
+                observation evaluates its frame.
         """
 
         CassiniISS._require_items(dict_, filepath)

@@ -114,13 +114,13 @@ does not have, and these are left out:
 - 1e32 and -1e32, in every column;
 - -999 in the temperature, data rate, and compression columns, where it cannot be a
   real value, whatever the label declares; elsewhere, as in a position, it is kept;
-- in a column whose index label declares no null value, 65534 in
+- in a column whose index label does not declare a null value, 65534 in
   ``COMMAND_SEQUENCE_NUMBER``, ``ELECTRONICS_BIAS``, ``EXPECTED_PACKETS``,
   ``ORDER_NUMBER``, ``PARALLEL_CLOCK_VOLTAGE_INDEX``, ``RECEIVED_PACKETS``,
   ``SEQUENCE_NUMBER``, and ``VALID_MAXIMUM``, and -2147483648 in ``INST_CMPRS_PARAM``
   and ``MISSING_LINES``. These are the null values that the other index labels declare,
   and the image labels give ``UNK`` or ``N/A`` there. Until the index is corrected, the
-  labels of ``COISS_2115`` and ``COISS_2116`` declare no null values at all;
+  labels of ``COISS_2115`` and ``COISS_2116`` do not declare any null values;
 - an ``EMISSION_ANGLE``, ``INCIDENCE_ANGLE``, ``CENTER_LATITUDE``, or
   ``CENTER_LONGITUDE`` of 0 in a row that has no target geometry, that is, no
   ``PHASE_ANGLE``. Until the index is corrected, the tables write 0 there for a missing
@@ -147,8 +147,8 @@ corrected, three items in ``dict`` have another form than in the image label, an
 host gives them as the table does: ``INST_CMPRS_PARAM`` lists its four elements in
 another order, ``IMAGE_OBSERVATION_TYPE`` is one text value whose members are joined by
 commas, where the label gives a set, and ``MISSION_PHASE_NAME`` has underscores where the
-label has spaces, as in ``SPACE_SCIENCE``. If the C kernels
-hold no pointing for an image at the middle of its exposure, its row still gives a
+label has spaces, as in ``SPACE_SCIENCE``. If the C kernels lack the pointing of an
+image at the time at which its observation evaluates its frame, its row still gives a
 Snapshot, whose frame raises :exc:`oops.OopsSpiceError` when it is evaluated. The
 message is the one that :meth:`~host_cassini.oops.iss.CassiniISS.from_file` gives for
 the same image (see :doc:`user_guide_errors`).
@@ -239,7 +239,7 @@ and left out: each value that the table's label declares a null constant, such a
 the supplement's angles and -999 in the index's geometry columns; the text that the
 archive writes for no value; and 1e32 and -1e32. ``label_target``, ``observation_id``,
 and the clock counts follow from the row as they do from the label. If the C kernels
-hold no pointing for an observation, its frame raises :exc:`oops.OopsSpiceError` when it
+lack the pointing of an observation, its frame raises :exc:`oops.OopsSpiceError` when it
 is evaluated.
 
 The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from the

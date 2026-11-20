@@ -237,8 +237,10 @@ class CassiniUVIS(oops.Host):
                 an unsupported option, or if a full read needs the data file of a label
                 that came from no file.
             OopsIndexError: If an index in `select` is out of range.
-            OopsSpiceError: If no frame override is given and the C kernels hold no
-                pointing for the detector at the midtime of an observation.
+            OopsSpiceError: If no frame override is given and the C kernels lack the
+                detector's pointing at the time at which an observation evaluates its
+                frame (the midtime, after any cadence override, or the time that a
+                `tracker` selects, moved by a time shift).
             OopsTypeError: If `select` has an invalid type, or a keyword argument is not
                 one of those listed.
             OopsValueError: If `select` is a string.
@@ -631,8 +633,9 @@ class CassiniUVIS(oops.Host):
                 a tuple of indices and slices to apply to the returned observations,
                 treating a single observation as a tuple of one; None for all.
             check (bool): True to raise OopsSpiceError now if the C kernels cannot give
-                the pointing at the midtime of an observation; False to give such an
-                observation a frame that raises it when it is used.
+                the pointing at the time at which an observation evaluates its frame;
+                False to give such an observation a frame that raises it when it is
+                used.
             subfields (dict[str, Any]): The subfields that come from the metadata, which
                 each observation receives.
 
@@ -1093,8 +1096,8 @@ class CassiniUVIS(oops.Host):
                 known.
             overrides (dict): The standard override options of :meth:`from_file`.
             check (bool): True to raise OopsSpiceError if the C kernels cannot give the
-                pointing at the midtime of the observation; False to give the
-                observation a frame that raises it when it is used.
+                pointing at the time at which the observation evaluates its frame; False
+                to give the observation a frame that raises it when it is used.
 
         Returns:
             dict: The inputs "cadence", "fov", "path", "frame", "target", "lightsource"
@@ -1103,7 +1106,8 @@ class CassiniUVIS(oops.Host):
 
         Raises:
             OopsSpiceError: If `check` is True, no frame override is given, and the C
-                kernels cannot give the pointing at the midtime of the observation.
+                kernels cannot give the pointing at the time at which the observation
+                evaluates its frame.
         """
 
         target = label.get('TARGET_NAME')

@@ -386,9 +386,11 @@ class CassiniVIMS(oops.Host):
                 an unsupported option, or if a full read needs the cube of a label that
                 came from no file.
             OopsIndexError: If an index in `select` is out of range.
-            OopsSpiceError: If no frame override is given and the C kernels hold no
-                pointing for a channel at the midtime of its observation, or if the
-                spacecraft clock kernel cannot convert the cube's time backplanes.
+            OopsSpiceError: If no frame override is given and the C kernels lack a
+                channel's pointing at the time at which its observation evaluates its
+                frame (the midtime, after any cadence override, or the time that a
+                `tracker` selects, moved by a time shift), or if the spacecraft clock
+                kernel cannot convert the cube's time backplanes.
             OopsTypeError: If `select` has an invalid type, or a keyword argument is not
                 one of those listed.
             OopsValueError: If a string in `select` is not a channel name.
@@ -812,8 +814,9 @@ class CassiniVIMS(oops.Host):
             astrometry (bool): True to omit the data arrays.
             overrides (dict): The standard override options of :meth:`from_file`.
             check (bool): True to raise OopsSpiceError now if the C kernels cannot give
-                a channel's pointing at the midtime of its observation; False to give
-                such an observation a frame that raises it when it is used.
+                a channel's pointing at the time at which its observation evaluates its
+                frame; False to give such an observation a frame that raises it when it
+                is used.
             subfields (dict[str, Any]): The subfields that come from the metadata, which
                 each observation receives; `time_from_sclk` becomes True if the times
                 come from the cube's time backplanes.
@@ -825,9 +828,9 @@ class CassiniVIMS(oops.Host):
         Raises:
             HostFormatError: If some aspect of the label or file is not valid.
             OopsSpiceError: If `check` is True, no frame override is given, and the C
-                kernels cannot give a channel's pointing at the midtime of its
-                observation; or if the spacecraft clock kernel cannot convert the
-                cube's time backplanes.
+                kernels cannot give a channel's pointing at the time at which its
+                observation evaluates its frame; or if the spacecraft clock kernel
+                cannot convert the cube's time backplanes.
         """
 
         qube_dict = label['SPECTRAL_QUBE']

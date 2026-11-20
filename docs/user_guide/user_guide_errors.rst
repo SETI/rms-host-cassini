@@ -11,12 +11,13 @@ Reading an ISS image file
 :meth:`~host_cassini.oops.iss.CassiniISS.from_file` raises:
 
 :exc:`oops.OopsSpiceError`
-    The C kernels hold no pointing for the camera at the middle of the exposure, moved
-    as a ``cadence`` override, a ``tracker``, or a ``timeshift`` moves the time at which
-    they are read (see :doc:`user_guide_geometry`). The message reads "no Cassini ISS
-    NAC pointing at <time> for <image file>: <code>", ending with the SPICE error code,
-    such as ``SPICE(CKINSUFFDATA)``, and the exception's ``spice_code`` and ``filepath``
-    attributes hold the code and the image file. It is never raised for missing pointing when the caller supplies the pointing
+    The C kernels lack the camera's pointing at the time at which the observation
+    evaluates its frame: the middle of the exposure, unless a ``cadence`` override, a
+    ``tracker``, or a ``timeshift`` moves that time (see :doc:`user_guide_geometry`).
+    The message reads "no Cassini ISS NAC pointing at <time> for <image file>: <code>",
+    ending with the SPICE error code, such as ``SPICE(CKINSUFFDATA)``, and the
+    exception's ``spice_code`` and ``filepath`` attributes hold the code and the image
+    file. It is never raised for missing pointing when the caller supplies the pointing
     with the ``frame`` override. It is also raised when the spacecraft clock kernel
     cannot convert the clock counts of an early cruise image.
 
@@ -113,8 +114,10 @@ UVIS and VIMS
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_file` raise:
 
 :exc:`oops.OopsSpiceError`
-    The C kernels hold no pointing for the instrument at the middle of an observation,
-    and no ``frame`` override is given. The message reads "no Cassini UVIS
+    The C kernels lack the instrument's pointing at the time at which an observation
+    evaluates its frame, and no ``frame`` override is given. That time is the middle of
+    the observation, unless a ``cadence`` override, a ``tracker``, or a ``timeshift``
+    moves it (see :doc:`user_guide_geometry`). The message reads "no Cassini UVIS
     CASSINI_UVIS_FUV pointing at <time> for <file>: <code>", with the SPICE frame.
     For a VIMS cube, it is also raised when the spacecraft clock kernel cannot convert
     the counts of the cube's time backplanes.
