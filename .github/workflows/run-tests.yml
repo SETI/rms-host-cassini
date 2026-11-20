@@ -110,7 +110,7 @@ jobs:
       # The tests need no SPICE kernels or data files; see tests/oops/conftest.py.
       - name: Test with coverage
         run: |
-          python -m pytest --cov-report=xml
+          python -m pytest -n 4 --cov-report=xml
 
       - name: Print coverage report
         run: |

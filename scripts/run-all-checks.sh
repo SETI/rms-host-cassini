@@ -12,7 +12,7 @@
 # Options:
 #   -p, --parallel         Run all requested checks in parallel (default)
 #   -s, --sequential       Run all requested checks sequentially
-#   -w, --pytest-workers N Pytest workers: auto (default), 1 (serial), or N
+#   -w, --pytest-workers N Pytest workers: 4 (default), 1 (serial), or N
 #   -c, --code             Run all code checks (sets each RUN_* code flag true)
 #   -d, --docs             Run Sphinx, codespell, and PyMarkdown (RUN_SPHINX,
 #                          RUN_CODESPELL, RUN_PYMARKDOWN)
@@ -91,7 +91,7 @@ RESET='\033[0m'
 
 # Default options
 PARALLEL=true
-PYTEST_WORKERS=auto
+PYTEST_WORKERS=4
 RUN_RUFF_CHECK=false
 RUN_RUFF_FORMAT=false
 RUN_FLAKE8_CONT=false
