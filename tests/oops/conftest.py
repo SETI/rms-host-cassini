@@ -327,14 +327,18 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     # so its ID, so each class's pool is copied too; otherwise a fixed path made by one
     # test could become the path of the next, every fake SPICE path being fixed at the
     # origin. These copies stay until oops offers one helper that isolates all of its
-    # global state for a test, SETI/rms-oops#250.
+    # global state for a test, SETI/rms-oops#250. The pools are weak dictionaries, from
+    # which garbage collection can remove a member while dict(pool) looks its keys up,
+    # so each is copied through items(), which defers removals until it is done.
     for path_class in oops.Path._PATH_SUBCLASSES:
         if '_WAYPOINTS' in vars(path_class):
-            monkeypatch.setattr(path_class, '_WAYPOINTS', dict(path_class._WAYPOINTS))
+            monkeypatch.setattr(path_class, '_WAYPOINTS',
+                                dict(path_class._WAYPOINTS.items()))
     for frame_class in oops.Frame._FRAME_SUBCLASSES:
         for pool in ('_WAYFRAMES', '_FOR_NAME', '_FRAME_LOOKUP'):
             if pool in vars(frame_class):
-                monkeypatch.setattr(frame_class, pool, dict(getattr(frame_class, pool)))
+                monkeypatch.setattr(frame_class, pool,
+                                    dict(getattr(frame_class, pool).items()))
 
     # Every fake SPICE frame is the same Cmatrix, so without a pool of its own a test's
     # frame would share the wayframe, and the evaluation, of one an earlier test made
