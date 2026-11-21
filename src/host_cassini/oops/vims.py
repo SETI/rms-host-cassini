@@ -451,6 +451,12 @@ class CassiniVIMS(oops.Host):
         iteration reaches that row, so an error in a row is raised at that row, after
         every earlier row has been yielded.
 
+        With `row_dicts`, the given rows take the place of the tables, and the call does
+        not read either label. The errors below that come from reading a label or a table
+        are then never raised: neither label need exist, the index need not be Cassini
+        VIMS, and `pds3_options` is not checked. What is still checked is `select`,
+        `filter` against the first row, and each row when the iteration reaches it.
+
         The observations are for astrometry only and have no `data`.
 
         A supplemental index that records them would supply the cube's actual shape
@@ -489,7 +495,9 @@ class CassiniVIMS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` and `supplement` have
                 already been read; each is filtered and built when the iteration reaches
-                it. If provided, `supplement` and `label` are ignored.
+                it. If provided, they are used in place of the tables, `supplement`,
+                `label` and `pds3_options` are ignored, and neither the tables nor their
+                labels are read.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -610,7 +618,9 @@ class CassiniVIMS(oops.Host):
         # "data/.../v1294638283_1.lbl", in another order for some volumes until the
         # supplements are corrected (SETI/rms-data-projects#257 item 1; #34). The rows
         # are paired by these paths, compared without regard to case or extension,
-        # which is the whole check of a pair.
+        # which is the whole check of a pair. Given rows are used as they are:
+        # _index_rows() returns them before it reads either label, so the label checks
+        # are not made.
         rows = CassiniVIMS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
                                        filter=filter, validate=(),

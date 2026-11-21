@@ -62,7 +62,9 @@ class CassiniISS(Host):
     # Every row is one Snapshot. The pointing is never checked. select must be None
     # (oops.OopsValueError), and any other keyword raises TypeError. The call reads only
     # the labels; the iterator reads the rows a few at a time and builds each row's
-    # Snapshot when it reaches the row.
+    # Snapshot when it reaches the row. Rows given in row_dicts take the place of the
+    # tables: the call then reads only the index label, for its null constants, so the
+    # supplement, the tables and the host are not checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
@@ -105,6 +107,8 @@ class CassiniUVIS(Host):
     # `select` accepts no channel name. The supplement is required: None or '' raises
     # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
     # TypeError. The iterator builds each row's observations when it reaches the row.
+    # Rows given in row_dicts take the place of the tables: the call then reads neither
+    # label, so the checks of the labels, the host and pds3_options are not made.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
@@ -146,7 +150,9 @@ class CassiniVIMS(Host):
     # Every row is a (vis, ir) pair or a selection from one. The supplement is required:
     # None or '' raises oops.host.HostIndexError unless row_dicts is given. Any other
     # keyword raises TypeError. The iterator builds each row's observations when it
-    # reaches the row.
+    # reaches the row. Rows given in row_dicts take the place of the tables: the call
+    # then reads neither label, so the checks of the labels, the host and pds3_options
+    # are not made.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,

@@ -58,7 +58,14 @@ Reading an ISS image file
 Reading an ISS index
 ====================
 
-:meth:`~host_cassini.oops.iss.CassiniISS.from_index` raises:
+:meth:`~host_cassini.oops.iss.CassiniISS.from_index` raises the errors listed below.
+When the rows are given in ``row_dicts``, the call reads the index's PDS3 label, for the
+null values it declares, unless ``label`` is given, but neither the tables nor the
+supplement's label. The errors that come from the supplement or a table are then never
+raised, and neither is the error for an index of another instrument: the supplement
+need not exist, the index label is not checked to describe a table that can be read,
+and the index is not checked to be a Cassini ISS index. The checks of ``select`` and
+``filter`` are still made, as their entries say, and so are those of each row.
 
 :exc:`~oops.host.HostFormatError`
     A row lacks ``START_TIME``, ``EXPOSURE_DURATION``, ``INSTRUMENT_MODE_ID``, or
@@ -147,7 +154,12 @@ UVIS and VIMS
     A file cannot be read.
 
 :meth:`~host_cassini.oops.uvis.CassiniUVIS.from_index` and
-:meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise:
+:meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise the errors listed below.
+When the rows are given in ``row_dicts``, the call reads neither the tables nor their
+labels, so the errors that come from reading a label or a table are never raised: the
+labels need not exist or be readable, the index is not checked to be one of the host's
+instrument, and ``pds3_options`` is not checked. The checks of ``select`` and
+``filter`` are still made, as their entries say, and so are those of each row.
 
 :exc:`~oops.host.HostIndexError`
     When the method is called: the PDS3 label of the index or the supplement does not

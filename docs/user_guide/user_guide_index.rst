@@ -10,12 +10,13 @@ chapter describes ISS first, then UVIS and VIMS.
 ``from_index()`` returns an iterator, which gives the observations row by row, in the
 order of the index. The call itself checks the arguments and reads the PDS3 labels of
 the index and its supplement, so a wrong argument or a label that cannot be read raises
-an error at once. The rows of the two tables are read as the iteration proceeds, a few
-at a time, and each row's observation is built when the iteration reaches that row. The
-first observation comes without waiting for the rest of the table, and the rows read
-take little memory however long the index is. The memory used stays the same from the
-first row to the last only with the OOPS change that frees each observation's frame
-when the observation is released
+an error at once. Rows given in ``row_dicts`` are the exception: the call then reads
+fewer labels, or none, as described for each instrument below. The rows of the two
+tables are read as the iteration proceeds, a few at a time, and each row's observation
+is built when the iteration reaches that row. The first observation comes without
+waiting for the rest of the table, and the rows read take little memory however long
+the index is. The memory used stays the same from the first row to the last only with
+the OOPS change that frees each observation's frame when the observation is released
 (`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without it, the memory
 used grows a little with each row. An error in a row is raised when the iteration
 reaches it, after the rows before it, and the iteration ends with that error.
@@ -75,7 +76,9 @@ Other arguments
     tables, ``supplement`` is ignored, and each row is filtered and built when the
     iteration reaches it. The null values that the index declares (see below) are read
     from ``label`` or, if it is not given, from the index's own label, which must then
-    exist.
+    exist. That label is the only one read: the tables and the supplement's label are
+    not, so the supplement need not exist, and the index is not checked to be an ISS
+    index.
 
 ``filter``
     A dictionary of column names and the values to keep. A row is kept when each column
@@ -251,8 +254,11 @@ The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
 Whether they should give the data file instead is an open question
 (`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
-``label``, ``row_dicts``, ``filter``, ``pds3_options``, and the standard overrides work
-as they do for ISS, and any other keyword raises :exc:`TypeError`.
+``label``, ``filter``, ``pds3_options``, and the standard overrides work as they do for
+ISS, and any other keyword raises :exc:`TypeError`. Rows given in ``row_dicts`` take the
+place of the tables, as for ISS, but the call then does not read any label: neither the
+index's label nor the supplement's need exist, the index is not checked to be a UVIS
+index, and ``label`` and ``pds3_options`` are ignored.
 
 VIMS indexes
 ============

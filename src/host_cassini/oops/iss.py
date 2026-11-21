@@ -654,6 +654,15 @@ class CassiniISS(oops.Host):
         Snapshot is built when the iteration reaches that row, so an error in a row is
         raised at that row, after every earlier row has been yielded.
 
+        With `row_dicts`, the given rows take the place of the tables, and the call reads
+        only the label of the index, for the null constants that it declares, and not
+        even that if `label` is given. The errors below that come from the supplement,
+        from a table, or from the check of the host are then never raised: the supplement
+        need not exist, the index label is not checked to describe a table that can be
+        read, and the index need not be Cassini ISS. What is still checked is `select`,
+        the reading of the index label, `filter` against the first row, and each row
+        when the iteration reaches it.
+
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
@@ -671,9 +680,10 @@ class CassiniISS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` has already been read;
                 each is filtered and built when the iteration reaches it. If provided,
-                `supplement` is ignored, and the null constants that the index declares
-                are read from `label` or, if it is not given, from the label of
-                `filepath`, as for rows read from the table.
+                they are used in place of the tables, `supplement` is ignored, neither
+                table nor the supplement's label is read, and the null constants that the
+                index declares are read from `label` or, if it is not given, from the
+                label of `filepath`, as for rows read from the table.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -797,7 +807,9 @@ class CassiniISS(oops.Host):
         # label, parsed once, also tells how its declared null constants are read, for
         # rows given in row_dicts too, which oops.Host.from_index passes without the
         # label. The archive has no ISS supplement, so the default looks for one without
-        # requiring it, while one that is given must exist.
+        # requiring it, while one that is given must exist. Given rows are used as they
+        # are: _index_rows() returns them before it reads anything else, so the
+        # supplement, the tables and the host are not checked.
         label = CassiniISS._read_index_label(filepath, label=label,
                                              pds3_options=pds3_options)
         (unmasked, zeros, fills) = CassiniISS._index_fill_rules(label)

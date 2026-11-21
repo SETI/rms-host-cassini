@@ -2128,6 +2128,20 @@ def test_from_index_given_rows_without_a_label_need_the_index_label(
         CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows)
 
 
+def test_from_index_with_given_rows_reads_only_the_index_label(
+        tmp_path: pathlib.Path) -> None:
+    """Given rows are used in place of the tables, so the call reads only the index label,
+    for its null constants: a supplement that does not exist, and an index whose name
+    gives another instrument's volume, still give a Snapshot for every row."""
+
+    rows = index_rows(tmp_path)
+    other = tmp_path / 'COUVIS_0001_index.lbl'
+    other.write_bytes((tmp_path / 'INDEX.LBL').read_bytes())
+    obs = list(CassiniISS.from_index(other, supplement=tmp_path / 'missing.lbl',
+                                     row_dicts=rows))
+    assert len(obs) == 2
+
+
 @pytest.mark.parametrize(('column', 'value'), [
     ('SEQUENCE_NUMBER', 65534),
     ('ORDER_NUMBER', 65534),

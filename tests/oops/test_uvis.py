@@ -739,6 +739,18 @@ def test_from_index_rows_need_no_supplement(tmp_path: pathlib.Path) -> None:
                                            row_dicts=[qube_row()]))) == 1
 
 
+def test_from_index_with_given_rows_skips_the_labels(tmp_path: pathlib.Path) -> None:
+    """Given rows are used in place of the tables, so the call reads neither label: an
+    index label and a supplement that do not exist, and an option that the label parser
+    would refuse, still give the row's observation."""
+
+    obs = list(CassiniUVIS.from_index(tmp_path / 'COUVIS_0001_index.lbl',
+                                      supplement=tmp_path / 'missing.lbl',
+                                      pds3_options={'bogus_option': 1},
+                                      row_dicts=[qube_row()]))
+    assert len(obs) == 1
+
+
 def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
     label = Pds3Label(['PDS_VERSION_ID = PDS3', 'END'])
     labels: list[Any] = []
