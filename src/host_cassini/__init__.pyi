@@ -102,7 +102,7 @@ class CassiniUVIS(Host):
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
         parallel: Observation | None = None) -> Observation | tuple[Observation, ...]: ...
-    # `select` accepts no channel name. The supplement is required: None raises
+    # `select` accepts no channel name. The supplement is required: None or '' raises
     # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
     # TypeError. The iterator builds each row's observations when it reaches the row.
     @staticmethod
@@ -144,9 +144,9 @@ class CassiniVIMS(Host):
         parallel: Observation | None = None
         ) -> tuple[Observation | None, Observation | None] | Observation | None: ...
     # Every row is a (vis, ir) pair or a selection from one. The supplement is required:
-    # None raises oops.host.HostIndexError unless row_dicts is given. Any other keyword
-    # raises TypeError. The iterator builds each row's observations when it reaches the
-    # row.
+    # None or '' raises oops.host.HostIndexError unless row_dicts is given. Any other
+    # keyword raises TypeError. The iterator builds each row's observations when it
+    # reaches the row.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,

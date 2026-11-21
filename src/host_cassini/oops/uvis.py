@@ -319,8 +319,8 @@ class CassiniUVIS(oops.Host):
                 supplement is read only as far ahead as the partner of the current index
                 row. The default, `oops.Host.SUPPLEMENT`, reads the file in the
                 directory of `filepath` whose name matches except that "_index" is
-                replaced by "_supplemental_index" in upper or lower case. None raises an
-                error unless `row_dicts` is given.
+                replaced by "_supplemental_index" in upper or lower case. None or an
+                empty string raises an error unless `row_dicts` is given.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
@@ -414,7 +414,8 @@ class CassiniUVIS(oops.Host):
                 iteration starts, if a table file does not exist.
             HostIndexError: When called, if the label of the index or the supplement does
                 not describe a table that can be read, or lacks a column that gives a
-                row's product; or if `supplement` is None while `row_dicts` is not given.
+                row's product; or if `supplement` is None or an empty string while
+                `row_dicts` is not given.
                 During the iteration, at the row concerned: if an index row's product is
                 not in the supplement, which is found once the whole supplement has been
                 read; if the supplement gives a product a second time while its first
@@ -442,9 +443,9 @@ class CassiniUVIS(oops.Host):
 
         oops.Host._check_select(select)
 
-        # The supplement is required, so None is refused rather than taken to mean
-        # "search for it" (#20)
-        if row_dicts is None and supplement is None:
+        # The supplement is required, so None or an empty path, either of which the index
+        # reader takes to mean "read the index alone", is refused (#20)
+        if row_dicts is None and (supplement is None or supplement == ''):
             raise HostIndexError(f'Cassini UVIS index needs its supplemental index: '
                                  f'{filepath}')
 

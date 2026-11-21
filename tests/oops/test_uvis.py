@@ -724,6 +724,16 @@ def test_from_index_refuses_no_supplement() -> None:
         CassiniUVIS.from_index('INDEX.LBL', supplement=None)
 
 
+def test_from_index_refuses_an_empty_supplement_path() -> None:
+    """An empty path is refused when the method is called, as None is, because the index
+    reader would read the index without its supplement."""
+
+    with pytest.raises(oops.host.HostIndexError,
+                       match='Cassini UVIS index needs its supplemental index: '
+                             r'INDEX\.LBL'):
+        CassiniUVIS.from_index('INDEX.LBL', supplement='')
+
+
 def test_from_index_rows_need_no_supplement(tmp_path: pathlib.Path) -> None:
     assert len(list(CassiniUVIS.from_index(tmp_path / 'INDEX.LBL', supplement=None,
                                            row_dicts=[qube_row()]))) == 1

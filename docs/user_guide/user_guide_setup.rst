@@ -32,6 +32,9 @@ environment variables:
 The kernels and the database are the ones that OOPS itself uses. The
 `rms-oops README <https://github.com/SETI/rms-oops#environment-variables>`_ describes
 these variables and the ``SPICE`` directory of ``$OOPS_RESOURCES`` that holds them.
+The Ring-Moon Systems Node publishes these resources, the kernels and ``SPICE.db``
+included, at ``https://storage.googleapis.com/rms-node-oops-resources``, a URL that
+``OOPS_RESOURCES`` can name directly.
 
 The hosts choose the kernels through the database, by kernel set: ``CAS-SPK-*`` for the
 spacecraft's trajectory, ``CAS-CK-*`` for its attitude, and ``CAS-CK-GAPFILL`` for the

@@ -183,7 +183,8 @@ and most of each observation's values come from it:
 
 - By default, the host reads the supplement beside the index, which must exist.
 - A path or URL reads that file instead.
-- None raises :exc:`~oops.host.HostIndexError`, unless ``row_dicts`` is given. Each row
+- None or an empty string raises :exc:`~oops.host.HostIndexError`, unless ``row_dicts``
+  is given. Each row
   given in ``row_dicts`` must include the supplement's columns, or it raises
   :exc:`~oops.host.HostIndexError` when the iteration reaches it.
 

@@ -155,7 +155,8 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   the index. No row has `abspath`, and nothing creates a directory; parsed content with
   no path (`_known_path()` is None) has no file subfields. All three follow the
   `oops.Host.from_index` contract: `supplement` defaults to `oops.Host.SUPPLEMENT` (UVIS
-  and VIMS require it, so None raises `HostIndexError` unless `row_dicts` is given; ISS
+  and VIMS require it, so None or '' raises `HostIndexError` unless `row_dicts` is
+  given, since oops reads the index alone for either; ISS
   has none and ignores a missing one), and an unknown keyword raises `TypeError`. The
   default pairing key is FILE_SPECIFICATION_NAME alone, with VOLUME_ID still compared as
   a shared column. ISS refuses `select`, since each row is one

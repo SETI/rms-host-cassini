@@ -441,6 +441,16 @@ def test_from_index_refuses_no_supplement() -> None:
         CassiniVIMS.from_index('INDEX.LBL', supplement=None)
 
 
+def test_from_index_refuses_an_empty_supplement_path() -> None:
+    """An empty path is refused when the method is called, as None is, because the index
+    reader would read the index without its supplement."""
+
+    with pytest.raises(HostIndexError,
+                       match='Cassini VIMS index needs its supplemental index: '
+                             r'INDEX\.LBL'):
+        CassiniVIMS.from_index('INDEX.LBL', supplement='')
+
+
 def test_from_index_rows_need_no_supplement() -> None:
     assert len(list(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()],
                                            supplement=None))) == 1
