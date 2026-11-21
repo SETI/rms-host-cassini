@@ -30,64 +30,71 @@
 
 `rms-host-cassini` is the Cassini mission host for
 [OOPS](https://github.com/SETI/rms-oops), the Object-Oriented Python SPICE toolkit for
-observation geometry. It turns Cassini ISS, UVIS, and VIMS data products into OOPS
-`Observation` objects, with the frames, fields of view, timing, targets, and light sources
-that each instrument requires. It is a product of the
+observation geometry. It reads data products of three Cassini instruments, the Imaging
+Science Subsystem (ISS) cameras, the Ultraviolet Imaging Spectrograph (UVIS), and the
+Visual and Infrared Mapping Spectrometer (VIMS), as the Planetary Data System (PDS)
+archives them. It turns each product into OOPS observations: the data array, together
+with the time, field of view, pointing, target, and light source that OOPS needs to
+compute its geometry. It is a product of the
 [PDS Ring-Moon Systems Node](https://pds-rings.seti.org).
+
+# Features
+
+- **Either file of an ISS product**: an ISS image can be opened from its VICAR image file
+  or from its PDS3 label, and the pixels are identical either way.
+- **Metadata from both labels**: when an ISS image's PDS3 label is read together with
+  its image file, the values in the label and in the VICAR header are merged under the
+  PDS3 names, with one fixed choice for each value on which they disagree.
+- **Spectrometer products**: a UVIS product becomes one observation per window, and a
+  VIMS cube becomes a pair of observations, one for each channel.
+- **Whole volumes at once**: a Ring-Moon Systems Node metadata index gives the
+  observations of every product in a volume, without opening the products.
+- **Pointing from SPICE**: the pointing comes from the Cassini C kernels, loaded a month
+  of the mission at a time, or from a frame that the caller supplies.
 
 # Installation
 
-The `host_cassini` module is available via the `rms-host-cassini` package on PyPI and can
-be installed with:
+`rms-host-cassini` needs Python 3.11 or later. Install it from PyPI with:
 
 ```sh
 pip install rms-host-cassini
 ```
 
-Geometry calculations need a SPICE kernel database, located through `spicedb` by the
-`SPICE_PATH` environment variable (or `$OOPS_RESOURCES/SPICE`) and `SPICE_SQLITE_DB_NAME`.
-It must contain the kernel sets `CAS-SPK-*`, `CAS-CK-*`, and `CAS-CK-GAPFILL`.
+The host also needs the Cassini SPICE kernels. The
+[setup chapter](https://rms-host-cassini.readthedocs.io/en/latest/user_guide/user_guide_setup.html)
+of the user guide describes the kernels and the environment variables that locate them.
 
-# Getting Started
+# Quick Start
 
-Importing `host_cassini.oops` registers the Cassini hosts with `oops.Host`, which can
-then identify and read any supported Cassini file:
+Importing `host_cassini.oops` registers the hosts with `oops.Host`, which can then open
+any supported Cassini file:
 
 ```python
 import oops
 import host_cassini.oops
 
-obs = oops.Host.from_file('N1454725799_1.IMG')
+obs = oops.Host.from_file('COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG')
 ```
 
-Each instrument also has its own host class:
+Each instrument also has its own host class, for one product or for every product in a
+volume:
 
 ```python
-from host_cassini import CassiniISS, CassiniUVIS, CassiniVIMS
+from host_cassini import CassiniISS, CassiniVIMS
 
-snapshot = CassiniISS.from_file('N1454725799_1.IMG')
+snapshot = CassiniISS.from_file('COISS_2009/data/1484506648_1484573295/N1484506648_1.LBL')
+snapshots = list(CassiniISS.from_index('metadata/COISS_2xxx/COISS_2009/COISS_2009_index.lbl'))
 (vis, ir) = CassiniVIMS.from_file('v1484505000_1.qub')
-ir = CassiniVIMS.from_file('v1484505000_1.qub', select='IR')
 ```
 
-# Features
+Replace each path with the location of the file in your copy of the archive, or with
+its URL.
 
-The hosts are:
+# Documentation
 
-- `CassiniISS`: The Imaging Science Subsystem narrow- and wide-angle cameras. A file
-  becomes a `Snapshot`; an image index can also be read with `CassiniISS.from_index()`.
-- `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
-  one for each window of a QUBE with several windows.
-- `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of
-  observations, one for each channel (None for an inactive channel), and `select='VIS'` or
-  `select='IR'` returns just one.
-
-SPICE kernels are loaded only as needed, a month of the mission at a time. A target named
-in the label is repaired where the label is known to be wrong, and an observation of a
-star uses that star as its light source.
-
-Details are available in the
-[module documentation](https://rms-host-cassini.readthedocs.io/en/latest/module.html).
+The [documentation](https://rms-host-cassini.readthedocs.io) holds the user guide and
+the API reference. To build it locally, run `make html` in the `docs` directory after
+installing the package with its `docs` extra.
 
 # Contributing
 

@@ -113,15 +113,16 @@ intersphinx_mapping = {
 }
 
 # Nitpicky mode: report every cross-reference that does not resolve. The check script,
-# CI, and scripts/read-docs.sh also pass -n, but the ReadTheDocs build takes no extra
-# options, so it gets nitpicky mode only from here.
+# CI, and scripts/read-docs.sh also pass -n, but the ReadTheDocs build passes only its
+# own options, so it gets nitpicky mode only from here.
 nitpicky = True
 
 # The only cross-references that cannot resolve are the informal type words this
-# project's docstrings use to describe what an argument accepts. They name no Python
-# object, so there is nothing for Sphinx to link them to. Anything that does name a real
-# object is expected to resolve, so do not add entries here for symbols we own or for
-# third-party classes with an intersphinx inventory; fix the reference instead.
+# project's docstrings use to describe what an argument accepts. They are plain words
+# rather than the names of Python objects, so Sphinx cannot link them. Anything that does
+# name a real object is expected to resolve, so do not add entries here for symbols we
+# own or for third-party classes with an intersphinx inventory; fix the reference
+# instead.
 nitpick_ignore_regex = [
     # Napoleon splits a type such as "(bool, optional)" on the comma and looks up each
     # piece, so the trailing "optional" of every optional parameter arrives here.
@@ -129,6 +130,9 @@ nitpick_ignore_regex = [
     # ObsArray is a type alias in oops.host.host_ for an object array of Observations.
     # oops does not document it, so no inventory has an entry to link to.
     (r'py:class', r'ObsArray'),
+    # OopsSpiceError is added by rms-oops 0.5.0, which its published documentation does
+    # not yet describe. Remove this entry once that documentation has it.
+    (r'py:exc', r'(oops\.)?OopsSpiceError'),
 ]
 
 # MyST-Parser settings
@@ -160,6 +164,7 @@ _SHORT_NAMES = {
     'Meshgrid'        : 'oops.Meshgrid',
     'Scalar'          : 'polymath.Scalar',
     'OopsIndexError'  : 'oops.OopsIndexError',
+    'OopsSpiceError'  : 'oops.OopsSpiceError',
     'OopsTypeError'   : 'oops.OopsTypeError',
     'OopsValueError'  : 'oops.OopsValueError',
     'HostError'       : 'oops.host.HostError',

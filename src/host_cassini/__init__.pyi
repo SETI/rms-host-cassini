@@ -12,9 +12,14 @@ defaults. Types are given where they are unambiguous and are `Any` elsewhere.
 
 The detectors and support methods that a Host subclass overrides or calls, such as
 `_register` and `_detect_in_pds3`, are private and are not published here.
+
+Every `from_file` and `from_index` accepts only the keywords that it names, where Host's
+accepts any keyword, so each is marked as an incompatible override; Python raises
+TypeError for any other keyword.
 """
 
 import pathlib
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any
 
 from filecache import FCPath
@@ -34,40 +39,52 @@ from oops.path import Path
 __all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
 class CassiniISS(Host):
-    # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
+    # The runtime names the first parameter `fileinfo`, where Host names it `filepath`,
+    # and `select` must be None, because an image is one observation. Raises
+    # FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame` is
+    # given; the message ends with the SPICE error code), HostFormatError (a required item
+    # missing or invalid), TypeError (an unknown keyword), oops.OopsValueError (`select`
+    # not None), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
         | VicarImage, *,
         fast_distortion: bool | None = True, return_all_planets: bool = False,
-        pds3_options: dict[str, Any] | None = None, astrometry: bool = False,
+        pds3_options: dict[str, Any] | None = None, select: None = None,
+        astrometry: bool = False,
         target: str | Body | None = None, lightsource: LightSource | None = None,
         path: str | Path | None = None, frame: str | Frame | None = None,
         cadence: Cadence | None = None, fov: FOV | None = None,
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any) -> Snapshot: ...
-    # Every row is one Snapshot, so the list is typed more narrowly than Host's, which a
-    # list's invariance does not allow.
+        parallel: Observation | None = None) -> Snapshot: ...
+    # Every row is one Snapshot. The pointing is never checked. select must be None
+    # (oops.OopsValueError), and any other keyword raises TypeError. The call reads only
+    # the labels; the iterator reads the rows a few at a time and builds each row's
+    # Snapshot when it reaches the row.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
-        row_dicts: list[dict[str, Any]] | None = None,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
+        label: Pds3Label | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None, fast_distortion: bool | None = True,
-        return_all_planets: bool = False, target: str | Body | None = None,
+        return_all_planets: bool = False, select: None = None,
+        target: str | Body | None = None,
         lightsource: LightSource | None = None, path: str | Path | None = None,
         frame: str | Frame | None = None, cadence: Cadence | None = None,
         fov: FOV | None = None,
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any) -> list[Snapshot]: ...
+        parallel: Observation | None = None) -> Iterator[Snapshot]: ...
     @staticmethod
-    def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
-        asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
-        mst_pck: bool = True, irregulars: bool = True) -> None: ...
+    def initialize(*, ck: str = 'reconstructed',
+        planets: int | Sequence[int] | None = None, asof: str | None = None,
+        spk: str = 'reconstructed', gapfill: bool = True, mst_pck: bool = True,
+        irregulars: bool = True) -> None: ...
 
 class CassiniUVIS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`,
@@ -84,15 +101,16 @@ class CassiniUVIS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None,
-        **kwargs: Any) -> Observation | tuple[Observation, ...]: ...
-    # `select` accepts no channel name, and the list is typed more narrowly than Host's,
-    # which a list's invariance does not allow.
+        parallel: Observation | None = None) -> Observation | tuple[Observation, ...]: ...
+    # `select` accepts no channel name. The supplement is required: None or '' raises
+    # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
+    # TypeError. The iterator builds each row's observations when it reaches the row.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
-        supplement: str | pathlib.Path | FCPath | object | None = None,
-        label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
+        label: Pds3Label | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None,
         select: int | slice | tuple[int | slice, ...] | None = None,
@@ -102,12 +120,12 @@ class CassiniUVIS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None,
-        **kwargs: Any) -> list[Observation | ObsArray]: ...
+        parallel: Observation | None = None) -> Iterator[Observation | ObsArray]: ...
     @staticmethod
-    def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
-        asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
-        mst_pck: bool = True, irregulars: bool = True) -> None: ...
+    def initialize(*, ck: str = 'reconstructed',
+        planets: int | Sequence[int] | None = None, asof: str | None = None,
+        spk: str = 'reconstructed', gapfill: bool = True, mst_pck: bool = True,
+        irregulars: bool = True) -> None: ...
 
 class CassiniVIMS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
@@ -123,15 +141,18 @@ class CassiniVIMS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any
+        parallel: Observation | None = None
         ) -> tuple[Observation | None, Observation | None] | Observation | None: ...
-    # Every row is a (vis, ir) pair or a selection from one, so the list is typed more
-    # narrowly than Host's, which a list's invariance does not allow.
+    # Every row is a (vis, ir) pair or a selection from one. The supplement is required:
+    # None or '' raises oops.host.HostIndexError unless row_dicts is given. Any other
+    # keyword raises TypeError. The iterator builds each row's observations when it
+    # reaches the row.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
-        supplement: str | pathlib.Path | FCPath | object | None = None,
-        label: Pds3Label | None = None, row_dicts: list[dict[str, Any]] | None = None,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
+        label: Pds3Label | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None,
         select: int | slice | str | tuple[int | slice | str, ...] | None = None,
@@ -141,15 +162,16 @@ class CassiniVIMS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any
-        ) -> list[tuple[Observation | None, Observation | None] | Observation
-                  | None]: ...
+        parallel: Observation | None = None
+        ) -> Iterator[tuple[Observation | None, Observation | None] | Observation
+                      | None]: ...
     @staticmethod
     def meshgrid_and_times(obs: Observation, *, oversample: float = 6,
         extend: float = 1.5) -> tuple[Meshgrid, Scalar]: ...
     @staticmethod
-    def initialize(*, ck: str = 'reconstructed', planets: list[Any] | None = None,
-        asof: str | None = None, spk: str = 'reconstructed', gapfill: bool = True,
-        mst_pck: bool = True, irregulars: bool = True) -> None: ...
+    def initialize(*, ck: str = 'reconstructed',
+        planets: int | Sequence[int] | None = None, asof: str | None = None,
+        spk: str = 'reconstructed', gapfill: bool = True, mst_pck: bool = True,
+        irregulars: bool = True) -> None: ...
 
 ##########################################################################################

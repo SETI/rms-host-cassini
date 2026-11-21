@@ -3,6 +3,8 @@
 ##########################################################################################
 """Tests for the mission-level support in host_cassini.oops._cassini."""
 
+import json
+import pathlib
 from typing import Any
 
 import cspyce
@@ -13,10 +15,12 @@ import spicedb
 from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
+from pdsparser import Pds3Label
 
 from host_cassini.oops._cassini import (_Cassini, _cassini_obs_id_code,
-                                        _fix_cassini_ring_target,
-                                        _pds3_options_with_defaults)
+                                        _detect_index_by_path, _fix_cassini_ring_target,
+                                        _json_form, _pds3_options_with_defaults,
+                                        _sclk_from_tdb, _tdb_from_sclk)
 
 ##########################################################################################
 # Mission constants
@@ -472,7 +476,7 @@ def test_no_kernels_reach_cspyce() -> None:
 @pytest.mark.parametrize(('options', 'expected'), [
     (None, {'method': 'fast', 'sources': False}),
     ({}, {'method': 'fast', 'sources': False}),
-    ({'method': 'strict', 'sources': True}, {'method': 'strict', 'sources': True}),
+    ({'method': 'strict', 'sources': True}, {'method': 'strict', 'sources': False}),
     ({'other': 1}, {'other': 1, 'method': 'fast', 'sources': False}),
 ], ids=['none', 'empty', 'given', 'other-option'])
 def test_pds3_options_with_defaults(options: dict[str, Any] | None,
@@ -484,6 +488,34 @@ def test_pds3_options_with_defaults_copies_its_input() -> None:
     options = {'method': 'loose'}
     assert _pds3_options_with_defaults(options) is not options
     assert options == {'method': 'loose'}
+
+
+@pytest.mark.parametrize(('line', 'expected'), [
+    ('DATES = (2005-001, 2005-002)', ['2005-01-01', '2005-01-02']),
+    ('DATES = {2005-002, 2005-001}', ['2005-01-02', '2005-01-01']),
+], ids=['sequence', 'set'])
+def test_json_form_writes_the_dates_inside_a_value_as_text(line: str,
+                                                           expected: list[str]) -> None:
+    """The parser gives the text of a lone date, but not of a date in a sequence or set,
+    which is written in ISO form, in the label's order."""
+
+    label = Pds3Label(['PDS_VERSION_ID = PDS3', line, 'END'], sources=False)
+    content = _json_form(label.as_dict())
+    assert json.loads(json.dumps(content))['DATES'] == expected
+
+##########################################################################################
+# Index detection
+##########################################################################################
+
+
+def test_index_detection_reads_the_file_name(tmp_path: pathlib.Path) -> None:
+    """A UVIS index in a directory whose name holds another instrument's prefix is told
+    by its own name."""
+
+    path = tmp_path / 'COISS-backup' / 'COUVIS_0001_index.lbl'
+    path.parent.mkdir()
+    path.write_text('PDS_VERSION_ID = PDS3\r\nEND\r\n', newline='')
+    assert _detect_index_by_path(Pds3Label(path), 'COISS') is False
 
 ##########################################################################################
 # _fix_cassini_ring_target()
@@ -523,5 +555,26 @@ def test_fix_target_without_observation_id() -> None:
 ], ids=['iss', 'uvis', 'vims', 'too-short', 'other-instrument'])
 def test_cassini_obs_id_code(obs_id: str, expected: str) -> None:
     assert _cassini_obs_id_code(obs_id) == expected
+
+##########################################################################################
+# Clock conversions
+##########################################################################################
+
+
+def fail_without_a_spice_code(*args: Any) -> None:
+    raise ValueError('the count is not a number')
+
+
+@pytest.mark.parametrize(('name', 'convert', 'value'), [
+    ('scs2e', _tdb_from_sclk, '1294562649.000'),
+    ('sce2s', _sclk_from_tdb, 0.),
+], ids=['count-to-time', 'time-to-count'])
+def test_clock_error_without_a_spice_code_propagates(
+        monkeypatch: pytest.MonkeyPatch, name: str, convert: Any, value: Any) -> None:
+    """Only a cspyce error with a SPICE error code is missing SPICE data."""
+
+    monkeypatch.setattr(cspyce, name, fail_without_a_spice_code)
+    with pytest.raises(ValueError, match='the count is not a number'):
+        convert(value, 'N1294562649_1.IMG')
 
 ##########################################################################################

@@ -8,7 +8,9 @@ oops and cspyce calls that would read SPICE kernels directly are replaced by
 kernel-free equivalents. Everything else, including oops itself, runs for real.
 """
 
+import pathlib
 import re
+import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,6 +19,7 @@ import julian
 import oops
 import pytest
 import spicedb
+from filecache import FileCache, file_cache_path
 from oops.body import Body
 
 from host_cassini.oops._cassini import _Cassini
@@ -48,6 +51,65 @@ def pds3_lines(keywords: dict[str, Any], indent: str = '') -> list[str]:
     """PDS3 label lines assigning each keyword its formatted value."""
 
     return [f'{indent}{key} = {pds3_value(value)}' for (key, value) in keywords.items()]
+
+
+def write_table(directory: pathlib.Path, stem: str,
+                columns: dict[str, list[Any]]) -> pathlib.Path:
+    """Write an ASCII table and its detached PDS3 label; return the label's path.
+
+    Parameters:
+        directory: The directory to write into.
+        stem: The file name of the table and label, without the extension.
+        columns: The values of each column, by name: str values make a CHARACTER
+            column, int an ASCII_INTEGER column, and float an ASCII_REAL column.
+    """
+
+    formats = {str: ('CHARACTER', '{!s}'), int: ('ASCII_INTEGER', '{:d}'),
+               float: ('ASCII_REAL', '{:.4f}')}
+    names = list(columns)
+    texts = {name: [formats[type(value)][1].format(value) for value in columns[name]]
+             for name in names}
+    widths = [max(len(text) for text in texts[name]) for name in names]
+    nrows = len(columns[names[0]])
+    row_bytes = sum(widths) + len(widths) - 1 + 2
+    lines = [','.join(texts[name][i].ljust(width)
+                      for (name, width) in zip(names, widths, strict=True)) + '\r\n'
+             for i in range(nrows)]
+    (directory / f'{stem}.tab').write_text(''.join(lines), newline='')
+
+    label = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
+             f'RECORD_BYTES = {row_bytes}', f'FILE_RECORDS = {nrows}',
+             f'^INDEX_TABLE = "{stem}.tab"', 'OBJECT = INDEX_TABLE',
+             '  INTERCHANGE_FORMAT = ASCII', f'  ROWS = {nrows}',
+             f'  ROW_BYTES = {row_bytes}', f'  COLUMNS = {len(names)}']
+    start = 1
+    for (name, width) in zip(names, widths, strict=True):
+        label += ['  OBJECT = COLUMN', f'    NAME = {name}',
+                  f'    DATA_TYPE = {formats[type(columns[name][0])][0]}',
+                  f'    START_BYTE = {start}', f'    BYTES = {width}',
+                  '  END_OBJECT = COLUMN']
+        start += width + 1
+    label += ['END_OBJECT = INDEX_TABLE', 'END', '']
+    path = directory / f'{stem}.lbl'
+    path.write_text('\r\n'.join(label), newline='')
+    return path
+
+
+def claim_more_rows(label: pathlib.Path, rows: int, claimed: int) -> None:
+    """Rewrite a table label to say that its table holds more rows than it does.
+
+    Parameters:
+        label: The label's path.
+        rows: The number of rows that the label gives now.
+        claimed: The number of rows that it is to give.
+    """
+
+    text = label.read_bytes()
+    for keyword in (b'ROWS', b'FILE_RECORDS'):
+        old = keyword + b' = %d\r\n' % rows
+        assert old in text
+        text = text.replace(old, keyword + b' = %d\r\n' % claimed)
+    label.write_bytes(text)
 
 
 def iso_from_tdb(tdb: float) -> str:
@@ -189,6 +251,8 @@ class FakeSpice:
             `Body.define_solar_system`.
         spice_paths (list[tuple[str, str]]): The (path ID, origin) of each SpicePath.
         spice_frames (list[str]): The frame ID given to each SpiceFrame.
+        spice_frame_ids (set[str]): The oops frame ID of each SpiceFrame, which
+            `spice_check_times` watches.
     """
 
     leap_seconds: int = 0
@@ -196,6 +260,7 @@ class FakeSpice:
         default_factory=list)
     spice_paths: list[tuple[str, str]] = field(default_factory=list)
     spice_frames: list[str] = field(default_factory=list)
+    spice_frame_ids: set[str] = field(default_factory=set)
 
 
 @pytest.fixture(autouse=True)
@@ -215,7 +280,9 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     Kernel-reading calls are replaced: time conversion uses julian, a SpicePath becomes
     a FixedPath at the origin, and a SpiceFrame becomes an identity Cmatrix on J2000.
     Any attempt to furnish a kernel through cspyce fails the test. The Path and Frame
-    registries are copied so that frames registered by one test never reach another.
+    registries, caches, and waypoint and wayframe pools are copied, and the Cmatrix
+    wayframes start empty, so that paths and frames made by one test never reach
+    another.
     """
 
     fake = FakeSpice()
@@ -233,6 +300,7 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
     def spice_frame(spice_id: str, *, frame_id: str) -> oops.Frame:
         fake.spice_frames.append(spice_id)
+        fake.spice_frame_ids.add(frame_id)
         return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
                                   frame_id=frame_id)
 
@@ -242,8 +310,13 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     def scs2e(code: int, sclk: str) -> float:
         return float(sclk)
 
+    # The inverse of scs2e, spelled as cspyce spells a count, partition first
+    def sce2s(code: int, et: float) -> str:
+        return f'1/{et:.3f}'
+
     monkeypatch.setattr(cspyce, 'str2et', julian.tdb_from_iso)
     monkeypatch.setattr(cspyce, 'scs2e', scs2e)
+    monkeypatch.setattr(cspyce, 'sce2s', sce2s)
     monkeypatch.setattr(cspyce, 'furnsh', furnsh)
     monkeypatch.setattr(oops.spice, 'load_leap_seconds', load_leap_seconds)
     monkeypatch.setattr(Body, 'define_solar_system', staticmethod(define_solar_system))
@@ -254,8 +327,43 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
     monkeypatch.setattr(oops.Path, '_PATH_CACHE', dict(oops.Path._PATH_CACHE))
     monkeypatch.setattr(oops.Frame, '_FRAME_REGISTRY', dict(oops.Frame._FRAME_REGISTRY))
     monkeypatch.setattr(oops.Frame, '_FRAME_CACHE', dict(oops.Frame._FRAME_CACHE))
+
+    # A path or frame defined as an earlier one was shares its waypoint or wayframe, and
+    # so its ID, so each class's pool is copied too; otherwise a fixed path made by one
+    # test could become the path of the next, every fake SPICE path being fixed at the
+    # origin. These copies stay until oops offers one helper that isolates all of its
+    # global state for a test, SETI/rms-oops#250. The pools are weak dictionaries, from
+    # which garbage collection can remove a member while dict(pool) looks its keys up,
+    # so each is copied through items(), which defers removals until it is done.
+    for path_class in oops.Path._PATH_SUBCLASSES:
+        if '_WAYPOINTS' in vars(path_class):
+            monkeypatch.setattr(path_class, '_WAYPOINTS',
+                                dict(path_class._WAYPOINTS.items()))
+    for frame_class in oops.Frame._FRAME_SUBCLASSES:
+        for pool in ('_WAYFRAMES', '_FOR_NAME', '_FRAME_LOOKUP'):
+            if pool in vars(frame_class):
+                monkeypatch.setattr(frame_class, pool,
+                                    dict(getattr(frame_class, pool).items()))
+
+    # Every fake SPICE frame is the same Cmatrix, so without a pool of its own a test's
+    # frame would share the wayframe, and the evaluation, of one an earlier test made
+    monkeypatch.setattr(oops.frame.Cmatrix, '_WAYFRAMES', weakref.WeakValueDictionary())
     monkeypatch.setattr(Body, 'BODY_REGISTRY', dict(Body.BODY_REGISTRY))
     return fake
+
+
+@pytest.fixture(autouse=True)
+def private_filecache(tmp_path: pathlib.Path,
+                      monkeypatch: pytest.MonkeyPatch) -> FileCache:
+    """Give every test its own file cache, so no test sees what another cached.
+
+    FCPath objects that name no FileCache of their own share one default cache, normally
+    the global one under the system's temporary directory.
+    """
+
+    cache = FileCache(cache_root=tmp_path / 'filecache')
+    monkeypatch.setattr(file_cache_path, '_DEFAULT_FILECACHE', cache)
+    return cache
 
 
 @pytest.fixture(autouse=True)
@@ -286,5 +394,36 @@ def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
 
     CassiniISS.initialize()
     return fake_spicedb
+
+
+# Time-shift letters, and the seconds after the observation's midtime at which a SPICE
+# frame relative to J2000, as of UVIS and VIMS, is evaluated for a shift of 30 s: "T"
+# moves the observation's times, and "F" wraps the frame in a FrameShift, which
+# evaluates it that much later; the letters are read in either case
+TIME_SHIFTS = [('T', 0.), ('t', 0.), ('F', 30.), ('TF', 30.)]
+
+
+@pytest.fixture
+def spice_check_times(monkeypatch: pytest.MonkeyPatch,
+                      fake_spice: FakeSpice) -> list[float]:
+    """The times at which a SPICE frame of this test is evaluated while a host checks the
+    pointing."""
+
+    times: list[float] = []
+    check = oops.Host._check_spice_frame
+    transform_at_time = oops.frame.Cmatrix.transform_at_time
+
+    def recording_transform(self: Any, time: Any, *args: Any, **kwargs: Any) -> Any:
+        if getattr(self, 'frame_id', None) in fake_spice.spice_frame_ids:
+            times.append(float(oops.Scalar.as_scalar(time).vals))
+        return transform_at_time(self, time, *args, **kwargs)
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        with monkeypatch.context() as patch:
+            patch.setattr(oops.frame.Cmatrix, 'transform_at_time', recording_transform)
+            return check(*args, **kwargs)
+
+    monkeypatch.setattr(oops.Host, '_check_spice_frame', staticmethod(spy))
+    return times
 
 ##########################################################################################
