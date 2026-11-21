@@ -12,9 +12,13 @@ order of the index. The call itself checks the arguments and reads the PDS3 labe
 the index and its supplement, so a wrong argument or a label that cannot be read raises
 an error at once. The rows of the two tables are read as the iteration proceeds, a few
 at a time, and each row's observation is built when the iteration reaches that row. The
-memory used stays small however long the index is, and the first observation comes
-without waiting for the rest of the table. An error in a row is raised when the
-iteration reaches it, after the rows before it, and the iteration ends with that error.
+first observation comes without waiting for the rest of the table, and the rows read
+take little memory however long the index is. The memory used stays the same from the
+first row to the last only with the OOPS change that frees each observation's frame
+when the observation is released
+(`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without it, the memory
+used grows a little with each row. An error in a row is raised when the iteration
+reaches it, after the rows before it, and the iteration ends with that error.
 ``filter`` can leave such a row out. To build every row at once, pass the iterator to
 ``list()``.
 
@@ -54,9 +58,8 @@ The archive has no supplemental index for ISS, so the host needs none. The
   one.
 - A path or URL reads that file instead, and the file must exist. Its rows must list
   the same images as the index, in the same order, and where both tables give a column,
-  the index's value is kept. When both tables have ``VOLUME_ID`` and
-  ``FILE_SPECIFICATION_NAME``, a supplement row whose image is not the one in the same
-  row of the index raises :exc:`~oops.host.HostIndexError` when the iteration reaches
+  the index's value is kept. When both tables have ``FILE_SPECIFICATION_NAME``, a
+  supplement row whose image is not the one in the same row of the index raises :exc:`~oops.host.HostIndexError` when the iteration reaches
   it, and so does a supplement that ends first or has rows left over.
 - None reads the index alone.
 
@@ -93,8 +96,8 @@ Other arguments
     row. Override ``fov`` only when every row is of the same camera, because the two
     cameras have different fields of view.
 
-Any other keyword raises :exc:`~oops.OopsTypeError`, so that a misspelled argument is
-not silently ignored.
+Any other keyword raises :exc:`TypeError`, so that a misspelled argument is not silently
+ignored.
 
 What one row gives
 ------------------
@@ -164,9 +167,9 @@ as a full path or URL, formed from the location of the index:
 - For an index anywhere else, the volume is the directory of that name beside the
   index, as in a copy of the holdings that keeps each index next to its volumes.
 
-``abspath`` is present only when the image file is on the local file system, or is a
-remote file that is already in the local cache. Reading an index never creates a
-directory, even when the volume is not where the index places it.
+No observation from an index has ``abspath``, since reading an index does not retrieve
+the image files. Reading an index never creates a directory, even when the volume is not
+where the index places it.
 
 UVIS indexes
 ============
@@ -244,7 +247,7 @@ supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for IS
 Whether they should give the data file instead is an open question
 (`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
 ``label``, ``row_dicts``, ``filter``, ``pds3_options``, and the standard overrides work
-as they do for ISS, and any other keyword raises :exc:`~oops.OopsTypeError`.
+as they do for ISS, and any other keyword raises :exc:`TypeError`.
 
 VIMS indexes
 ============
@@ -300,6 +303,8 @@ claims a label whose path holds ``COISS``, UVIS one whose path holds ``COUVIS``,
 one that gives the instrument ``VIMS`` or whose path holds ``COVIMS``; ISS and UVIS turn
 down a label that gives another instrument or the path of another instrument's volume.
 Only when no host claims the label is the first row read, once, to find the host from
-its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. The index then goes, with all of the
+its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. A label or first row that more than
+one registered host claims raises ``oops.host.AmbiguousHostError``, which names the
+hosts. The index then goes, with all of the
 other arguments, to the host's ``from_index()``, which reads and pairs the rows itself,
 so the two give the same observations, also when ``supplement`` gives a path.

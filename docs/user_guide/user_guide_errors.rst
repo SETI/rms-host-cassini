@@ -28,7 +28,7 @@ Reading an ISS image file
     The message gives the item and the image file. It is also raised when a normal read
     needs the image file of parsed content that came from no file.
 
-:exc:`~oops.OopsTypeError`
+:exc:`TypeError`
     A keyword argument is not one that the method accepts.
 
 :exc:`~oops.OopsValueError`
@@ -70,7 +70,7 @@ Reading an ISS index
     describe a table that can be read. During the iteration: a supplement that was given
     does not list the same image as the index in that row; a table ends before its label
     says, after every row it holds; or a row is longer than the label's row length,
-    raised at the first of the ten rows read with it, none of which gives an
+    raised at the first of the 100 rows read with it, none of which gives an
     observation. After the last row: the supplement has rows left over, or a table holds
     more rows than its label says. A value that cannot be read as its column's number is
     not reported as an error: the table reader issues a warning, and the row is read with
@@ -87,9 +87,12 @@ Reading an ISS index
     or the table of the index or the supplement does not exist, when the iteration
     starts.
 
+:exc:`TypeError`
+    A keyword argument is not one that the method accepts.
+
 :exc:`~oops.OopsTypeError`
-    A keyword argument is not one that the method accepts, or, when the iteration
-    reaches a row, a range in ``filter`` cannot be compared with the row's value.
+    When the iteration reaches a row, a range in ``filter`` cannot be compared with the
+    row's value.
 
 :exc:`~oops.OopsValueError`
     ``select`` is not None, or ``filter`` asks for a column that the index does not
@@ -136,8 +139,9 @@ UVIS and VIMS
 :exc:`~oops.OopsIndexError`, :exc:`~oops.OopsTypeError`, :exc:`~oops.OopsValueError`
     ``select`` is out of range, is of a type that it does not accept, or gives a name
     that it does not accept. A wrong type or name is found before any file is read.
-    :exc:`~oops.OopsTypeError` is also raised for a keyword argument that the method
-    does not accept.
+
+:exc:`TypeError`
+    A keyword argument is not one that the method accepts.
 
 :exc:`OSError`
     A file cannot be read.
@@ -154,7 +158,7 @@ UVIS and VIMS
     its first row is still held; a pair of rows gives different files; a row of
     ``row_dicts`` does not include the supplement's columns; a table ends before its
     label says, after every row it holds; or a row is longer than the label's row
-    length, raised at the first of the ten rows read with it. After the last row: the
+    length, raised at the first of the 100 rows read with it. After the last row: the
     supplement lists a product that the index does not, or lists it more often, or a
     table holds more rows than its label says. A value that cannot be read as its
     column's number is not reported as an error: the table reader issues a warning, and
@@ -176,10 +180,12 @@ UVIS and VIMS
     row. Neither method checks the pointing; an observation whose pointing the C kernels
     lack raises this error only when its frame is evaluated.
 
+:exc:`TypeError`
+    A keyword argument is not one that the method accepts.
+
 :exc:`~oops.OopsTypeError`
-    A keyword argument is not one that the method accepts, or ``select`` is not of a
-    type that it accepts; or, when the iteration reaches a row, a range in ``filter``
-    cannot be compared with the row's value.
+    ``select`` is not of a type that it accepts; or, when the iteration reaches a row, a
+    range in ``filter`` cannot be compared with the row's value.
 
 :exc:`~oops.OopsValueError`
     ``select`` gives a name that it does not accept, or ``filter`` asks for a column that

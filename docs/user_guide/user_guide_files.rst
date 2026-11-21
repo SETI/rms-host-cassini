@@ -59,10 +59,12 @@ A path that ends in ``.lbl``, in any case, is read as a PDS3 label, and any othe
 as a VICAR image file.
 
 The ``filepath``, ``basename``, ``abspath``, and ``image_url`` subfields always give the
-image file, also when the input is the label. ``abspath`` is present only when the image
-file is on the local file system or is a remote file already in the local cache. An
-astrometry read of a remote label does not retrieve the image file, so ``abspath`` is
-present only if an earlier read cached it. Reading a file never creates a directory.
+image file, also when the input is the label. ``abspath`` is the local path of the image
+file, and only a read that retrieves the image file to read its array gives it: a
+normal read of a path, of a parsed PDS3 label, or of a :class:`~vicar.VicarLabel`. For a
+remote file, it is the copy in the local cache. An astrometry read, and a read of a
+:class:`~vicar.VicarImage` passed in, have no ``abspath``, even when the image file is
+on the local disk. Reading a file never creates a directory.
 
 Parsed input
 ------------
@@ -129,8 +131,8 @@ The standard OOPS overrides, ``target``, ``lightsource``, ``path``, ``frame``,
 ``cadence``, ``fov``, ``calibrations``, ``timeshift``, ``navigation``, ``tracker``, and
 ``parallel``, replace what the host would otherwise build. They are listed with
 :meth:`~host_cassini.oops.iss.CassiniISS.from_file`. Any other keyword raises
-:exc:`~oops.OopsTypeError`, so that a misspelled argument is not silently ignored. The
-arguments are checked before any file is read.
+:exc:`TypeError`, so that a misspelled argument is not silently ignored. The arguments
+are checked before any file is read.
 
 UVIS products
 =============
@@ -162,14 +164,16 @@ product gives a single observation. Two options control this:
 
 The ``label_dict`` subfield holds the PDS3 label and ``dict`` the same keywords without
 their missing values, as :doc:`user_guide_metadata` describes. ``filepath``,
-``basename``, ``abspath``, and ``image_url`` give the label, not the data file; whether
-they should give the data file instead is an open question
+``basename``, and ``image_url`` give the label, not the data file; whether they should
+give the data file instead is an open question
 (`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
+``abspath`` is the local path of the data file, given only by a normal read, which
+retrieves it.
 ``pds3_options``, ``astrometry``, and the standard overrides work as they do for ISS,
 and the parser falls back from the fast method to the strict and the loose ones in the
 same way. Parsed content that came from no file works as it does for ISS: an astrometry
 read has no file subfields, and a normal read raises :exc:`~oops.host.HostFormatError`.
-Any other keyword raises :exc:`~oops.OopsTypeError`.
+Any other keyword raises :exc:`TypeError`.
 
 VIMS cubes
 ==========
@@ -194,14 +198,15 @@ raises an error before the file is read.
 
 The label that was read is ``label_dict`` for a detached PDS3 label and ``header_dict``
 for the cube's own ISIS label, and ``dict`` holds its keywords without their missing
-values, as :doc:`user_guide_metadata` describes. ``filepath``, ``basename``, ``abspath``,
-and ``image_url`` give the file that was passed in, which is the label when the label is
+values, as :doc:`user_guide_metadata` describes. ``filepath``, ``basename``, and
+``image_url`` give the file that was passed in, which is the label when the label is
 given; whether they should give the cube instead is an open question
 (`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
+``abspath`` is the local path of the cube, given only by a normal read, which retrieves
+it.
 ``pds3_options``, ``astrometry``, parsed content, and the standard overrides work as they
 do for UVIS. Override ``fov`` only when ``select`` picks a single channel, because the
-two channels have different fields of view. Any other keyword raises
-:exc:`~oops.OopsTypeError`.
+two channels have different fields of view. Any other keyword raises :exc:`TypeError`.
 
 Some VIMS labels, such as ``v1481842120_1_048.lbl`` of COVIMS_0005, have a comment that
 opens on the line of a value and closes on the next line:
@@ -222,7 +227,8 @@ label, or a VIMS cube or label, and passes the file's path, with its other argum
 the host's ``from_file()``, so the two give the same observations. To recognize a label,
 it tries the parser's fast, strict, and loose methods in turn, as the hosts do. A label
 that none of them can read is repaired by each host in turn, as described above, and
-goes to the first host whose repairs make it readable and that recognizes it: the
-calibrated ISS labels whose ``DESCRIPTION`` is split in two, such as
-``N1640662528_3_CALIB.LBL`` of COISS_2059, go to the ISS host, and the VIMS labels with
-a comment that spans two lines to the VIMS host.
+goes to the host whose repairs make it readable and that recognizes it: the calibrated
+ISS labels whose ``DESCRIPTION`` is split in two, such as ``N1640662528_3_CALIB.LBL`` of
+COISS_2059, go to the ISS host, and the VIMS labels with a comment that spans two lines
+to the VIMS host. A file or label that more than one registered host claims raises
+``oops.host.AmbiguousHostError``, which names the hosts.

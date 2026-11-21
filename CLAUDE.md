@@ -39,8 +39,9 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   re-signing a public member means updating `host_cassini/__init__.pyi` in the same change.
   The `[tool.mypy] exclude`, the override list in `pyproject.toml` and
   `.stubtest-allowlist` keep it off the stub-less modules. Each `type: ignore[override]`
-  marks a real mismatch with `oops.Host`: every `from_file` names its first parameter
-  `fileinfo`, and CassiniUVIS's `select` accepts no channel name.
+  marks a real mismatch with `oops.Host`: every `from_file` and `from_index` accepts only
+  the keywords it names, where `oops.Host`'s takes `**kwargs`; every `from_file` names its
+  first parameter `fileinfo`; and CassiniUVIS's `select` accepts no channel name.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
@@ -114,9 +115,16 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   conversions go through `_tdb_from_sclk()`/`_sclk_from_tdb()`, which use oops's one
   rule for cspyce failures (`OopsSpiceError.CSPYCE_ERRORS` and `is_spice_error`): only
   an error with a SPICE code becomes `OopsSpiceError`; any other propagates.
-- Every `from_file()` rejects an unknown keyword with `oops.Host._check_keywords()` and
-  checks `select` before reading with `oops.Host._check_select()` (ISS: `unit=`, so it
-  must be None; VIMS: the channel names). ISS builds
+- No `from_file()` or `from_index()` takes `**kwargs`, so Python itself raises
+  `TypeError` for an unknown keyword. Every `from_file()` checks `select` before reading
+  with `oops.Host._check_select()` (ISS: `unit=`, so it must be None; VIMS: the channel
+  names). `abspath` is passed to `oops.Host._apply_overrides(abspath=...)` only by a full
+  `from_file` read that retrieved the data file in this call: the local path that
+  `FCPath.retrieve()` returned (ISS: `_read_vicar_image()`, or a retrieve after oops read
+  a VICAR path; UVIS: `_load_data()`; VIMS: the cube's `data_file`). Astrometry reads,
+  a caller's `VicarImage`, and every `from_index` row give none. UVIS and VIMS name the
+  data file in `abspath` while their other file subfields name the label (see below).
+  ISS builds
   `header_dict` from a `VicarLabel` read from the file, since rms-vicar writes the
   reading machine into HOST and BHOST when it reads the array.
 - The null rules (`_is_null`, `_without_nulls`, `_row_items`, `_label_dict` in
@@ -134,20 +142,20 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   open question in the issues. They read through `_read_pds3_label()`, which also
   refuses another instrument's parsed label with `WrongHostError`.
 - Every `from_index()` reads its rows through `oops.Host._index_rows()`, which streams
-  the index and supplement with `PdsTable(defer_load=True).iter_dicts` ten rows at a
+  the index and supplement with `PdsTable(defer_load=True).iter_dicts` 100 rows at a
   time, and pairs, validates and filters them. The hosts read the Ring-Moon Systems Node
   metadata indexes and their supplements. Nothing in
   the host reads a whole table, builds a list of rows, or indexes `row_dicts`; a check
   on a row (UVIS/VIMS: the supplement's columns in `row_dicts`) happens in the generator
   at that row. Each row's file is its full path or URL: `oops.Host._index_file_path()`
   puts `<VOLUME_ID>/<FILE_SPECIFICATION_NAME>` in `oops.Host._volumes_directory()` of
-  the index. `abspath` comes from `oops.Host._apply_overrides()`, which gives it only
-  when the file, or the cache's copy of a remote file, exists, and never creates a
-  directory; parsed content with no path (`_known_path()` is None) has no file
-  subfields. All three follow the `oops.Host.from_index` contract: `supplement`
-  defaults to `oops.Host.SUPPLEMENT` (UVIS and VIMS require it, so None raises `HostIndexError`
-  unless `row_dicts` is given; ISS has none and ignores a missing one), and an unknown
-  keyword raises `OopsTypeError`. ISS refuses `select`, since each row is one
+  the index. No row has `abspath`, and nothing creates a directory; parsed content with
+  no path (`_known_path()` is None) has no file subfields. All three follow the
+  `oops.Host.from_index` contract: `supplement` defaults to `oops.Host.SUPPLEMENT` (UVIS
+  and VIMS require it, so None raises `HostIndexError` unless `row_dicts` is given; ISS
+  has none and ignores a missing one), and an unknown keyword raises `TypeError`. The
+  default pairing key is FILE_SPECIFICATION_NAME alone, with VOLUME_ID still compared as
+  a shared column. ISS refuses `select`, since each row is one
   observation; UVIS and VIMS apply it, since a row gives several windows or a (vis, ir)
   pair.
 - `MERGE_SUPPLEMENT_BY_FILE` on each class fixes how oops pairs the two tables, from the
