@@ -680,12 +680,14 @@ class CassiniISS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` has already been read;
                 each is filtered and built when the iteration reaches it. If provided,
-                they are used in place of the tables, `supplement` is ignored, neither
-                table nor the supplement's label is read, and the null constants that the
-                index declares are read from `label` or, if it is not given, from the
-                label of `filepath`, as for rows read from the table.
+                they are used in place of the tables and the supplement, `supplement` is
+                ignored, and the null constants that the index declares are read from
+                `label` or, if it is not given, from the label of `filepath`, as for rows
+                read from the table.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. They
+                are checked when the call parses the index label, which it does only if
+                `label` is not given.
             filter (dict[str, Any], optional): A dictionary of index column names and
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
@@ -1622,12 +1624,18 @@ class CassiniISS(oops.Host):
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
                 nine.
-            asof (str, optional): A date in ISO format. Each kernel is chosen from those
-                released on or before it, or, where the database does not hold one so
-                old, as if no date were given; for the C kernels of the chosen set,
-                ValueError is raised instead. The gap-filling C kernels and the ISS
-                instrument kernel, from which the fields of view are read, are always
-                the newest. None to choose the newest kernels.
+            asof (str, optional): A date in ISO format; the kernels released before it
+                are used. Where none of the kernels that a query could choose was
+                released before the date, spicedb silently uses the one it would choose
+                without a date. A query that finds some kernels released before the date
+                uses only those, so for the SP and C kernel sets a date inside the
+                mission leaves the later part of the mission uncovered. The C kernel
+                queries never fall back: if none of the chosen set was released before
+                the date, ValueError is raised. The date decides the leap seconds too:
+                the dated leap-second kernel supersedes the one loaded first. Two loads
+                ignore the date: the gap-filling C kernels, and the ISS instrument
+                kernel, from which the fields of view are read. None to choose the
+                newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1640,7 +1648,7 @@ class CassiniISS(oops.Host):
         Raises:
             HostError: If the instrument kernel gives a camera's field of view
                 in units other than degrees.
-            ValueError: If no C kernel of the chosen set was released by `asof`.
+            ValueError: If no C kernel of the chosen set was released before `asof`.
         """
 
         # Quick exit after first call

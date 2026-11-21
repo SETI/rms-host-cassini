@@ -457,7 +457,7 @@ def test_from_index_rows_need_no_supplement() -> None:
 
 
 def test_from_index_with_given_rows_skips_the_labels(tmp_path: pathlib.Path) -> None:
-    """Given rows are used in place of the tables, so the call reads neither label: an
+    """Given rows are used in place of the tables, so the call reads only those rows: an
     index label and a supplement that do not exist, and an option that the label parser
     would refuse, still give the row's pair."""
 

@@ -256,9 +256,9 @@ Whether they should give the data file instead is an open question
 (`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
 ``label``, ``filter``, ``pds3_options``, and the standard overrides work as they do for
 ISS, and any other keyword raises :exc:`TypeError`. Rows given in ``row_dicts`` take the
-place of the tables, as for ISS, but the call then does not read any label: neither the
-index's label nor the supplement's need exist, the index is not checked to be a UVIS
-index, and ``label`` and ``pds3_options`` are ignored.
+place of the tables, as for ISS, but the call then reads only those rows: the index's
+label and the supplement's need not exist, the index is not checked to be a UVIS index,
+and ``label`` and ``pds3_options`` are ignored.
 
 VIMS indexes
 ============

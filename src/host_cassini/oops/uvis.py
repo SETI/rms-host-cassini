@@ -301,10 +301,10 @@ class CassiniUVIS(oops.Host):
         when the iteration reaches that row, so an error in a row is raised at that row,
         after every earlier row has been yielded.
 
-        With `row_dicts`, the given rows take the place of the tables, and the call does
-        not read either label. The errors below that come from reading a label or a table
-        are then never raised: neither label need exist, the index need not be Cassini
-        UVIS, and `pds3_options` is not checked. What is still checked is `select`,
+        With `row_dicts`, the given rows take the place of the tables, and the call reads
+        only those rows. The errors below that come from reading a label or a table are
+        then never raised: the labels need not exist, the index need not be Cassini UVIS,
+        and `pds3_options` is not checked. What is still checked is `select`,
         `filter` against the first row, and each row when the iteration reaches it.
 
         Parameters:
@@ -332,9 +332,8 @@ class CassiniUVIS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` and `supplement` have
                 already been read; each is filtered and built when the iteration reaches
-                it. If provided, they are used in place of the tables, `supplement`,
-                `label` and `pds3_options` are ignored, and neither the tables nor their
-                labels are read.
+                it. If provided, they are used in place of the tables and their labels,
+                and `supplement`, `label` and `pds3_options` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser.
             filter (dict[str, Any], optional): A dictionary of index column names and
@@ -1306,12 +1305,18 @@ class CassiniUVIS(oops.Host):
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
                 nine.
-            asof (str, optional): A date in ISO format. Each kernel is chosen from those
-                released on or before it, or, where the database does not hold one so
-                old, as if no date were given; for the C kernels of the chosen set,
-                ValueError is raised instead. The gap-filling C kernels and the UVIS
-                instrument kernel, from which the fields of view are read, are always
-                the newest. None to choose the newest kernels.
+            asof (str, optional): A date in ISO format; the kernels released before it
+                are used. Where none of the kernels that a query could choose was
+                released before the date, spicedb silently uses the one it would choose
+                without a date. A query that finds some kernels released before the date
+                uses only those, so for the SP and C kernel sets a date inside the
+                mission leaves the later part of the mission uncovered. The C kernel
+                queries never fall back: if none of the chosen set was released before
+                the date, ValueError is raised. The date decides the leap seconds too:
+                the dated leap-second kernel supersedes the one loaded first. Two loads
+                ignore the date: the gap-filling C kernels, and the UVIS instrument
+                kernel, from which the fields of view are read. None to choose the
+                newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1323,7 +1328,7 @@ class CassiniUVIS(oops.Host):
 
         Raises:
             OopsValueError: If the instrument kernel gives an unrecognized FOV_SHAPE.
-            ValueError: If no C kernel of the chosen set was released by `asof`.
+            ValueError: If no C kernel of the chosen set was released before `asof`.
         """
 
         # Quick exit after first call

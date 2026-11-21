@@ -69,7 +69,7 @@ Initialization
 
 The first call to a host's ``from_file()`` or ``from_index()`` loads the instrument
 kernel and defines the instrument's fields of view. To choose the kernel sets, the
-bodies that OOPS defines, or to prefer the kernels released by a given date, call the
+bodies that OOPS defines, or to use the kernels released before a given date, call the
 host's ``initialize()`` before opening the first product. This call loads the
 predicted C kernels in place of the reconstructed ones, and defines Saturn, planet 6,
 and its moons, and no other planet:
@@ -87,16 +87,19 @@ and ``mst_pck`` adds the updated rotation models of some small moons. The three 
 share one set of mission kernels, so the first host to be initialized makes these
 choices for all three. Later calls to ``initialize()`` have no effect.
 
-``asof`` takes a date, such as ``'2008-01-01'``, and each kernel is then chosen from
-those released on or before that date where possible. Where the kernel database does
-not hold a kernel of some kind that old, a later one is used, the one that would be
-chosen without a date, and no warning is given. For example, ``asof='2008-01-01'``
-still loads the spacecraft clock kernel released in 2018, because the database does not
-hold an earlier one. The C kernels are the exception: if none of the chosen set was
-released by the date, as for ``asof='2000-01-01'``, ``initialize()`` raises
-:exc:`ValueError`. The gap-filling C kernels, and each host's own instrument kernel,
-are always the newest ones, whatever the date; ISS and UVIS read their fields of view
-from that kernel.
+``asof`` takes a date, such as ``'2008-01-01'``, and the kernels released before that
+date are used. Where none of the kernels of some kind was released before the date, the
+one that would be chosen without a date is used instead, silently. For example,
+``asof='2008-01-01'`` still loads the spacecraft clock kernel released in 2018, the only
+one in the kernel database. Where some kernels of a kind were released before the date,
+only those are used, so a date inside the mission leaves the later part of the mission
+uncovered by the SP and C kernels: with ``asof='2008-01-01'``, the reconstructed SP
+kernels end on 2007-09-19 and the reconstructed C kernels on 2007-12-28. The C kernels
+are the exception to the fallback: if none of the chosen set was released before
+the date, as for ``asof='2000-01-01'``, ``initialize()`` raises :exc:`ValueError`. The
+date decides the leap seconds too. Two sets of kernels are loaded without the date: the
+gap-filling C kernels, and each host's own instrument kernel, from which ISS and UVIS
+read their fields of view.
 
 Data files and indexes
 ======================

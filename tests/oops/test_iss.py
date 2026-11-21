@@ -301,8 +301,18 @@ def test_initialize_passes_options_to_mission(fake_spicedb: FakeSpiceDB,
                           asof='2010-02-03', mst_pck=False, irregulars=False)
     assert fake_spicedb.named('select_spk')[0][1]['name'] == 'CAS-SPK-PREDICTED'
     assert fake_spicedb.named('select_ck')[0][1]['name'] == 'CAS-CK-PREDICTED'
-    assert fake_spice.solar_system[0][1] == {'asof': '2010-02-03', 'planets': [6],
-                                             'mst_pck': False, 'irregulars': False}
+    assert fake_spice.solar_system[0][1] == {'asof': '2010-02-03T00:00:00',
+                                             'planets': [6], 'mst_pck': False,
+                                             'irregulars': False}
+
+
+def test_initialize_gives_every_query_the_same_date(fake_spicedb: FakeSpiceDB,
+                                                    fake_spice: FakeSpice) -> None:
+    CassiniISS.initialize(asof='2010-02-03')
+    dates = [kwargs['asof'] for (_, kwargs) in fake_spice.solar_system]
+    dates += [kwargs['asof'] for name in ('select_spk', 'select_ck', 'furnish_inst')
+              for (_, kwargs) in fake_spicedb.named(name)]
+    assert dates == ['2010-02-03T00:00:00'] * 5
 
 
 def test_initialize_ignores_later_calls(initialized_iss: FakeSpiceDB) -> None:

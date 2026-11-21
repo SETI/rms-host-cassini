@@ -63,8 +63,8 @@ class CassiniISS(Host):
     # (oops.OopsValueError), and any other keyword raises TypeError. The call reads only
     # the labels; the iterator reads the rows a few at a time and builds each row's
     # Snapshot when it reaches the row. Rows given in row_dicts take the place of the
-    # tables: the call then reads only the index label, for its null constants, so the
-    # supplement, the tables and the host are not checked.
+    # tables: the call then reads only the index label, for its null constants, unless
+    # label is given, so the supplement, the tables and the host are not checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
@@ -107,8 +107,8 @@ class CassiniUVIS(Host):
     # `select` accepts no channel name. The supplement is required: None or '' raises
     # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
     # TypeError. The iterator builds each row's observations when it reaches the row.
-    # Rows given in row_dicts take the place of the tables: the call then reads neither
-    # label, so the checks of the labels, the host and pds3_options are not made.
+    # Rows given in row_dicts take the place of the tables: the call then reads only the
+    # given rows, so the labels, the host and pds3_options are not checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
@@ -151,8 +151,8 @@ class CassiniVIMS(Host):
     # None or '' raises oops.host.HostIndexError unless row_dicts is given. Any other
     # keyword raises TypeError. The iterator builds each row's observations when it
     # reaches the row. Rows given in row_dicts take the place of the tables: the call
-    # then reads neither label, so the checks of the labels, the host and pds3_options
-    # are not made.
+    # then reads only the given rows, so the labels, the host and pds3_options are not
+    # checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,

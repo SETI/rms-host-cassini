@@ -217,7 +217,7 @@ def test_load_methods_use_their_own_kernel_tables(method: str, args: tuple[float
 def test_initialize_defines_the_solar_system(fake_spice: FakeSpice) -> None:
     _Cassini.initialize(planets=[6], asof='2020-01-01', mst_pck=False, irregulars=False)
     assert fake_spice.solar_system == [(('1997-10-01', '2017-10-01'),
-                                        {'asof': '2020-01-01', 'planets': [6],
+                                        {'asof': '2020-01-01T00:00:00', 'planets': [6],
                                          'mst_pck': False, 'irregulars': False})]
 
 
@@ -242,7 +242,7 @@ def test_initialize_selects_kernel_sets(fake_spicedb: FakeSpiceDB, kind: str, se
     _Cassini.initialize(asof='2020-01-01', **{kind: option})
     assert fake_spicedb.named(select) == [
         ((-82,), {'name': name, 'time': ('1997-10-01', '2017-10-01'),
-                  'asof': '2020-01-01'})
+                  'asof': '2020-01-01T00:00:00'})
         for name in sets]
 
 
