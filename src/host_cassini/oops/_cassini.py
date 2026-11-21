@@ -253,6 +253,38 @@ class _Cassini:
                               _Cassini.SPK_DICT)
 
     @staticmethod
+    def load_observation_kernels(t0, t1, overrides):
+        """Furnish the kernels of an observation, for its own times and for the times
+        that its overrides give it.
+
+        The SP kernels, and the C kernels unless a `frame` override is given, are
+        furnished for the interval `t0` to `t1` and, if a `cadence` override is given,
+        for that cadence's interval too, so that the pointing is checked at the
+        override's time with the kernels of that time. The kernels of each month cover 12
+        hours on either side of it, which also covers a time shift of up to 12 hours.
+
+        Parameters:
+            t0 (float): The start time of the observation in seconds TDB.
+            t1 (float): The stop time of the observation in seconds TDB.
+            overrides (dict[str, Any]): The standard overrides, of which "frame" and
+                "cadence" are read.
+
+        Returns:
+            bool: True if the C kernels were furnished, that is, no `frame` override was
+            given.
+        """
+
+        intervals = [(t0, t1)]
+        if overrides['cadence'] is not None:
+            intervals.append(overrides['cadence'].time)
+        using_cks = overrides['frame'] is None
+        for (start, stop) in intervals:
+            _Cassini.load_spks(start, stop)
+            if using_cks:
+                _Cassini.load_cks(start, stop)
+        return using_cks
+
+    @staticmethod
     def load_kernels(t0, t1, loaded, lists, kernel_dict):
         """Furnish every kernel in the given lists that applies within a time range.
 
@@ -574,11 +606,12 @@ _VOLUME_PREFIXES = ('COISS', 'COUVIS', 'COVIMS')
 
 
 def _detect_index_by_path(label, prefix):
-    """Whether the path of an index label shows that it belongs to one instrument.
+    """Whether the file name of an index label shows that it belongs to one instrument.
 
     The volumes of the Cassini instruments are named COISS_nnnn, COUVIS_nnnn, and
-    COVIMS_nnnn, and their metadata indexes are stored under those names, such as
-    metadata/COISS_2xxx/COISS_2001/COISS_2001_index.lbl.
+    COVIMS_nnnn, and each metadata index is named for its volume, such as
+    metadata/COISS_2xxx/COISS_2001/COISS_2001_index.lbl. Only the file name is read, so
+    that a directory whose name holds another instrument's prefix decides nothing.
 
     Parameters:
         label (Pds3Label | dict[str, Any]): The parsed label of an index; a dictionary
@@ -586,17 +619,17 @@ def _detect_index_by_path(label, prefix):
         prefix (str): The volume prefix of the instrument, such as "COUVIS".
 
     Returns:
-        bool | None: True if the label's path contains `prefix`, in any case; False if it
-        contains the prefix of another Cassini instrument; otherwise None.
+        bool | None: True if the label's file name starts with `prefix`, in any case;
+        False if it starts with the prefix of another Cassini instrument; otherwise None.
     """
 
     filepath = getattr(label, 'filepath', None)
     if filepath is None:
         return None
-    text = FCPath(filepath).as_posix().upper()
-    if prefix in text:
+    name = FCPath(filepath).name.upper()
+    if name.startswith(prefix):
         return True
-    if any(other in text for other in _VOLUME_PREFIXES if other != prefix):
+    if any(name.startswith(other) for other in _VOLUME_PREFIXES if other != prefix):
         return False
     return None
 
@@ -782,7 +815,8 @@ def _json_form(dict_):
         dict[str, Any]: The dictionary, with each date, time, or date-time value replaced
         by the text of its "_fmt" key, each set replaced by the list of its "_list" key,
         each tuple replaced by a list, and each dictionary inside it converted the same
-        way.
+        way. The parser gives no text for a date or time inside a sequence or set, so
+        each one there is written in ISO form, such as "2005-01-01".
     """
 
     result = {}
@@ -792,10 +826,32 @@ def _json_form(dict_):
         elif isinstance(value, (datetime.date, datetime.time)):     # incl. datetime
             value = dict_.get(key + '_fmt', value.isoformat())
         elif isinstance(value, (set, frozenset)):
-            value = dict_.get(key + '_list', sorted(value))
-        elif isinstance(value, tuple):
-            value = list(value)
+            value = _json_items(dict_.get(key + '_list', sorted(value)))
+        elif isinstance(value, (list, tuple)):
+            value = _json_items(value)
         result[key] = value
+    return result
+
+
+def _json_items(items):
+    """The items of a parsed PDS3 sequence or set, as a list that can be written as JSON.
+
+    Parameters:
+        items (list[Any] | tuple[Any, ...]): The items, which may be sequences
+            themselves.
+
+    Returns:
+        list[Any]: The items, each date, time, or date-time in ISO form and each sequence
+        converted the same way.
+    """
+
+    result = []
+    for item in items:
+        if isinstance(item, (datetime.date, datetime.time)):         # incl. datetime
+            item = item.isoformat()
+        elif isinstance(item, (list, tuple)):
+            item = _json_items(item)
+        result.append(item)
     return result
 
 
@@ -883,6 +939,28 @@ def _row_items(row_dict, *, masks, fill_values=None):
             value = None if mask else _index_value(value, fill)
         items[key] = value
     return _without_nulls(items)
+
+
+def _require_file_columns(items, instrument, filepath):
+    """Raise HostIndexError if a row of an index lacks the columns that name its file.
+
+    Parameters:
+        items (dict[str, Any]): The row, as :func:`_row_items` gives it, without its
+            missing values.
+        instrument (str): The instrument, such as "UVIS", for the message.
+        filepath (str | pathlib.Path | FCPath): The index, for the message.
+
+    Raises:
+        HostIndexError: If VOLUME_ID or FILE_SPECIFICATION_NAME is missing from `items`,
+            as it is when the table gives it as a declared null constant or as text that
+            the archive writes for no value; the message reads "Cassini <instrument>
+            index row gives no <column>: <filepath>".
+    """
+
+    for name in ('VOLUME_ID', 'FILE_SPECIFICATION_NAME'):
+        if name not in items:
+            raise oops.host.HostIndexError(f'Cassini {instrument} index row gives no '
+                                           f'{name}: {filepath}')
 
 
 def _index_value(value, fill):

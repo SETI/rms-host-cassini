@@ -251,6 +251,8 @@ class FakeSpice:
             `Body.define_solar_system`.
         spice_paths (list[tuple[str, str]]): The (path ID, origin) of each SpicePath.
         spice_frames (list[str]): The frame ID given to each SpiceFrame.
+        spice_frame_ids (set[str]): The oops frame ID of each SpiceFrame, which
+            `spice_check_times` watches.
     """
 
     leap_seconds: int = 0
@@ -258,6 +260,7 @@ class FakeSpice:
         default_factory=list)
     spice_paths: list[tuple[str, str]] = field(default_factory=list)
     spice_frames: list[str] = field(default_factory=list)
+    spice_frame_ids: set[str] = field(default_factory=set)
 
 
 @pytest.fixture(autouse=True)
@@ -297,7 +300,7 @@ def fake_spice(monkeypatch: pytest.MonkeyPatch) -> FakeSpice:
 
     def spice_frame(spice_id: str, *, frame_id: str) -> oops.Frame:
         fake.spice_frames.append(spice_id)
-        _FAKE_SPICE_FRAME_IDS.add(frame_id)
+        fake.spice_frame_ids.add(frame_id)
         return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
                                   frame_id=frame_id)
 
@@ -393,9 +396,6 @@ def initialized_iss(fake_spicedb: FakeSpiceDB) -> FakeSpiceDB:
     return fake_spicedb
 
 
-# The frame IDs of the fake SPICE frames, which spice_check_times watches
-_FAKE_SPICE_FRAME_IDS: set[str] = set()
-
 # Time-shift letters, and the seconds after the observation's midtime at which a SPICE
 # frame relative to J2000, as of UVIS and VIMS, is evaluated for a shift of 30 s: "T"
 # moves the observation's times, and "F" wraps the frame in a FrameShift, which
@@ -404,15 +404,17 @@ TIME_SHIFTS = [('T', 0.), ('t', 0.), ('F', 30.), ('TF', 30.)]
 
 
 @pytest.fixture
-def spice_check_times(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """The times at which a SPICE frame is evaluated while a host checks the pointing."""
+def spice_check_times(monkeypatch: pytest.MonkeyPatch,
+                      fake_spice: FakeSpice) -> list[float]:
+    """The times at which a SPICE frame of this test is evaluated while a host checks the
+    pointing."""
 
     times: list[float] = []
     check = oops.Host._check_spice_frame
     transform_at_time = oops.frame.Cmatrix.transform_at_time
 
     def recording_transform(self: Any, time: Any, *args: Any, **kwargs: Any) -> Any:
-        if getattr(self, 'frame_id', None) in _FAKE_SPICE_FRAME_IDS:
+        if getattr(self, 'frame_id', None) in fake_spice.spice_frame_ids:
             times.append(float(oops.Scalar.as_scalar(time).vals))
         return transform_at_time(self, time, *args, **kwargs)
 

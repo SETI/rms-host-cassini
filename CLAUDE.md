@@ -111,7 +111,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   dict, and evaluates the frame as the observation will (cadence override, tracker, "T",
   "F"). ISS passes its camera frame (`CASSINI_ISS_NAC`, a fixed Cmatrix on the
   `_FLIPPED` SpiceFrame), so an "F" shift leaves the C-kernel lookup at the
-  observation's time; UVIS and VIMS pass the SpiceFrame itself, which "F" shifts. Clock
+  observation's time; UVIS and VIMS pass the SpiceFrame itself, which "F" shifts. The
+  kernels are furnished first by `_Cassini.load_observation_kernels()`, for the
+  product's interval and a cadence override's, so the check sees the kernels of the
+  time it probes (each month's lists reach 12 hours past it, which covers a shift). Clock
   conversions go through `_tdb_from_sclk()`/`_sclk_from_tdb()`, which use oops's one
   rule for cspyce failures (`OopsSpiceError.CSPYCE_ERRORS` and `is_spice_error`): only
   an error with a SPICE code becomes `OopsSpiceError`; any other propagates.
@@ -166,11 +169,14 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   `file_key='FILE_NAME'` and `supplement_key=('VOLUME_ID', 'FILE_SPECIFICATION_NAME')`;
   VIMS passes `file_key=('VOLUME_ID', 'PATH_NAME', 'FILE_NAME')` and the same
   `supplement_key` (the index names the `.qub`, the supplement the `.lbl`, and oops
-  compares paths without the extension). Each host's `_validate_index` checks every
-  pair. `oops.Host.from_index()` asks every host's `_detect_in_index()` about the label
-  first: ISS and UVIS claim their paths (COISS, COUVIS) and return False for another
-  instrument's path or INSTRUMENT_ID, VIMS claims INSTRUMENT_ID VIMS or a COVIMS path, so
-  no Cassini index needs its first row read to be identified.
+  compares paths without the extension). Both pass `validate=()`: the pairing's
+  comparison of the paths, without regard to case, is the whole check of a pair. A row
+  whose VOLUME_ID or FILE_SPECIFICATION_NAME is missing after `_row_items()` raises
+  HostIndexError (`_require_file_columns()`). `oops.Host.from_index()` asks every
+  host's `_detect_in_index()` about the label first: ISS and UVIS claim their file names
+  (COISS, COUVIS) and return False for another instrument's name or INSTRUMENT_ID, VIMS
+  claims INSTRUMENT_ID VIMS or a COVIMS name, so no Cassini index needs its first row
+  read to be identified. Only the file name counts, never a directory.
 - `CassiniUVIS._label_from_index_row()` builds the QUBE, TIME_SERIES or SPECTRUM object
   that a product label has from a row's DATA_OBJECT_TYPE and window, binning and
   LINE_SAMPLES columns. A QUBE whose line window bins to one line has one line;
@@ -191,9 +197,12 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   only where the defect shows, decided once per table, say in its comment that it works
   around the problem until the index is corrected, and test the corrected form.
 - `CassiniISS._index_fill_rules(label)` decides, once per table from the index label,
-  which masks apply: those of columns that declare a null constant other than 0 (the
-  metadata labels declare 0 for BIAS_STRIP_MEAN and DARK_STRIP_MEAN, real values in the
-  image labels, and for EMISSION_ANGLE and INCIDENCE_ANGLE). `_UNDECLARED_FILL_VALUES`
+  which masks apply: every column's, except those of index columns that declare no
+  constant (pdstable also masks a value it cannot convert, which these keep as text);
+  in a column that declares 0, a 0 is kept and other declared constants are missing
+  (the metadata labels declare 0 for BIAS_STRIP_MEAN and DARK_STRIP_MEAN, real values
+  in the image labels, and for EMISSION_ANGLE and INCIDENCE_ANGLE); a column that only
+  a supplement gives follows the supplement's mask. `_UNDECLARED_FILL_VALUES`
   (65534, -2147483648) apply only to columns whose label does not declare a constant
   (the labels of COISS_2115 and COISS_2116 do not declare any); -999 in `_FILL_KEYWORDS`
   always. With `row_dicts` the label comes from `label`, if given, and otherwise from

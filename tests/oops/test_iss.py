@@ -534,6 +534,18 @@ def test_snapshot_cadence_override() -> None:
     assert obs.time == (100., 102.)
 
 
+@uses_iss
+def test_snapshot_loads_kernels_for_a_cadence_override() -> None:
+    """A cadence override in another month loads that month's kernels too, so the
+    pointing is checked at its time with them."""
+
+    month = 3 + int((julian.tdb_from_iso(START_TIME) - _Cassini.TDB0) // _Cassini.DTDB)
+    make_snapshot(label_dict(),
+                  cadence=oops.cadence.SnapCadence(tdb_in_month(month + 0.5), 2.))
+    assert _Cassini.SPK_LOADED[month]
+    assert _Cassini.CK_LOADED[month]
+
+
 @pytest.fixture
 def custom_frame(initialized_iss: FakeSpiceDB) -> oops.Frame:
     return oops.frame.Cmatrix(oops.Matrix3.IDENTITY, oops.Frame.J2000,
@@ -1479,6 +1491,15 @@ def test_label_correction_leaves_a_label_without_defects(tmp_path: pathlib.Path)
     assert CassiniISS._correct_label_text(text, FCPath(tmp_path)) == text
 
 
+def test_label_correction_leaves_a_closed_description_with_a_keyword_line(
+        tmp_path: pathlib.Path) -> None:
+    """A DESCRIPTION closed on a later line keeps a line inside it that starts like a
+    keyword."""
+
+    text = 'DESCRIPTION = "Line one\nBIAS = 0 is expected."\nEND\n'
+    assert CassiniISS._correct_label_text(text, FCPath(tmp_path)) == text
+
+
 def test_label_correction_moves_a_next_line_value_up(tmp_path: pathlib.Path) -> None:
     """A quoted value on the line after its keyword joins that line, in the text with
     <LF> line terminators that oops passes to the correction."""
@@ -1535,23 +1556,33 @@ def test_from_file_reads_a_fast_misread_with_a_later_parser(
     obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_EQUALS),
                                astrometry=True)
     assert all(iss._PDS3_NAME.fullmatch(name) for name in obs.label_dict)
+    assert obs.label_dict['METHOD_DESC'] == ('ISSPT2.6.5 STAR:TYPE=A MAG=0.100000\n'
+                                             '    ISS_056ST_MONITOR001_PRIME_2')
 
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_keeps_a_fast_misread_that_no_later_parser_reads(
         tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fast parser's result is kept only after the strict parser, from which the
+    later ones are tried, has failed."""
+
     without_next_line_repair(monkeypatch)
-    monkeypatch.setattr(oops.Host, '_parse_pds3', fail_after_fast(oops.Host._parse_pds3))
+    methods: list[str] = []
+    monkeypatch.setattr(oops.Host, '_parse_pds3',
+                        fail_after_fast(oops.Host._parse_pds3, methods))
     obs = CassiniISS.from_file(write_pds3_image(tmp_path, extra_lines=_NEXT_LINE_EQUALS),
                                astrometry=True)
+    assert methods == ['fast', 'strict']
     assert obs.label_dict['TARGET_NAME'] == 'SATURN'
 
 
-def fail_after_fast(parse_pds3: Any) -> Any:
+def fail_after_fast(parse_pds3: Any, methods: list[str] | None = None) -> Any:
     """A replacement for oops.Host._parse_pds3 under which only the fast method reads a
-    label."""
+    label. The method of each call is appended to `methods`, if it is given."""
 
     def parse(filepath: Any, pds3_options: dict[str, Any], **kwargs: Any) -> Any:
+        if methods is not None:
+            methods.append(pds3_options['method'])
         if pds3_options['method'] != 'fast':
             raise oops.host.PdsHostError(f'cannot parse the PDS3 label {filepath}')
         return parse_pds3(filepath, pds3_options, **kwargs)
@@ -1710,20 +1741,22 @@ _INDEX_ROWS = [
 
 
 def write_index(directory: pathlib.Path, *,
-                extra: tuple[tuple[str, str, int, tuple[Any, ...], str], ...] = ()
+                extra: tuple[tuple[str, str, int, tuple[Any, ...],
+                                   str | tuple[str, ...]], ...] = ()
                 ) -> pathlib.Path:
     """Write a two-row Cassini ISS index table and label; return the label's path.
 
     Each item of `extra` adds a column: its name, data type, width, its value in each
-    row, and a line that its label gives it, such as "NULL_CONSTANT = 0.", or "" for
-    none.
+    row, and a line that its label gives it, such as "NULL_CONSTANT = 0.", or a tuple
+    of such lines, or "" for none.
     """
 
     columns = _INDEX_COLUMNS + [(name, kind, width)
                                 for (name, kind, width, _, _) in extra]
     rows = [row + tuple(values[k] for (_, _, _, values, _) in extra)
             for (k, row) in enumerate(_INDEX_ROWS)]
-    declarations = {name: line for (name, _, _, _, line) in extra if line}
+    declarations = {name: (lines,) if isinstance(lines, str) else lines
+                    for (name, _, _, _, lines) in extra if lines}
     widths = [width + 2 if kind == 'CHARACTER' else width for (_, kind, width) in columns]
     row_bytes = sum(widths) + len(widths) - 1 + 2
 
@@ -1750,8 +1783,7 @@ def write_index(directory: pathlib.Path, *,
         offset = 1 if kind == 'CHARACTER' else 0
         text += ['  OBJECT = COLUMN', f'    NAME = {name}', f'    DATA_TYPE = {kind}',
                  f'    START_BYTE = {start + offset}', f'    BYTES = {width}']
-        if name in declarations:
-            text.append('    ' + declarations[name])
+        text += ['    ' + line for line in declarations.get(name, ())]
         text.append('  END_OBJECT = COLUMN')
         start += field_width + 1
     text += ['END_OBJECT = IMAGE_INDEX_TABLE', 'END', '']
@@ -2019,12 +2051,43 @@ def test_from_index_applies_a_special_constant_other_than_the_null_constant(
     assert 'BIAS_STRIP_MEAN' not in obs.dict
 
 
+def test_from_index_applies_a_declared_null_beside_a_declared_zero(
+        tmp_path: pathlib.Path) -> None:
+    """A column whose label declares 0 and another null constant keeps a 0 and treats
+    the other constant as missing."""
+
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 0.),
+                                         ('NULL_CONSTANT = 0.',
+                                          'INVALID_CONSTANT = -1.')),))
+    [first, second] = CassiniISS.from_index(path)
+    assert 'BIAS_STRIP_MEAN' not in first.dict
+    assert second.dict['BIAS_STRIP_MEAN'] == 0.
+
+
+def test_from_index_applies_a_null_constant_of_the_supplement(
+        tmp_path: pathlib.Path) -> None:
+    """A column that only the supplement gives follows the supplement's declaration."""
+
+    index = write_index(tmp_path)
+    supplement = write_table(tmp_path, 'supplemental_index', {
+        'VOLUME_ID'              : ['COISS_2009'] * 2,
+        'FILE_SPECIFICATION_NAME': [row[1] for row in _INDEX_ROWS],
+        'EXTRA'                  : [99, 1],
+    })
+    text = supplement.read_bytes()
+    supplement.write_bytes(text.replace(b'NAME = EXTRA\r\n',
+                                        b'NAME = EXTRA\r\n    NULL_CONSTANT = 99\r\n'))
+    obs = next(CassiniISS.from_index(index, supplement=supplement))
+    assert 'EXTRA' not in obs.dict
+
+
 def test_index_fill_rules_read_a_label_given_as_a_dictionary(
         tmp_path: pathlib.Path) -> None:
-    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (-1., 5.),
-                                         'NULL_CONSTANT = -1.'),))
-    (masked, _) = CassiniISS._index_fill_rules(Pds3Label(path, method='fast').as_dict())
-    assert 'BIAS_STRIP_MEAN' in masked
+    path = write_index(tmp_path, extra=(('BIAS_STRIP_MEAN', 'ASCII_REAL', 10, (0., 5.),
+                                         'NULL_CONSTANT = 0.'),))
+    (_, zeros, _) = CassiniISS._index_fill_rules(Pds3Label(path,
+                                                           method='fast').as_dict())
+    assert 'BIAS_STRIP_MEAN' in zeros
 
 
 def test_from_index_keeps_a_fill_value_where_the_label_declares_another(

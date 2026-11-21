@@ -30,7 +30,8 @@ from oops.host import HostFormatError, HostIndexError, WrongHostError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _common_subfields, _detect_index_by_path, _fix_cassini_ring_target,
                        _is_null, _known_path, _label_dict, _pds3_options_with_defaults,
-                       _read_pds3_label, _row_items, _tdb_from_sclk, _without_nulls)
+                       _read_pds3_label, _require_file_columns, _row_items,
+                       _tdb_from_sclk, _without_nulls)
 
 __all__ = ['CassiniVIMS']
 
@@ -570,8 +571,9 @@ class CassiniVIMS(oops.Host):
                 During the iteration, at the row concerned: if an index row's cube is not
                 in the supplement, which is found once the whole supplement has been
                 read; if the supplement gives a cube a second time while its first row is
-                still held; if a pair of rows gives different VOLUME_IDs or file names;
-                if a row of `row_dicts` has no supplemental columns merged in; after
+                still held; if a row of `row_dicts` has no supplemental columns merged
+                in; if a row gives its VOLUME_ID or FILE_SPECIFICATION_NAME as a declared
+                null constant or as text that the archive writes for no value; after
                 every row that a table holds, if it holds fewer rows than its label says;
                 or at the first of the 100 rows read with it, if a row is longer than the
                 label's row length. After the last row, if the supplement lists a cube
@@ -605,11 +607,12 @@ class CassiniVIMS(oops.Host):
         # gives each cube by PATH_NAME and FILE_NAME, its data file, as
         # "/data/.../v1294638283_1.qub", and the supplement by its label,
         # "data/.../v1294638283_1.lbl", in another order for some volumes until the
-        # supplements are corrected (SETI/rms-data-projects#257 item 1; #34).
+        # supplements are corrected (SETI/rms-data-projects#257 item 1; #34). The rows
+        # are paired by these paths, compared without regard to case or extension,
+        # which is the whole check of a pair.
         rows = CassiniVIMS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
-                                       filter=filter,
-                                       validate=CassiniVIMS._validate_index,
+                                       filter=filter, validate=(),
                                        file_key=('VOLUME_ID', 'PATH_NAME', 'FILE_NAME'),
                                        supplement_key=('VOLUME_ID',
                                                        'FILE_SPECIFICATION_NAME'))
@@ -643,6 +646,7 @@ class CassiniVIMS(oops.Host):
                 # The table's declared null constants, -999 among them, and the text
                 # that the archive writes for "no value" are missing
                 items = _row_items(row_dict, masks=True)
+                _require_file_columns(items, 'VIMS', filepath)
                 fpath = oops.Host._index_file_path(volumes, items)  # path or URL (#29)
                 row_label = CassiniVIMS._label_from_index_row(items, fpath)
                 meta = dict(items, SPECTRAL_QUBE={
@@ -655,26 +659,6 @@ class CassiniVIMS(oops.Host):
                 yield oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
 
         return observations()
-
-    @staticmethod
-    def _validate_index(indx_dict, supp_dict):
-        """Raise an exception if the index row and supplement row do not match."""
-
-        if 'VOLUME_ID' not in supp_dict:
-            raise HostIndexError('missing VOLUME_ID in supplemental index')
-        if indx_dict['VOLUME_ID'] != supp_dict['VOLUME_ID']:
-            indx_val = indx_dict['VOLUME_ID']
-            supp_val = supp_dict['VOLUME_ID']
-            raise HostIndexError(f'VOLUME_IDs do not match: "{indx_val}", "{supp_val}"')
-
-        if 'FILE_SPECIFICATION_NAME' not in supp_dict:
-            raise HostIndexError('missing FILE_SPECIFICATION_NAME in supplemental index')
-        indx_name = indx_dict['FILE_NAME']
-        supp_name = supp_dict['FILE_SPECIFICATION_NAME'].rpartition('/')[-1]
-        if indx_name[:-3] != supp_name[:-3]:
-            raise HostIndexError(f'file names do not match: "{indx_name}", "{supp_name}"')
-
-        return True
 
     @staticmethod
     def _standard_label(label):
@@ -819,13 +803,11 @@ class CassiniVIMS(oops.Host):
 
         qube_dict = label['SPECTRAL_QUBE']
 
-        # Load any needed SPICE kernels
+        # Load any needed SPICE kernels, for a cadence override's time too
         tstart = julian.tdb_from_iso(label['START_TIME'])
         tstop = julian.tdb_from_iso(label['STOP_TIME'])
-        _Cassini.load_spks(tstart, tstop)
-        using_cks =  overrides['frame'] is None
+        using_cks = _Cassini.load_observation_kernels(tstart, tstop, overrides)
         if using_cks:
-            _Cassini.load_cks(tstart, tstop)
             CassiniVIMS._define_frames()
 
         # Check power state of each channel: [0] is IR; [1] is VIS
@@ -1509,8 +1491,8 @@ class CassiniVIMS(oops.Host):
 
         Returns:
             bool | None: True if the label's INSTRUMENT_HOST_ID is "CO" and its
-            INSTRUMENT_ID is "VIMS", or if the label was read from a file whose path
-            contains "COVIMS", in any case; False if the path contains "COISS" or
+            INSTRUMENT_ID is "VIMS", or if the label was read from a file whose name
+            starts with "COVIMS", in any case; False if the name starts with "COISS" or
             "COUVIS"; otherwise None, meaning the host must be inferred from the index
             rows.
         """

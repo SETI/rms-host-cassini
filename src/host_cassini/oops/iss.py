@@ -206,9 +206,10 @@ _SPECIAL_CONSTANT_KEYS = ('INVALID_CONSTANT', 'MISSING_CONSTANT', 'UNKNOWN_CONST
 # Until the index is corrected, a declared null constant of 0 is not applied: the 125
 # labels declare 0 for BIAS_STRIP_MEAN and DARK_STRIP_MEAN, which the image labels give
 # as the value (38,006 rows), and for EMISSION_ANGLE and INCIDENCE_ANGLE, where 0 is a
-# possible angle (see _ZERO_WITHOUT_GEOMETRY). A column whose label declares 0 is read
-# without its mask; one that declares only other constants, as a corrected label does,
-# is read with it. SETI/rms-data-projects#253 item 5; #28.
+# possible angle (see _ZERO_WITHOUT_GEOMETRY). In a column whose index label declares 0,
+# a 0 is kept, and any other constant that the label declares is missing; a column that
+# declares only other constants, as a corrected label does, is read with its whole
+# mask. SETI/rms-data-projects#253 item 5; #28.
 _DECLARED_ZERO = 0
 
 # Until the index is corrected, the fill values that the 125 labels declare are also
@@ -341,8 +342,12 @@ _NEXT_LINE_VALUE = (r'(?m)^([A-Z][A-Z0-9_]* =)[ \t]*\n[ \t]+"', r'\1 "')
 
 # The DESCRIPTION value of the calibrated labels of calibrated/COISS_1xxx_v1, and of some
 # of calibrated/COISS_2xxx_v1, opens a quote that it never closes, so no parser accepts
-# them. The quote is closed at the end of the line before the next keyword (#11).
-_UNTERMINATED_DESCRIPTION = (r'(?m)^(DESCRIPTION = "[^"]*?)(\n)(?=[A-Z][A-Z0-9_]* = )',
+# them. The quote is closed at the end of the line before the next keyword (#11). The
+# last lookahead requires an even number of quotes in the rest of the label, as there is
+# when the DESCRIPTION's own quote is the one left open, so that a DESCRIPTION closed on
+# a later line keeps a line inside it that starts like a keyword.
+_UNTERMINATED_DESCRIPTION = (r'(?m)^(DESCRIPTION = "[^"]*?)(\n)(?=[A-Z][A-Z0-9_]* = )'
+                             r'(?=(?:[^"]*"[^"]*")*[^"]*\Z)',
                              r'\1"\2')
 
 # The calibrated DESCRIPTION of some calibrated labels, as in N1640662528_3_CALIB.LBL of
@@ -795,7 +800,7 @@ class CassiniISS(oops.Host):
         # requiring it, while one that is given must exist.
         label = CassiniISS._read_index_label(filepath, label=label,
                                              pds3_options=pds3_options)
-        (masked, fills) = CassiniISS._index_fill_rules(label)
+        (unmasked, zeros, fills) = CassiniISS._index_fill_rules(label)
         rows = CassiniISS._index_rows(filepath, supplement=supplement,
                                       require_supplement=(supplement is not
                                                           oops.Host.SUPPLEMENT),
@@ -823,8 +828,8 @@ class CassiniISS(oops.Host):
         def snapshots():
             for row_dict in rows:
                 fpath = oops.Host._index_file_path(volumes, row_dict)
-                obs = CassiniISS._make_snapshot(CassiniISS._row_items(row_dict, masked,
-                                                                      fills),
+                items = CassiniISS._row_items(row_dict, unmasked, zeros, fills)
+                obs = CassiniISS._make_snapshot(items,
                                                 filepath=fpath, data=None,
                                                 fast_distortion=fast_distortion,
                                                 return_all_planets=return_all_planets,
@@ -901,11 +906,10 @@ class CassiniISS(oops.Host):
             label_target = _fix_cassini_ring_target(label_target, dict_, tstart)
             label_lightsource = 'SUN'
 
-        # Make sure the SPICE kernels are loaded; construct the frame
-        _Cassini.load_spks(tstart, tstart + texp)
-        using_cks = overrides['frame'] is None
+        # Make sure the SPICE kernels are loaded, for a cadence override's time too;
+        # construct the frame
+        using_cks = _Cassini.load_observation_kernels(tstart, tstart + texp, overrides)
         if using_cks:
-            _Cassini.load_cks(tstart, tstart + texp)
             CassiniISS._define_camera_frames()
 
         # Define the Snapshot parameters
@@ -1325,12 +1329,15 @@ class CassiniISS(oops.Host):
             label (Pds3Label | dict[str, Any]): The parsed label of the index.
 
         Returns:
-            tuple[frozenset[str], dict[str, Any]]: The columns whose masks apply, those
-            for which the label declares a null constant other than 0 (see
-            `_DECLARED_ZERO`); and the fill value of each column, beyond its mask: -999
-            in each column of `_FILL_KEYWORDS`, and the value of `_UNDECLARED_FILL_VALUES`
-            in each column listed there for which the label does not declare a null
-            constant.
+            tuple[frozenset[str], frozenset[str], dict[str, Any]]: The columns of the
+            index for which the label declares no null constant, whose masks do not
+            apply; the columns for which it declares 0 (see `_DECLARED_ZERO`), whose
+            masks apply except to a 0; and the fill value of each column, beyond its
+            mask: -999 in each column of `_FILL_KEYWORDS`, and the value of
+            `_UNDECLARED_FILL_VALUES` in each column listed there for which the label
+            does not declare a null constant. The masks of every other column apply,
+            including those of the columns that only a supplement gives, which follow
+            the supplement's own label.
         """
 
         declared = {}
@@ -1344,32 +1351,43 @@ class CassiniISS(oops.Host):
                                                     _SPECIAL_CONSTANT_KEYS
                                                     if key in column]
 
-        masked = frozenset(name for (name, values) in declared.items()
-                           if values and _DECLARED_ZERO not in values)
+        unmasked = frozenset(name for (name, values) in declared.items() if not values)
+        zeros = frozenset(name for (name, values) in declared.items()
+                          if _DECLARED_ZERO in values)
         fills = dict.fromkeys(_FILL_KEYWORDS, _FILL_VALUE)
         fills |= {name: value for (name, value) in _UNDECLARED_FILL_VALUES.items()
                   if not declared.get(name)}
-        return (masked, fills)
+        return (unmasked, zeros, fills)
 
     @staticmethod
-    def _row_items(row_dict, masked, fills):
+    def _row_items(row_dict, unmasked, zeros, fills):
         """The metadata of one row of an ISS index table, in Python types.
 
         Parameters:
             row_dict (dict[str, Any]): The row, as the index reader gives it: NumPy values
-                and, for each column, a "_mask" entry.
-            masked (collections.abc.Container[str]): The columns whose masks apply, from
-                :meth:`_index_fill_rules`.
+                and, for each column, a "_mask" entry. It is not modified.
+            unmasked (collections.abc.Container[str]): The columns whose masks do not
+                apply, from :meth:`_index_fill_rules`.
+            zeros (collections.abc.Iterable[str]): The columns whose masks do not apply
+                to a 0, from :meth:`_index_fill_rules`.
             fills (dict[str, Any]): The fill value of each column, beyond its mask, from
                 :meth:`_index_fill_rules`.
 
         Returns:
             dict[str, Any]: The row's columns as `_row_items` in _cassini.py gives them,
-            with the masks of the columns in `masked` and the values of `fills` missing,
-            and an angle of `_ZERO_WITHOUT_GEOMETRY` that is 0 missing in a row without
+            with the masked values of every column except those in `unmasked`, other
+            than a 0 in a column of `zeros`, and the values of `fills` missing, and an
+            angle of `_ZERO_WITHOUT_GEOMETRY` that is 0 missing in a row without
             PHASE_ANGLE. The clock counts are given three digits after the point.
         """
 
+        row_dict = dict(row_dict)
+        for name in zeros:
+            if name + '_mask' in row_dict:
+                row_dict[name + '_mask'] = (np.asarray(row_dict[name + '_mask'])
+                                            & (np.asarray(row_dict[name])
+                                               != _DECLARED_ZERO))
+        masked = frozenset(row_dict) - frozenset(unmasked)
         items = _row_items(row_dict, masks=masked, fill_values=fills)
         if 'PHASE_ANGLE' not in items:
             for key in _ZERO_WITHOUT_GEOMETRY:
@@ -1548,15 +1566,15 @@ class CassiniISS(oops.Host):
             label (Pds3Label): The parsed PDS3 label of an index file.
 
         Returns:
-            bool | None: True if the label was read from a file whose path contains
-            "COISS", in any case; False if the path contains "COUVIS" or "COVIMS", or if
-            the label gives an INSTRUMENT_ID that does not start with "ISS"; otherwise
+            bool | None: True if the label was read from a file whose name starts with
+            "COISS", in any case; False if the name starts with "COUVIS" or "COVIMS", or
+            if the label gives an INSTRUMENT_ID that does not start with "ISS"; otherwise
             None, meaning the host must be inferred from the index rows.
         """
 
         # The ISS index labels record nothing that identifies the instrument, but the RMS
         # Node metadata index names all start with COISS. A UVIS or VIMS index is turned
-        # down from its path or label, so the dispatcher can tell from the label alone.
+        # down from its name or label, so the dispatcher can tell from the label alone.
         status = _detect_index_by_path(label, 'COISS')
         if (status is None
                 and not str(label.get('INSTRUMENT_ID', 'ISS')).strip().startswith('ISS')):

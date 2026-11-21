@@ -131,8 +131,10 @@ labels in the ``metadata`` tree declare 0 the null value of ``BIAS_STRIP_MEAN`` 
 ``DARK_STRIP_MEAN``, where the image labels give 0 as a real value, and of
 ``EMISSION_ANGLE`` and ``INCIDENCE_ANGLE``, where 0 is a possible angle. The host does
 not apply a declared null value of 0, so these columns keep a 0, apart from the angles
-of a row that has no target geometry. A label that declares another null value for a
-column, as a corrected label does, is followed.
+of a row that has no target geometry. Any other null value that the label declares for
+such a column is still missing, and a label that declares only other null values for a
+column, as a corrected label does, is followed. A column that only a supplement gives
+follows the null values that the supplement's label declares.
 
 The tables drop the trailing zeros of the clock counts, so the host writes each count
 with three digits after the point, as the image labels do: ``1473199010.120`` for the
@@ -206,8 +208,9 @@ held. The host raises :exc:`~oops.host.HostIndexError`:
 - after the last index row, if the supplement lists a product that the index does not,
   or lists one more often; the error gives the first few such products and both tables.
 
-For each pair of rows, the index's ``FILE_NAME`` must also contain the supplement's
-``VOLUME_ID`` and ``FILE_SPECIFICATION_NAME``.
+A row whose ``VOLUME_ID`` or ``FILE_SPECIFICATION_NAME`` is a null value, which leaves
+the product's path unknown, raises :exc:`~oops.host.HostIndexError` when the iteration
+reaches it.
 
 Each row gives the observation that
 :meth:`~host_cassini.oops.uvis.CassiniUVIS.from_file` would give for the product with
@@ -228,8 +231,9 @@ Each row gives the observation that
   product labels of nearly all HDAC products; a few in COUVIS_0031 and COUVIS_0032 give
   a ``DWELL_TIME`` of 72 and an interval of 125 milliseconds.
 
-A row that lacks one of these columns, or gives a sampling interval that is not
-positive, raises :exc:`~oops.host.HostFormatError` when the iteration reaches it.
+A row that lacks one of these columns, or gives a sampling interval or a spectrum's
+``BAND_BINNING_FACTOR`` that is not positive, raises :exc:`~oops.host.HostFormatError`
+when the iteration reaches it.
 ``select`` applies to each row as it does for the product's label, and a ``select`` of a
 type that it does not accept, or a name, raises an error when the method is called.
 
@@ -265,10 +269,7 @@ gives its label by ``VOLUME_ID`` and ``FILE_SPECIFICATION_NAME``, as in
 ``data/1999010T054026_1999010T060958/v1294638283_1.lbl``. The paths are compared without
 regard to case, a leading slash, or the extension. The supplement is read only as far
 ahead as it must be, and the errors are those described for UVIS. In ``COVIMS_0999``,
-with 464,752 rows, no more than about 900 supplement rows are held at a time. For each
-pair of rows, the two tables must also give the same ``VOLUME_ID``, and the index's
-``FILE_NAME`` and the supplement's ``FILE_SPECIFICATION_NAME`` must give the same file
-name apart from its extension.
+with 464,752 rows, no more than about 900 supplement rows are held at a time.
 
 Each row gives the (vis, ir) pair of observations that
 :meth:`~host_cassini.oops.vims.CassiniVIMS.from_file` would give for the cube with
@@ -299,9 +300,12 @@ Reading an index through oops.Host
 ==================================
 
 :meth:`oops.host.Host.from_index` asks each host about the index's PDS3 label first. ISS
-claims a label whose path holds ``COISS``, UVIS one whose path holds ``COUVIS``, and VIMS
-one that gives the instrument ``VIMS`` or whose path holds ``COVIMS``; ISS and UVIS turn
-down a label that gives another instrument or the path of another instrument's volume.
+claims a label whose file name starts with ``COISS``, UVIS one whose name starts with
+``COUVIS``, and VIMS one that gives the instrument ``VIMS`` or whose name starts with
+``COVIMS``; ISS and UVIS turn down a label that gives another instrument or whose name
+starts with another instrument's volume prefix. The directories in the path play no
+part, so an index in a directory whose name holds another prefix is still claimed by
+its own host.
 Only when no host claims the label is the first row read, once, to find the host from
 its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. A label or first row that more than
 one registered host claims raises ``oops.host.AmbiguousHostError``, which names the

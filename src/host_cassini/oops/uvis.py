@@ -21,7 +21,7 @@ from oops.host import HostFormatError, HostIndexError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _common_subfields, _detect_index_by_path, _is_null, _known_path,
                        _label_dict, _pds3_options_with_defaults, _read_pds3_label,
-                       _row_items, _without_nulls)
+                       _require_file_columns, _row_items, _without_nulls)
 
 __all__ = ['CassiniUVIS']
 
@@ -407,8 +407,9 @@ class CassiniUVIS(oops.Host):
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
                 unsupported option, if it lacks a column that its observation needs, or
-                if the sampling interval it gives for a time series is not positive;
-                raised when the iteration reaches that row.
+                if the sampling interval it gives for a time series or the
+                BAND_BINNING_FACTOR it gives for a spectrum is not positive; raised when
+                the iteration reaches that row.
             FileNotFoundError: If the label of the supplement does not exist; when the
                 iteration starts, if a table file does not exist.
             HostIndexError: When called, if the label of the index or the supplement does
@@ -417,15 +418,15 @@ class CassiniUVIS(oops.Host):
                 During the iteration, at the row concerned: if an index row's product is
                 not in the supplement, which is found once the whole supplement has been
                 read; if the supplement gives a product a second time while its first
-                row is still held; if a pair of rows fails the check that the index's
-                FILE_NAME contains the supplement's VOLUME_ID and
-                FILE_SPECIFICATION_NAME; if a row of `row_dicts` has no supplemental
-                columns merged in; after every row that a table holds, if it holds fewer
-                rows than its label says; or at the first of the 100 rows read with it,
-                if a row is longer than the label's row length. After the last row, if
-                the supplement lists a product that the index does not, or a table holds
-                more rows than its label says. A value that cannot be read as its
-                column's number gives a warning, and is missing from the row.
+                row is still held; if a row of `row_dicts` has no supplemental columns
+                merged in; if a row gives its VOLUME_ID or FILE_SPECIFICATION_NAME as a
+                declared null constant or as text that the archive writes for no value;
+                after every row that a table holds, if it holds fewer rows than its label
+                says; or at the first of the 100 rows read with it, if a row is longer
+                than the label's row length. After the last row, if the supplement lists
+                a product that the index does not, or a table holds more rows than its
+                label says. A value that cannot be read as its column's number gives a
+                warning, and is missing from the row.
             OopsIndexError: If an index in `select` is out of range for a row; raised when
                 the iteration reaches that row.
             OopsTypeError: If `select` has an invalid type; when the iteration reaches a
@@ -450,11 +451,12 @@ class CassiniUVIS(oops.Host):
         # The labels are read now and the rows as the iteration reaches them. The index
         # gives each product as "/COUVIS_0001/DATA/.../X.LBL" and the supplement by its
         # volume and "DATA/.../X.LBL", in another order for most volumes until the
-        # supplements are corrected (SETI/rms-data-projects#255 item 1; #30).
+        # supplements are corrected (SETI/rms-data-projects#255 item 1; #30). The rows
+        # are paired by these paths, compared without regard to case, which is the
+        # whole check of a pair.
         rows = CassiniUVIS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
-                                       filter=filter,
-                                       validate=CassiniUVIS._validate_index,
+                                       filter=filter, validate=(),
                                        file_key='FILE_NAME',
                                        supplement_key=('VOLUME_ID',
                                                        'FILE_SPECIFICATION_NAME'))
@@ -488,6 +490,7 @@ class CassiniUVIS(oops.Host):
                 # The table's declared null constants, -999 among them, and the text
                 # that the archive writes for "no value" are missing
                 items = _row_items(row_dict, masks=True)
+                _require_file_columns(items, 'UVIS', filepath)
                 fpath = oops.Host._index_file_path(volumes, items)  # path or URL (#29)
                 row_label = CassiniUVIS._label_from_index_row(items, fpath)
                 yield CassiniUVIS._make_observations(
@@ -496,28 +499,6 @@ class CassiniUVIS(oops.Host):
                     subfields=_common_subfields(row_label))
 
         return observations()
-
-    @staticmethod
-    def _validate_index(indx_dict, supp_dict):
-        """Raise an exception if the index row and supplement row do not match."""
-
-        full_path = indx_dict['FILE_NAME']
-
-        if 'VOLUME_ID' not in supp_dict:
-            raise HostIndexError('missing VOLUME_ID in supplemental index')
-        volume_id = supp_dict['VOLUME_ID']
-        if volume_id not in full_path:
-            raise HostIndexError(f'VOLUME_IDs do not match: "{volume_id}", '
-                                 f'"{full_path}"')
-
-        if 'FILE_SPECIFICATION_NAME' not in supp_dict:
-            raise HostIndexError('missing FILE_SPECIFICATION_NAME in supplemental index')
-        file_spec = supp_dict['FILE_SPECIFICATION_NAME']
-        if file_spec not in full_path:
-            raise HostIndexError(f'file paths do not match: "{file_spec}", '
-                                 f'"{full_path}"')
-
-        return True
 
     @staticmethod
     def _label_from_index_row(row_dict, filepath):
@@ -539,8 +520,8 @@ class CassiniUVIS(oops.Host):
 
         Raises:
             HostFormatError: If the row lacks a column that its object needs, gives
-                another kind of product, or gives a time series a sampling interval that
-                is not positive.
+                another kind of product, or gives a time series a sampling interval or a
+                spectrum a BAND_BINNING_FACTOR that is not positive.
         """
 
         def column(name):
@@ -579,6 +560,10 @@ class CassiniUVIS(oops.Host):
         band_bin = int(column('BAND_BINNING_FACTOR'))
 
         if kind == 'SPECTRUM':
+            if band_bin <= 0:
+                raise HostFormatError(f'Cassini UVIS index row gives a '
+                                      f'BAND_BINNING_FACTOR that is not positive: '
+                                      f'{filepath}')
             label['SPECTRUM'] = {
                 'ROWS'              : (band1 - band0 + 1) // band_bin,
                 'COLUMNS'           : 1,
@@ -638,12 +623,10 @@ class CassiniUVIS(oops.Host):
             HostFormatError: If some aspect of the label or file is not valid.
         """
 
-        # Load any needed SPICE kernels
+        # Load any needed SPICE kernels, for a cadence override's time too
         tstart = CassiniUVIS._tdb(label, 'START_TIME', filepath)
         tstop = CassiniUVIS._tdb(label, 'STOP_TIME', filepath)
-        _Cassini.load_spks(tstart, tstop)
-        if overrides['frame'] is None:
-            _Cassini.load_cks(tstart, tstop)
+        if _Cassini.load_observation_kernels(tstart, tstop, overrides):
             CassiniUVIS._define_frames()
 
         # Figure out the PDS object class and get the observation(s)
@@ -1263,10 +1246,10 @@ class CassiniUVIS(oops.Host):
             label (Pds3Label): The parsed PDS3 label of an index file.
 
         Returns:
-            bool | None: True if the label was read from a file whose path contains
-            "COUVIS", in any case; False if the path contains "COISS" or "COVIMS", or if
-            the label gives an INSTRUMENT_ID that is not "UVIS"; otherwise None, meaning
-            the host must be inferred from the index rows.
+            bool | None: True if the label was read from a file whose name starts with
+            "COUVIS", in any case; False if the name starts with "COISS" or "COVIMS", or
+            if the label gives an INSTRUMENT_ID that is not "UVIS"; otherwise None,
+            meaning the host must be inferred from the index rows.
         """
 
         # The UVIS metadata index labels record nothing that identifies the instrument,

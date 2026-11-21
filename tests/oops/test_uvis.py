@@ -595,19 +595,52 @@ def test_from_index_hdac_interval_is_its_dwell_time() -> None:
     assert obs.time[1] - obs.time[0] == pytest.approx(5 * 4.)
 
 
+def raises_at_the_second_row(row: dict[str, Any], error: type[Exception],
+                             match: str) -> None:
+    """Check that a valid row is yielded before `row` raises `error`, at its own row.
+
+    Parameters:
+        row: The row that raises.
+        error: The exception class.
+        match: The pattern that the message must match.
+    """
+
+    observations = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row(), row])
+    assert next(observations).dict['PRODUCT_ID'] == 'FUV2005_001_00_00'
+    with pytest.raises(error, match=match):
+        next(observations)
+
+
 def test_from_index_row_without_a_positive_interval_is_a_format_error() -> None:
     row = qube_row(PRODUCT_ID='HSP2005_001_00_00', DATA_OBJECT_TYPE='TIME_SERIES',
                    INTEGRATION_DURATION=0., LINE_SAMPLES=5)
-    with pytest.raises(oops.host.HostFormatError, match='that is not positive: '):
-        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
+    raises_at_the_second_row(row, oops.host.HostFormatError, 'that is not positive: ')
+
+
+@pytest.mark.parametrize('factor', [0, -1], ids=['zero', 'negative'])
+def test_from_index_spectrum_without_a_positive_band_bin_is_a_format_error(
+        factor: int) -> None:
+    row = qube_row(PRODUCT_ID='EUV2005_001_00_00', DATA_OBJECT_TYPE='SPECTRUM',
+                   MINIMUM_BAND_NUMBER=100, MAXIMUM_BAND_NUMBER=105,
+                   BAND_BINNING_FACTOR=factor)
+    raises_at_the_second_row(row, oops.host.HostFormatError,
+                             'BAND_BINNING_FACTOR that is not positive: ')
 
 
 def test_from_index_row_without_a_column_is_a_format_error() -> None:
     row = qube_row()
     del row['LINE_SAMPLES']
-    with pytest.raises(oops.host.HostFormatError,
-                       match='Cassini UVIS index row has no LINE_SAMPLES: '):
-        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
+    raises_at_the_second_row(row, oops.host.HostFormatError,
+                             'Cassini UVIS index row has no LINE_SAMPLES: ')
+
+
+@pytest.mark.parametrize('column', ['VOLUME_ID', 'FILE_SPECIFICATION_NAME'])
+def test_from_index_row_without_a_file_is_an_index_error(column: str) -> None:
+    """A row that gives a column of its file's path as a placeholder raises at that
+    row."""
+
+    raises_at_the_second_row(qube_row(**{column: 'N/A'}), oops.host.HostIndexError,
+                             f'Cassini UVIS index row gives no {column}: ')
 
 
 def write_tables(directory: pathlib.Path) -> pathlib.Path:
@@ -666,9 +699,21 @@ def test_from_index_yields_the_rows_before_one_the_index_lacks(
 def test_from_index_row_without_the_supplement_raises_at_the_row() -> None:
     row = qube_row()
     del row['FILE_SPECIFICATION_NAME']
-    with pytest.raises(oops.host.HostIndexError,
-                       match=r'Cassini UVIS needs a supplemental index: INDEX\.LBL'):
-        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
+    raises_at_the_second_row(row, oops.host.HostIndexError,
+                             r'Cassini UVIS needs a supplemental index: INDEX\.LBL')
+
+
+def test_from_index_pairs_a_supplement_that_spells_a_path_in_another_case(
+        tmp_path: pathlib.Path) -> None:
+    """The rows are paired by their files, compared without regard to case, and no
+    further check of the paths turns down the pair."""
+
+    index = write_tables(tmp_path)
+    supplement = tmp_path / 'COUVIS_0001_supplemental_index.tab'
+    text = supplement.read_bytes()
+    supplement.write_bytes(text.replace(_UVIS_SPEC.encode(), _UVIS_SPEC.lower().encode()))
+    assert [obs.dict['PRODUCT_ID'] for obs in CassiniUVIS.from_index(index)] == [
+        'FUV2005_001_00_00', 'FUV2005_001_00_10']
 
 
 # The supplement is required, so None is refused rather than taken as "search for it"
@@ -944,8 +989,7 @@ def test_from_file_leaves_out_a_null_inside_an_object(tmp_path: pathlib.Path) ->
 def test_from_index_row_without_a_time_is_a_format_error(key: str) -> None:
     row = qube_row()
     del row[key]
-    with pytest.raises(oops.host.HostFormatError, match=f'{key} is missing from '):
-        next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[row]))
+    raises_at_the_second_row(row, oops.host.HostFormatError, f'{key} is missing from ')
 
 
 def test_from_index_select_true_is_a_type_error() -> None:
@@ -961,6 +1005,18 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     cadence = obs.cadence.time_shift(1000.)
     next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()], cadence=cadence))
     assert spice_check_times[-1] == cadence.midtime
+
+
+def test_from_index_loads_kernels_for_a_cadence_override() -> None:
+    """A cadence override in another month loads that month's kernels too, so the
+    pointing is probed at its time with them."""
+
+    [obs] = CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()])
+    month = 3 + int((obs.time[0] - _Cassini.TDB0) // _Cassini.DTDB)
+    cadence = obs.cadence.time_shift(3 * _Cassini.DTDB)
+    next(CassiniUVIS.from_index('INDEX.LBL', row_dicts=[qube_row()], cadence=cadence))
+    assert _Cassini.SPK_LOADED[month]
+    assert _Cassini.CK_LOADED[month]
 
 
 @pytest.mark.parametrize(('letters', 'after'), TIME_SHIFTS)

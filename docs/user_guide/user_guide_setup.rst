@@ -41,7 +41,8 @@ the instrument and frame kernels of each instrument.
 The C and SP kernels are loaded only when an observation needs them. The hosts divide
 the mission, from 1997-10-01 to 2017-10-01, into 240 periods of equal length, about a
 month each, and the first observation that falls in a period loads that period's
-kernels, with 12 hours to spare on either side.
+kernels, with 12 hours to spare on either side. An observation with a ``cadence``
+override also loads the kernels of the periods that the override's times fall in.
 
 Registering the hosts
 =====================

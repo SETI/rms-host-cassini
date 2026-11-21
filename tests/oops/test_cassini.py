@@ -3,6 +3,8 @@
 ##########################################################################################
 """Tests for the mission-level support in host_cassini.oops._cassini."""
 
+import json
+import pathlib
 from typing import Any
 
 import cspyce
@@ -13,11 +15,12 @@ import spicedb
 from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
 from oops.body import Body
+from pdsparser import Pds3Label
 
 from host_cassini.oops._cassini import (_Cassini, _cassini_obs_id_code,
-                                        _fix_cassini_ring_target,
-                                        _pds3_options_with_defaults, _sclk_from_tdb,
-                                        _tdb_from_sclk)
+                                        _detect_index_by_path, _fix_cassini_ring_target,
+                                        _json_form, _pds3_options_with_defaults,
+                                        _sclk_from_tdb, _tdb_from_sclk)
 
 ##########################################################################################
 # Mission constants
@@ -485,6 +488,34 @@ def test_pds3_options_with_defaults_copies_its_input() -> None:
     options = {'method': 'loose'}
     assert _pds3_options_with_defaults(options) is not options
     assert options == {'method': 'loose'}
+
+
+@pytest.mark.parametrize(('line', 'expected'), [
+    ('DATES = (2005-001, 2005-002)', ['2005-01-01', '2005-01-02']),
+    ('DATES = {2005-002, 2005-001}', ['2005-01-02', '2005-01-01']),
+], ids=['sequence', 'set'])
+def test_json_form_writes_the_dates_inside_a_value_as_text(line: str,
+                                                           expected: list[str]) -> None:
+    """The parser gives the text of a lone date, but not of a date in a sequence or set,
+    which is written in ISO form, in the label's order."""
+
+    label = Pds3Label(['PDS_VERSION_ID = PDS3', line, 'END'], sources=False)
+    content = _json_form(label.as_dict())
+    assert json.loads(json.dumps(content))['DATES'] == expected
+
+##########################################################################################
+# Index detection
+##########################################################################################
+
+
+def test_index_detection_reads_the_file_name(tmp_path: pathlib.Path) -> None:
+    """A UVIS index in a directory whose name holds another instrument's prefix is told
+    by its own name."""
+
+    path = tmp_path / 'COISS-backup' / 'COUVIS_0001_index.lbl'
+    path.parent.mkdir()
+    path.write_text('PDS_VERSION_ID = PDS3\r\nEND\r\n', newline='')
+    assert _detect_index_by_path(Pds3Label(path), 'COISS') is False
 
 ##########################################################################################
 # _fix_cassini_ring_target()

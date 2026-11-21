@@ -399,12 +399,30 @@ def test_misaligned_suffix(tmp_path: pathlib.Path) -> None:
         CassiniVIMS._load_data_and_times(path, 0, label)
 
 
-def test_validate_index_file_names() -> None:
-    index_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
-    supp_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_SPECIFICATION_NAME': 'data/v2.LBL'}
+def test_from_index_pairs_a_supplement_that_spells_a_name_in_another_case(
+        tmp_path: pathlib.Path) -> None:
+    """The rows are paired by their files, compared without regard to case, and no
+    further check of the names turns down the pair."""
+
+    index = write_vims_tables(tmp_path)
+    supplement = tmp_path / 'COVIMS_0001_supplemental_index.tab'
+    text = supplement.read_bytes()
+    supplement.write_bytes(text.replace(b'v0000000001_1.lbl', b'V0000000001_1.LBL'))
+    assert [ir.observation_id for (_, ir) in CassiniVIMS.from_index(index)] == [
+        'VIMS_000SA_TEST001_PRIME', 'VIMS_000SA_TEST002_PRIME']
+
+
+@pytest.mark.parametrize('column', ['VOLUME_ID', 'FILE_SPECIFICATION_NAME'])
+def test_from_index_row_without_a_file_is_an_index_error(column: str) -> None:
+    """A row that gives a column of its file's path as a placeholder raises at that
+    row."""
+
+    pairs = CassiniVIMS.from_index('INDEX.LBL',
+                                   row_dicts=[index_row(), index_row(**{column: 'UNK'})])
+    assert next(pairs)[1].observation_id == 'VIMS_000SA_TEST001_PRIME'
     with pytest.raises(HostIndexError,
-                       match=re.escape('file names do not match: "v1.QUB", "v2.LBL"')):
-        CassiniVIMS._validate_index(index_row, supp_row)
+                       match=f'Cassini VIMS index row gives no {column}: '):
+        next(pairs)
 
 
 def test_from_index_requires_supplement() -> None:
@@ -1132,6 +1150,20 @@ def test_from_index_probes_pointing_at_the_cadence_midtime(
     assert spice_check_times == [cadence.midtime]
 
 
+def test_from_index_loads_kernels_for_a_cadence_override() -> None:
+    """A cadence override in another month loads that month's kernels too, so the
+    pointing is probed at its time with them."""
+
+    row = index_row(INSTRUMENT_MODE_ID='POINT', SWATH_WIDTH=1, SWATH_LENGTH=1,
+                    VIS_POWER_STATE_FLAG='OFF')
+    [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+    month = 3 + int((ir.time[0] - _Cassini.TDB0) // _Cassini.DTDB)
+    cadence = ir.cadence.time_shift(3 * _Cassini.DTDB)
+    next(CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row], cadence=cadence))
+    assert _Cassini.SPK_LOADED[month]
+    assert _Cassini.CK_LOADED[month]
+
+
 @pytest.mark.parametrize(('letters', 'after'), TIME_SHIFTS)
 def test_from_index_probes_pointing_after_a_time_shift(
         spice_check_times: list[float], letters: str, after: float) -> None:
@@ -1238,11 +1270,12 @@ def backplane_times(directory: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
 
 def test_backplane_times_span_the_clock_fractions(
         tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The first and last samples' times keep their fractions of a second in seconds."""
+    """Every sample's time keeps its fraction of a second in seconds, in the sample's own
+    place."""
 
-    times = backplane_times(tmp_path, monkeypatch,
-                            _CLOCK_SECONDS + np.arange(8).reshape(2, 4))
-    assert times.max() == pytest.approx(_CLOCK_SECONDS + 7 + 7980 / 15959, abs=1.e-6)
+    seconds = _CLOCK_SECONDS + np.arange(8).reshape(2, 4)
+    times = backplane_times(tmp_path, monkeypatch, seconds)
+    np.testing.assert_allclose(times, seconds + 7980 / 15959, rtol=0, atol=1.e-6)
 
 
 def test_backplane_with_one_time_gives_it_to_every_sample(
@@ -1253,6 +1286,7 @@ def test_backplane_with_one_time_gives_it_to_every_sample(
     seconds = np.full((2, 4), -8192)
     seconds[0, 0] = _CLOCK_SECONDS
     times = backplane_times(tmp_path, monkeypatch, seconds)
-    assert times.min() == pytest.approx(_CLOCK_SECONDS + 7980 / 15959, abs=1.e-6)
+    np.testing.assert_allclose(times, np.full((2, 4), _CLOCK_SECONDS + 7980 / 15959),
+                               rtol=0, atol=1.e-6)
 
 ##########################################################################################
