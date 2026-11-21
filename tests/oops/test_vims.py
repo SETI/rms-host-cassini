@@ -442,9 +442,7 @@ def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_from_index_rejects_an_unknown_keyword() -> None:
-    with pytest.raises(oops.OopsTypeError,
-                       match=r"unexpected keyword argument for CassiniVIMS\.from_index: "
-                             r"'supplementary'"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'supplementary'"):
         CassiniVIMS.from_index('INDEX.LBL', supplementary=None)
 
 
@@ -548,10 +546,27 @@ def test_from_index_filepath_and_no_data(tmp_path: pathlib.Path) -> None:
     assert not hasattr(ir, 'data')
 
 
-def test_from_index_unfetched_file_has_no_abspath() -> None:
-    index = ('https://rms-test.invalid/holdings/metadata/COVIMS_0xxx/COVIMS_0001/'
-             'COVIMS_0001_index.lbl')
+def test_from_index_local_file_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """A row's file is never read, so it has no abspath, even on the local disk."""
+
+    index = tmp_path / 'metadata/COVIMS_0xxx/COVIMS_0001/COVIMS_0001_index.lbl'
+    path = tmp_path / 'volumes/COVIMS_0xxx/COVIMS_0001/data/2005001T000000'
+    path.mkdir(parents=True)
+    (path / 'v0000000001_1.lbl').write_bytes(b'')
     [(_, ir)] = CassiniVIMS.from_index(index, row_dicts=[index_row()])
+    assert 'abspath' not in ir.subfields
+
+
+def test_from_file_label_gives_the_abspath_of_the_cube_it_read(
+        tmp_path: pathlib.Path) -> None:
+    (_, ir) = CassiniVIMS.from_file(write_pds3_cube(tmp_path))
+    assert ir.abspath == (tmp_path / 'v0000000001_1.qub').resolve()
+
+
+def test_from_file_astrometry_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """An astrometry read does not read the cube, so it gives no abspath."""
+
+    (_, ir) = CassiniVIMS.from_file(write_pds3_cube(tmp_path), astrometry=True)
     assert 'abspath' not in ir.subfields
 
 
@@ -824,7 +839,7 @@ def test_from_file_parallel_override(image_pair: Observations,
 
 
 def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.OopsTypeError, match=r"CassiniVIMS\.from_file: 'selection'"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'selection'"):
         CassiniVIMS.from_file(write_pds3_cube(tmp_path), selection='IR')
 
 

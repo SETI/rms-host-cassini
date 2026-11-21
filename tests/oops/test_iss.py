@@ -718,14 +718,77 @@ def test_from_file_vicar_label_reads_data(tmp_path: pathlib.Path) -> None:
 @pytest.mark.parametrize('astrometry', [False, True])
 def test_from_file_label_names_the_image(tmp_path: pathlib.Path,
                                          astrometry: bool) -> None:
-    """Given a label, the four path subfields name the image file, not the label."""
+    """Given a label, the path subfields name the image file, not the label."""
 
     image_path = write_pds3_image(tmp_path).with_suffix('.IMG')
     obs = CassiniISS.from_file(tmp_path / 'N0000000001_1.LBL', astrometry=astrometry)
     assert obs.filepath == FCPath(image_path)
     assert obs.basename == 'N0000000001_1.IMG'
-    assert obs.abspath == image_path.resolve()
     assert obs.image_url == image_path.as_posix()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_label_gives_the_abspath_of_the_image_it_read(
+        tmp_path: pathlib.Path) -> None:
+    image_path = write_pds3_image(tmp_path).with_suffix('.IMG')
+    obs = CassiniISS.from_file(tmp_path / 'N0000000001_1.LBL')
+    assert obs.abspath == image_path.resolve()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_label_astrometry_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """An astrometry read does not read the image file, so it gives no abspath."""
+
+    write_pds3_image(tmp_path)
+    obs = CassiniISS.from_file(tmp_path / 'N0000000001_1.LBL', astrometry=True)
+    assert 'abspath' not in obs.subfields
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_remote_label_gives_the_abspath_that_retrieve_returned(
+        tmp_path: pathlib.Path) -> None:
+    """The image file of a remote label is retrieved, and abspath is its local copy."""
+
+    label = Pds3Label(write_pds3_image(tmp_path), method='fast')
+    label.filepath = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.LBL')
+    remote = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.IMG')
+    local = cast(pathlib.Path, remote.get_local_path())
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(image_path_of(tmp_path).read_bytes())
+    obs = CassiniISS.from_file(label)
+    assert obs.abspath == local.resolve()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_image_file_has_its_abspath(tmp_path: pathlib.Path) -> None:
+    path = write_vicar_image(tmp_path)
+    obs = CassiniISS.from_file(path)
+    assert obs.abspath == path.resolve()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_image_file_astrometry_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    obs = CassiniISS.from_file(write_vicar_image(tmp_path), astrometry=True)
+    assert 'abspath' not in obs.subfields
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_vicar_label_gives_the_abspath_of_the_image_it_read(
+        tmp_path: pathlib.Path) -> None:
+    path = write_vicar_image(tmp_path)
+    obs = CassiniISS.from_file(vicar.VicarLabel(path))
+    assert obs.abspath == path.resolve()
+
+
+@pytest.mark.usefixtures('initialized_iss')
+def test_from_file_vicar_image_given_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """An image that the caller read was not retrieved by this call: no abspath."""
+
+    path = write_vicar_image(tmp_path)
+    vic = cast(vicar.VicarImage, vicar.VicarImage.from_file(path, strict=False))
+    vic.filepath = path
+    obs = CassiniISS.from_file(vic)
+    assert 'abspath' not in obs.subfields
 
 
 def test_from_file_initializes_iss(tmp_path: pathlib.Path) -> None:
@@ -1767,17 +1830,14 @@ def test_from_index_filepaths(tmp_path: pathlib.Path,
     assert index_snapshots[1].basename == 'W1484506649_1.IMG'
 
 
-def test_from_index_missing_local_image_has_no_abspath(
-        index_snapshots: list[oops.observation.Snapshot]) -> None:
-    assert 'abspath' not in index_snapshots[0].subfields
+def test_from_index_local_image_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """A row's image file is never read, so it has no abspath, even on the local disk."""
 
-
-def test_from_index_local_image_has_an_abspath(tmp_path: pathlib.Path) -> None:
     image_path = tmp_path / 'COISS_2009/data/1484506648_1484573295/N1484506648_1.IMG'
     image_path.parent.mkdir(parents=True)
     image_path.write_bytes(b'')
     obs = next(CassiniISS.from_index(write_index(tmp_path)))
-    assert obs.abspath == image_path.resolve()
+    assert 'abspath' not in obs.subfields
 
 
 def test_from_index_creates_no_directories(tmp_path: pathlib.Path) -> None:
@@ -2095,9 +2155,7 @@ def test_from_index_refuses_select(tmp_path: pathlib.Path, select: Any) -> None:
 
 
 def test_from_index_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.OopsTypeError,
-                       match=r"unexpected keyword argument for CassiniISS\.from_index: "
-                             r"'supplementary'"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'supplementary'"):
         CassiniISS.from_index(write_index(tmp_path), supplementary=None)
 
 
@@ -2172,7 +2230,7 @@ def test_from_index_supplement_in_another_order_raises_at_the_row(
     })
     snapshots = CassiniISS.from_index(index, supplement=supplement)
     with pytest.raises(oops.host.HostIndexError,
-                       match=r"index row 0 gives 'COISS_2009/data/1484506648_1484573295/"
+                       match=r"index row 0 gives 'data/1484506648_1484573295/"
                              r"N1484506648_1\.IMG'"):
         next(snapshots)
 
@@ -2183,7 +2241,7 @@ def test_from_index_supplement_in_another_order_raises_at_the_row(
 
 @pytest.mark.usefixtures('initialized_iss')
 def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.OopsTypeError, match=r"CassiniISS\.from_file: 'astrometery'"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'astrometery'"):
         CassiniISS.from_file(write_pds3_image(tmp_path), astrometery=True)
 
 
@@ -2219,32 +2277,6 @@ def test_from_file_header_dict_keeps_the_files_host(tmp_path: pathlib.Path,
     _write_foreign_host(path)
     obs = CassiniISS.from_file(path, astrometry=astrometry)
     assert obs.header_dict['HOST'] == 'SUN-SOLR'
-
-
-@pytest.mark.usefixtures('initialized_iss')
-def test_from_file_remote_label_astrometry_cached_image_has_an_abspath(
-        tmp_path: pathlib.Path) -> None:
-    """An image file that an earlier read put in the local cache has an abspath."""
-
-    label = Pds3Label(write_pds3_image(tmp_path), method='fast')
-    label.filepath = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.LBL')
-    cached = FCPath('https://rms-test.invalid/COISS_2001/N0000000001_1.IMG')
-    local = cast(pathlib.Path, cached.get_local_path())
-    local.write_bytes(b'')
-    obs = CassiniISS.from_file(label, astrometry=True)
-    assert obs.abspath == local.resolve()
-
-
-def test_from_index_cached_remote_image_has_an_abspath(tmp_path: pathlib.Path) -> None:
-    rows = index_rows(tmp_path)
-    index_url = 'https://rms-test.invalid/holdings/metadata/COISS_2xxx/COISS_2009'
-    image = FCPath('https://rms-test.invalid/holdings/volumes/COISS_2xxx/COISS_2009/data/'
-                   '1484506648_1484573295/N1484506648_1.IMG')
-    local = cast(pathlib.Path, image.get_local_path())
-    local.write_bytes(b'')
-    obs = next(CassiniISS.from_index(index_url + '/COISS_2009_index.lbl',
-                                     row_dicts=rows[:1], label=index_label(tmp_path)))
-    assert obs.abspath == local.resolve()
 
 
 @pytest.mark.usefixtures('initialized_iss')

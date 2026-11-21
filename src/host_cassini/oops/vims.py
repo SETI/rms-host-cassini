@@ -291,7 +291,7 @@ class CassiniVIMS(oops.Host):
     def from_file(fileinfo, *, pds3_options=None, select=None, astrometry=False,
                   target=None, lightsource=None, path=None, frame=None, cadence=None,
                   fov=None, calibrations=None, timeshift=None, navigation=None,
-                  tracker=None, parallel=None, **kwargs):
+                  tracker=None, parallel=None):
         """A pair of Observations based on a Cassini VIMS cube or its PDS3 label.
 
         Parameters:
@@ -349,7 +349,6 @@ class CassiniVIMS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which each Observation has a
                 fixed offset.
-            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             tuple[Observation | None, Observation | None] | Observation | None: Without
@@ -364,12 +363,12 @@ class CassiniVIMS(oops.Host):
             as lists; `label_target`, `observation_id`, `spacecraft_clock_start_count`
             and `spacecraft_clock_stop_count` when the label gives their items;
             `filepath`, `basename` and `image_url`, which name the file given, unless
-            the label came from no file; `abspath` when that file is on the local disk;
-            and `data` unless `astrometry` is True. `dict` is the label in the standard
-            form, with the cube's object under both "QUBE" and "SPECTRAL_QUBE", without
-            the missing values: "UNK", "UNKNOWN", "N/A", "NULL", "---", and the empty
-            string, and -999 in the exposures, temperatures, data rate, and compression
-            ratio. All three dictionaries can be written as JSON.
+            the label came from no file; and `abspath`, the local path of the cube that
+            was read, and `data`, unless `astrometry` is True. `dict` is the label in the
+            standard form, with the cube's object under both "QUBE" and "SPECTRAL_QUBE",
+            without the missing values: "UNK", "UNKNOWN", "N/A", "NULL", "---", and the
+            empty string, and -999 in the exposures, temperatures, data rate, and
+            compression ratio. All three dictionaries can be written as JSON.
 
         Raises:
             HostFormatError: If some aspect of the label or file is not valid or describes
@@ -381,8 +380,7 @@ class CassiniVIMS(oops.Host):
                 frame (the midtime, after any cadence override, or the time that a
                 `tracker` selects, moved by a time shift), or if the spacecraft clock
                 kernel cannot convert the cube's time backplanes.
-            OopsTypeError: If `select` has an invalid type, or a keyword argument is not
-                one of those listed.
+            OopsTypeError: If `select` has an invalid type.
             OopsValueError: If a string in `select` is not a channel name.
             PdsHostError: If no parser can read the PDS3 or ISIS label; the message
                 names the file and gives the error of each parser method tried.
@@ -391,7 +389,6 @@ class CassiniVIMS(oops.Host):
         """
 
         # Argument errors are raised before anything is read (#20)
-        CassiniVIMS._check_keywords('from_file', kwargs)
         oops.Host._check_select(select, names=_CHANNEL_NAMES)
 
         CassiniVIMS.initialize()  # define everything the first time through; use
@@ -442,7 +439,7 @@ class CassiniVIMS(oops.Host):
                    row_dicts=None, pds3_options=None, filter=None, select=None,
                    target=None, lightsource=None, path=None, frame=None, cadence=None,
                    fov=None, calibrations=None, timeshift=None, navigation=None,
-                   tracker=None, parallel=None, **kwargs):
+                   tracker=None, parallel=None):
         """An iterator over Observations, one entry for each row of a data file index.
 
         It reads a Ring-Moon Systems Node metadata index, such as
@@ -538,7 +535,6 @@ class CassiniVIMS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             collections.abc.Iterator[tuple[Observation | None, Observation | None]
@@ -560,8 +556,8 @@ class CassiniVIMS(oops.Host):
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within the volume named by VOLUME_ID, which is in the
             "volumes" tree beside a "metadata" tree holding the index, or otherwise in
-            the index's own directory; `abspath` is given only when that file is local
-            or already in the local cache.
+            the index's own directory. No observation has `abspath`, since the file is
+            not read.
 
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
@@ -577,7 +573,7 @@ class CassiniVIMS(oops.Host):
                 still held; if a pair of rows gives different VOLUME_IDs or file names;
                 if a row of `row_dicts` has no supplemental columns merged in; after
                 every row that a table holds, if it holds fewer rows than its label says;
-                or at the first of the ten rows read with it, if a row is longer than the
+                or at the first of the 100 rows read with it, if a row is longer than the
                 label's row length. After the last row, if the supplement lists a cube
                 that the index does not, or a table holds more rows than its label says.
                 A value that cannot be read as its column's number gives a warning, and
@@ -586,9 +582,8 @@ class CassiniVIMS(oops.Host):
                 the iteration reaches that row.
             OopsSpiceError: If the spacecraft clock kernel cannot convert a row's
                 BACKPLANE_SCLK_START_COUNT; raised when the iteration reaches that row.
-            OopsTypeError: If a keyword argument is not one of those listed or `select`
-                has an invalid type; when the iteration reaches a row whose value cannot
-                be compared with a range in `filter`.
+            OopsTypeError: If `select` has an invalid type; when the iteration reaches a
+                row whose value cannot be compared with a range in `filter`.
             OopsValueError: If a string in `select` is not a channel name, or `filter`
                 uses a column that the index does not have; for `row_dicts` that is not
                 a sequence, the latter is raised when the iteration reads the first row.
@@ -598,8 +593,6 @@ class CassiniVIMS(oops.Host):
             WrongHostError: If `filepath` is not a Cassini VIMS index file.
         """
 
-        # A mistaken keyword, such as "supplementary", must not be dropped silently (#20)
-        CassiniVIMS._check_keywords('from_index', kwargs)
         oops.Host._check_select(select, names=_CHANNEL_NAMES)
 
         # The supplement is required, so None is refused rather than taken to mean
@@ -851,6 +844,7 @@ class CassiniVIMS(oops.Host):
             vis_data = None
             ir_data = None
             times = None
+            abspath = None
         else:
             filepath = FCPath(filepath)
             if filepath.suffix.lower() == '.lbl':
@@ -862,6 +856,11 @@ class CassiniVIMS(oops.Host):
 
             (array, times) = CassiniVIMS._load_data_and_times(data_file, header_recs,
                                                               label)
+
+            # Only a cube retrieved in this call has a local path that is known to
+            # exist, which becomes `abspath`. The read above retrieved it, so this
+            # retrieval finds it in place.
+            abspath = data_file.retrieve()
             if array.shape != (lines, samples, bands):
                 raise HostFormatError(f'invalid array shape {array.shape} in {filepath}')
 
@@ -1150,9 +1149,10 @@ class CassiniVIMS(oops.Host):
                 }
 
                 # Apply standard overrides. Parsed content from no file has no file
-                # subfields, and `abspath` is given only when the file is on the local
-                # disk.
-                oops.Host._apply_overrides(params, filepath, **overrides)
+                # subfields, and `abspath` is given only by a read that retrieved the
+                # cube.
+                oops.Host._apply_overrides(params, filepath, abspath=abspath,
+                                           **overrides)
 
                 # Construct
                 obs = obs_subclass(axes, **params)

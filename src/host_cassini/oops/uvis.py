@@ -147,7 +147,7 @@ class CassiniUVIS(oops.Host):
     def from_file(fileinfo, *, enclose=False, pds3_options=None, select=None,
                   astrometry=False, target=None, lightsource=None, path=None, frame=None,
                   cadence=None, fov=None, calibrations=None, timeshift=None,
-                  navigation=None, tracker=None, parallel=None, **kwargs):
+                  navigation=None, tracker=None, parallel=None):
         """One or more Observations based on the label of a Cassini UVIS file.
 
         Parameters:
@@ -207,7 +207,6 @@ class CassiniUVIS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which each Observation has a
                 fixed offset.
-            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             Observation | tuple[Observation, ...]: A :class:`~oops.observation.Pixel` for
@@ -223,11 +222,11 @@ class CassiniUVIS(oops.Host):
             it is a TIME_SERIES; `label_target`, `observation_id`,
             `spacecraft_clock_start_count` and `spacecraft_clock_stop_count` when the
             label gives their items; `filepath`, `basename` and `image_url`, which name
-            the label, unless the label came from no file; `abspath` when the label is
-            on the local disk; and `data` unless `astrometry` is True. `label_dict` is
-            the label as parsed, with times as text and sets as lists, and `dict` is the
-            same without the missing values ("UNK", "UNKNOWN", "N/A", "NULL", "---", and
-            the empty string); both can be written as JSON.
+            the label, unless the label came from no file; and `abspath`, the local path
+            of the data file that was read, and `data`, unless `astrometry` is True.
+            `label_dict` is the label as parsed, with times as text and sets as lists,
+            and `dict` is the same without the missing values ("UNK", "UNKNOWN", "N/A",
+            "NULL", "---", and the empty string); both can be written as JSON.
 
         Raises:
             HostFormatError: If some aspect of the label or file is not valid or describes
@@ -238,8 +237,7 @@ class CassiniUVIS(oops.Host):
                 detector's pointing at the time at which an observation evaluates its
                 frame (the midtime, after any cadence override, or the time that a
                 `tracker` selects, moved by a time shift).
-            OopsTypeError: If `select` has an invalid type, or a keyword argument is not
-                one of those listed.
+            OopsTypeError: If `select` has an invalid type.
             OopsValueError: If `select` is a string.
             OSError: If `filepath` cannot be read.
             PdsHostError: If no parser can read the PDS3 label; the message names the
@@ -248,7 +246,6 @@ class CassiniUVIS(oops.Host):
         """
 
         # Argument errors are raised before anything is read (#20)
-        CassiniUVIS._check_keywords('from_file', kwargs)
         oops.Host._check_select(select)
 
         CassiniUVIS.initialize()  # define everything the first time through; use
@@ -293,7 +290,7 @@ class CassiniUVIS(oops.Host):
                    label=None, row_dicts=None, pds3_options=None, filter=None,
                    select=None, target=None, lightsource=None, path=None, frame=None,
                    cadence=None, fov=None, calibrations=None, timeshift=None,
-                   navigation=None, tracker=None, parallel=None, **kwargs):
+                   navigation=None, tracker=None, parallel=None):
         """An iterator over Observations, one entry for each row of a data file index.
 
         It reads a Ring-Moon Systems Node metadata index, such as
@@ -375,7 +372,6 @@ class CassiniUVIS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Any other keyword argument raises an error.
 
         Returns:
             collections.abc.Iterator[Observation | ObsArray]: The Observation or tuple
@@ -405,8 +401,8 @@ class CassiniUVIS(oops.Host):
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within the volume named by VOLUME_ID, which is in the
             "volumes" tree beside a "metadata" tree holding the index, or otherwise in
-            the index's own directory; `abspath` is given only when that file is local
-            or already in the local cache.
+            the index's own directory. No observation has `abspath`, since the file is
+            not read.
 
         Raises:
             HostFormatError: If some aspect of an index row is not valid or describes an
@@ -425,16 +421,15 @@ class CassiniUVIS(oops.Host):
                 FILE_NAME contains the supplement's VOLUME_ID and
                 FILE_SPECIFICATION_NAME; if a row of `row_dicts` has no supplemental
                 columns merged in; after every row that a table holds, if it holds fewer
-                rows than its label says; or at the first of the ten rows read with it,
+                rows than its label says; or at the first of the 100 rows read with it,
                 if a row is longer than the label's row length. After the last row, if
                 the supplement lists a product that the index does not, or a table holds
                 more rows than its label says. A value that cannot be read as its
                 column's number gives a warning, and is missing from the row.
             OopsIndexError: If an index in `select` is out of range for a row; raised when
                 the iteration reaches that row.
-            OopsTypeError: If a keyword argument is not one of those listed or `select`
-                has an invalid type; when the iteration reaches a row whose value cannot
-                be compared with a range in `filter`.
+            OopsTypeError: If `select` has an invalid type; when the iteration reaches a
+                row whose value cannot be compared with a range in `filter`.
             OopsValueError: If `select` is a string, or `filter` uses a column that the
                 index does not have; for `row_dicts` that is not a sequence, the latter
                 is raised when the iteration reads the first row.
@@ -444,8 +439,6 @@ class CassiniUVIS(oops.Host):
             WrongHostError: If `filepath` is not a Cassini UVIS index file.
         """
 
-        # A mistaken keyword, such as "supplementary", must not be dropped silently (#20)
-        CassiniUVIS._check_keywords('from_index', kwargs)
         oops.Host._check_select(select)
 
         # The supplement is required, so None is refused rather than taken to mean
@@ -704,7 +697,7 @@ class CassiniUVIS(oops.Host):
 
         # Load the data array if necessary
         if astrometry:
-            array = None
+            (array, abspath) = (None, None)
         else:
             if (info['CORE_ITEM_TYPE'] != 'MSB_UNSIGNED_INTEGER'
                     or info['CORE_ITEM_BYTES'] != 2):
@@ -712,7 +705,7 @@ class CassiniUVIS(oops.Host):
             if info['SUFFIX_ITEMS'] != [0, 0, 0]:
                 raise HostFormatError(f'unexpected QUBE SUFFIX_ITEMS in {filepath}')
 
-            array = CassiniUVIS._load_data(filepath, label, 'QUBE')
+            (array, abspath) = CassiniUVIS._load_data(filepath, label, 'QUBE')
 
             # Re-shape into something sensible
             # Note that the axis order in the label is first-index-fastest
@@ -745,7 +738,8 @@ class CassiniUVIS(oops.Host):
                                              line1=line1+1, line_bin=line_bin,
                                              band0=band0, band1=band1+1,
                                              band_bin=band_bin, rebin=True,
-                                             overrides=overrides, check=check)
+                                             abspath=abspath, overrides=overrides,
+                                             check=check)
 
         # Multiple windows combined into one enclosure
         if enclose:
@@ -753,19 +747,21 @@ class CassiniUVIS(oops.Host):
                                              line1=max(line1)+1, line_bin=min(line_bin),
                                              band0=min(band0), band1=max(band1)+1,
                                              band_bin=min(band_bin), rebin=False,
-                                             overrides=overrides, check=check)
+                                             abspath=abspath, overrides=overrides,
+                                             check=check)
 
         # Separate windows
         return tuple(CassiniUVIS._get_one_qube(filepath, label, array, line0=line0[w],
                                                line1=line1[w]+1, line_bin=line_bin[w],
                                                band0=band0[w], band1=band1[w]+1,
                                                band_bin=band_bin[w], rebin=True,
-                                               overrides=overrides, check=check)
+                                               abspath=abspath, overrides=overrides,
+                                               check=check)
                      for w in range(len(line0)))
 
     @staticmethod
     def _get_one_qube(filepath, label, array, *, line0, line1, line_bin, band0,
-                      band1, band_bin, rebin, overrides, check):
+                      band1, band_bin, rebin, abspath, overrides, check):
         """A single Observation object for the identified window of the UVIS qube.
 
         The line window and binning apply only to a qube with more than one line. A
@@ -784,6 +780,8 @@ class CassiniUVIS(oops.Host):
             band_bin (int): The binning factor along the band axis.
             rebin (bool): True to apply the binning factors to the field of view, the
                 shape and the data array; False to ignore them.
+            abspath (pathlib.Path | None): The local path of the data file if this call
+                retrieved it to read `array`; otherwise None.
             overrides (dict): The standard override options of :meth:`from_file`.
             check (bool): True to raise OopsSpiceError if the C kernels cannot give the
                 pointing; False to give the observation a frame that raises it when used.
@@ -872,7 +870,7 @@ class CassiniUVIS(oops.Host):
 
         # Define the Observation parameters
         params = CassiniUVIS._params(label, cadence, fov, frame_name, filepath,
-                                     overrides=overrides, check=check)
+                                     abspath=abspath, overrides=overrides, check=check)
 
         # Construct the Observation
         if lines == 1:
@@ -950,21 +948,24 @@ class CassiniUVIS(oops.Host):
         texp = info['SAMPLING_PARAMETER_INTERVAL'] * 0.001
         cadence = oops.cadence.Metronome(tstart, texp, texp, samples)
 
-        # Define the Observation parameters
-        fov = CassiniUVIS._FOVS[(detector, '', 1)]
-        params = CassiniUVIS._params(label, cadence, fov, frame_name, filepath,
-                                     overrides=overrides, check=check)
-
-        # Construct the Observation
-        obs = oops.observation.Pixel(('t',), **params)
-
         # Load the data array if necessary
-        if not astrometry:
+        if astrometry:
+            (array, abspath) = (None, None)
+        else:
             column = info['PHOTOMETER_COUNTS']
             if column['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or column['BYTES'] != 2:
                 raise HostFormatError(f'non-standard data type in TIME_SERIES: '
                                       f'{filepath}')
-            array = CassiniUVIS._load_data(filepath, label, 'TIME_SERIES')
+            (array, abspath) = CassiniUVIS._load_data(filepath, label, 'TIME_SERIES')
+
+        # Define the Observation parameters
+        fov = CassiniUVIS._FOVS[(detector, '', 1)]
+        params = CassiniUVIS._params(label, cadence, fov, frame_name, filepath,
+                                     abspath=abspath, overrides=overrides, check=check)
+
+        # Construct the Observation
+        obs = oops.observation.Pixel(('t',), **params)
+        if array is not None:
             obs.insert_subfield('data', array)
 
         obs.insert_subfield('host', 'Cassini')
@@ -1046,17 +1047,20 @@ class CassiniUVIS(oops.Host):
         band1 = info['LR_CORNER_SPECTRAL'] + 1
         band_bin = info['BIN_SPECTRAL']
 
-        # Define the observation
-        params = CassiniUVIS._params(label, cadence, fov, frame_name, filepath,
-                                     overrides=overrides, check=check)
-        obs = oops.observation.Pixel(('b',), **params)
-
         # Load the data array if necessary
-        if not astrometry:
+        if astrometry:
+            (array, abspath) = (None, None)
+        else:
             column = info['SPECTRUM']
             if column['DATA_TYPE'] != 'MSB_UNSIGNED_INTEGER' or column['BYTES'] != 2:
                 raise HostFormatError(f'non-standard data type in SPECTRUM: {filepath}')
-            array = CassiniUVIS._load_data(filepath, label, 'SPECTRUM')
+            (array, abspath) = CassiniUVIS._load_data(filepath, label, 'SPECTRUM')
+
+        # Define the observation
+        params = CassiniUVIS._params(label, cadence, fov, frame_name, filepath,
+                                     abspath=abspath, overrides=overrides, check=check)
+        obs = oops.observation.Pixel(('b',), **params)
+        if array is not None:
             obs.insert_subfield('data', array)
 
         obs.insert_subfield('host', 'Cassini')
@@ -1082,7 +1086,8 @@ class CassiniUVIS(oops.Host):
         return obs
 
     @staticmethod
-    def _params(label, cadence, fov, frame_name, filepath, *, overrides, check):
+    def _params(label, cadence, fov, frame_name, filepath, *, abspath=None, overrides,
+                check):
         """The Observation constructor inputs, with the overrides applied.
 
         Parameters:
@@ -1092,6 +1097,8 @@ class CassiniUVIS(oops.Host):
             frame_name (str): The SPICE name of the instrument frame.
             filepath (FCPath | None): The path to the PDS label, or None if it is not
                 known.
+            abspath (pathlib.Path, optional): The local path of the data file, given
+                only when this call retrieved the file to read its array.
             overrides (dict): The standard override options of :meth:`from_file`.
             check (bool): True to raise OopsSpiceError if the C kernels cannot give the
                 pointing at the time at which the observation evaluates its frame; False
@@ -1132,8 +1139,8 @@ class CassiniUVIS(oops.Host):
                 defer=not check)
 
         # Parsed content from no file has no file subfields, and `abspath` is given only
-        # when the file is on the local disk
-        oops.Host._apply_overrides(params, filepath, **overrides)
+        # by a read that retrieved the data file
+        oops.Host._apply_overrides(params, filepath, abspath=abspath, **overrides)
         return params
 
     @staticmethod
@@ -1173,8 +1180,9 @@ class CassiniUVIS(oops.Host):
                 "TIME_SERIES", or "SPECTRUM".
 
         Returns:
-            numpy.ndarray: The values read from the file, as MSB 2-byte unsigned
-            integers; the caller checks that the label describes the data that way.
+            tuple[numpy.ndarray, pathlib.Path]: The values read from the file, as MSB
+            2-byte unsigned integers, which the caller checks that the label describes;
+            and the local path that ``FCPath.retrieve()`` gave for the file.
         """
 
         basename = label['^' + key]
@@ -1186,7 +1194,7 @@ class CassiniUVIS(oops.Host):
             data_filepath = data_filepath.with_name(basename.lower())
             local_path = data_filepath.retrieve()
 
-        return np.fromfile(local_path, sep='', dtype='>u2')
+        return (np.fromfile(local_path, sep='', dtype='>u2'), local_path)
 
     _OBS_CODE_CLEANUP = re.compile(r'(?:UR|)(.*?)(?:OCC|TI|V1|RDI|TK[ABC]|)$')
 

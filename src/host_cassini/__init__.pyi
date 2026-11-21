@@ -12,6 +12,10 @@ defaults. Types are given where they are unambiguous and are `Any` elsewhere.
 
 The detectors and support methods that a Host subclass overrides or calls, such as
 `_register` and `_detect_in_pds3`, are private and are not published here.
+
+Every `from_file` and `from_index` accepts only the keywords that it names, where Host's
+accepts any keyword, so each is marked as an incompatible override; Python raises
+TypeError for any other keyword.
 """
 
 import pathlib
@@ -39,8 +43,8 @@ class CassiniISS(Host):
     # and `select` must be None, because an image is one observation. Raises
     # FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame` is
     # given; the message ends with the SPICE error code), HostFormatError (a required item
-    # missing or invalid), oops.OopsTypeError (an unknown keyword), oops.OopsValueError
-    # (`select` not None), PdsHostError, VicarHostError, OSError and WrongHostError.
+    # missing or invalid), TypeError (an unknown keyword), oops.OopsValueError (`select`
+    # not None), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
@@ -54,13 +58,13 @@ class CassiniISS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any) -> Snapshot: ...
+        parallel: Observation | None = None) -> Snapshot: ...
     # Every row is one Snapshot. The pointing is never checked. select must be None
-    # (oops.OopsValueError), and any other keyword raises oops.OopsTypeError. The call
-    # reads only the labels; the iterator reads the rows a few at a time and builds each
-    # row's Snapshot when it reaches the row.
+    # (oops.OopsValueError), and any other keyword raises TypeError. The call reads only
+    # the labels; the iterator reads the rows a few at a time and builds each row's
+    # Snapshot when it reaches the row.
     @staticmethod
-    def from_index(
+    def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None,
@@ -76,7 +80,7 @@ class CassiniISS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any) -> Iterator[Snapshot]: ...
+        parallel: Observation | None = None) -> Iterator[Snapshot]: ...
     @staticmethod
     def initialize(*, ck: str = 'reconstructed',
         planets: int | Sequence[int] | None = None, asof: str | None = None,
@@ -98,12 +102,10 @@ class CassiniUVIS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None,
-        **kwargs: Any) -> Observation | tuple[Observation, ...]: ...
+        parallel: Observation | None = None) -> Observation | tuple[Observation, ...]: ...
     # `select` accepts no channel name. The supplement is required: None raises
     # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
-    # oops.OopsTypeError. The iterator builds each row's observations when it reaches
-    # the row.
+    # TypeError. The iterator builds each row's observations when it reaches the row.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
@@ -119,8 +121,7 @@ class CassiniUVIS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None,
-        **kwargs: Any) -> Iterator[Observation | ObsArray]: ...
+        parallel: Observation | None = None) -> Iterator[Observation | ObsArray]: ...
     @staticmethod
     def initialize(*, ck: str = 'reconstructed',
         planets: int | Sequence[int] | None = None, asof: str | None = None,
@@ -141,14 +142,14 @@ class CassiniVIMS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any
+        parallel: Observation | None = None
         ) -> tuple[Observation | None, Observation | None] | Observation | None: ...
     # Every row is a (vis, ir) pair or a selection from one. The supplement is required:
     # None raises oops.host.HostIndexError unless row_dicts is given. Any other keyword
-    # raises oops.OopsTypeError. The iterator builds each row's observations when it
-    # reaches the row.
+    # raises TypeError. The iterator builds each row's observations when it reaches the
+    # row.
     @staticmethod
-    def from_index(
+    def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None,
@@ -162,7 +163,7 @@ class CassiniVIMS(Host):
         calibrations: Calibration | list[Calibration] | None = None,
         timeshift: tuple[float, str] | None = None,
         navigation: tuple[float, ...] | None = None, tracker: str | None = None,
-        parallel: Observation | None = None, **kwargs: Any
+        parallel: Observation | None = None
         ) -> Iterator[tuple[Observation | None, Observation | None] | Observation
                       | None]: ...
     @staticmethod

@@ -698,9 +698,7 @@ def test_from_index_uses_a_given_label(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_from_index_rejects_an_unknown_keyword() -> None:
-    with pytest.raises(oops.OopsTypeError,
-                       match=r"unexpected keyword argument for CassiniUVIS\.from_index: "
-                             r"'supplementary'"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'supplementary'"):
         CassiniUVIS.from_index('INDEX.LBL', supplementary=None)
 
 
@@ -713,10 +711,33 @@ def test_from_index_names_the_file_in_full(tmp_path: pathlib.Path) -> None:
     assert obs.filepath == FCPath(path)
 
 
-def test_from_index_unfetched_file_has_no_abspath(tmp_path: pathlib.Path) -> None:
-    index = ('https://rms-test.invalid/holdings/metadata/COUVIS_0xxx/COUVIS_0001/'
-             'COUVIS_0001_index.lbl')
+def test_from_index_local_file_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """A row's file is never read, so it has no abspath, even on the local disk."""
+
+    index = tmp_path / 'metadata/COUVIS_0xxx/COUVIS_0001/COUVIS_0001_index.lbl'
+    path = tmp_path / 'volumes/COUVIS_0xxx/COUVIS_0001' / _UVIS_SPEC
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'')
     [obs] = CassiniUVIS.from_index(index, row_dicts=[qube_row()])
+    assert 'abspath' not in obs.subfields
+
+
+@pytest.mark.parametrize(('write', 'data_name'), [
+    (write_qube, 'FUV2005_001_00_00.DAT'),
+    (write_time_series, 'HSP2005_001_00_00.DAT'),
+    (write_spectrum, 'EUV2005_001_00_00.DAT'),
+], ids=['qube', 'time-series', 'spectrum'])
+def test_from_file_gives_the_abspath_of_the_data_file_it_read(
+        tmp_path: pathlib.Path, write: Callable[[pathlib.Path], pathlib.Path],
+        data_name: str) -> None:
+    obs = CassiniUVIS.from_file(write(tmp_path))
+    assert obs.abspath == (tmp_path / data_name).resolve()
+
+
+def test_from_file_astrometry_has_no_abspath(tmp_path: pathlib.Path) -> None:
+    """An astrometry read does not read the data file, so it gives no abspath."""
+
+    obs = CassiniUVIS.from_file(write_qube(tmp_path), astrometry=True)
     assert 'abspath' not in obs.subfields
 
 ##########################################################################################
@@ -731,7 +752,7 @@ def test_from_file_parallel_override(tmp_path: pathlib.Path) -> None:
 
 
 def test_from_file_rejects_an_unknown_keyword(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(oops.OopsTypeError, match=r"CassiniUVIS\.from_file: 'enclosed'"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'enclosed'"):
         CassiniUVIS.from_file(write_qube(tmp_path), enclosed=True)
 
 
