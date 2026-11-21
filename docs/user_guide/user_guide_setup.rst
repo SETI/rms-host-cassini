@@ -69,8 +69,8 @@ Initialization
 
 The first call to a host's ``from_file()`` or ``from_index()`` loads the instrument
 kernel and defines the instrument's fields of view. To choose the kernel sets, the
-bodies that OOPS defines, or to use only the kernels that existed before a given date,
-call the host's ``initialize()`` before opening the first product. This call loads the
+bodies that OOPS defines, or to prefer the kernels released by a given date, call the
+host's ``initialize()`` before opening the first product. This call loads the
 predicted C kernels in place of the reconstructed ones, and defines Saturn, planet 6,
 and its moons, and no other planet:
 
@@ -86,6 +86,17 @@ the loading of those kernels to the caller; ``gapfill`` adds the gap-filling C k
 and ``mst_pck`` adds the updated rotation models of some small moons. The three hosts
 share one set of mission kernels, so the first host to be initialized makes these
 choices for all three. Later calls to ``initialize()`` have no effect.
+
+``asof`` takes a date, such as ``'2008-01-01'``, and each kernel is then chosen from
+those released on or before that date where possible. Where the kernel database does
+not hold a kernel of some kind that old, a later one is used, the one that would be
+chosen without a date, and no warning is given. For example, ``asof='2008-01-01'``
+still loads the spacecraft clock kernel released in 2018, because the database does not
+hold an earlier one. The C kernels are the exception: if none of the chosen set was
+released by the date, as for ``asof='2000-01-01'``, ``initialize()`` raises
+:exc:`ValueError`. The gap-filling C kernels, and each host's own instrument kernel,
+are always the newest ones, whatever the date; ISS and UVIS read their fields of view
+from that kernel.
 
 Data files and indexes
 ======================

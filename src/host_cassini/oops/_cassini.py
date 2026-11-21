@@ -118,12 +118,18 @@ class _Cassini:
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
                 nine.
-            asof (str, optional): Only use SPICE kernels that existed before this date;
-                None to ignore.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from those
+                released on or before it, or, where the database does not hold one so
+                old, as if no date were given; for the C kernels of the chosen set,
+                ValueError is raised instead. The gap-filling C kernels are always the
+                newest. None to choose the newest kernels.
             mst_pck (bool, optional): True to include MST PCKs, which update the rotation
                 models for some of the small moons.
             irregulars (bool, optional): True to include the irregular satellites; False
                 otherwise.
+
+        Raises:
+            ValueError: If no C kernel of the chosen set was released by `asof`.
         """
 
         if _Cassini.initialized:
@@ -370,8 +376,9 @@ class _Cassini:
                 to load. On the first call, 'ISS', 'VIMS', 'CIRS' and 'UVIS' are always
                 included.
             asof (str, optional): If this specifies a date or date-time in ISO format,
-                then only kernels that existed before the specified date are used.
-                Otherwise, the most recent versions are always loaded.
+                each kernel is chosen from those released on or before it, or, where the
+                database does not hold one so old, as if no date were given. Otherwise,
+                the most recent versions are always loaded.
         """
 
         # Copy so that the caller's list is never modified

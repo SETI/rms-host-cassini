@@ -1610,8 +1610,12 @@ class CassiniISS(oops.Host):
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
                 nine.
-            asof (str, optional): Only use SPICE kernels that existed before this date;
-                None to ignore.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from those
+                released on or before it, or, where the database does not hold one so
+                old, as if no date were given; for the C kernels of the chosen set,
+                ValueError is raised instead. The gap-filling C kernels and the ISS
+                instrument kernel, from which the fields of view are read, are always
+                the newest. None to choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1624,6 +1628,7 @@ class CassiniISS(oops.Host):
         Raises:
             HostError: If the instrument kernel gives a camera's field of view
                 in units other than degrees.
+            ValueError: If no C kernel of the chosen set was released by `asof`.
         """
 
         # Quick exit after first call
