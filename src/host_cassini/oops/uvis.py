@@ -571,6 +571,11 @@ class CassiniUVIS(oops.Host):
             raise HostFormatError(f'unsupported Cassini UVIS DATA_OBJECT_TYPE {kind!r}: '
                                   f'{filepath}')
 
+        # The observation of a qube or a spectrum reads these columns, which a null value
+        # leaves out of the row
+        for name in ('PRODUCT_ID', 'SLIT_STATE', 'INTEGRATION_DURATION'):
+            column(name)
+
         line0 = int(column('WINDOW_MINIMUM_LINE_NUMBER'))
         line1 = int(column('WINDOW_MAXIMUM_LINE_NUMBER'))
         line_bin = int(column('LINE_BINNING_FACTOR'))
