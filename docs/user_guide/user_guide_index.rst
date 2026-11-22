@@ -60,8 +60,9 @@ The archive has no supplemental index for ISS, so the host needs none. The
 - A path or URL reads that file instead, and the file must exist. Its rows must list
   the same images as the index, in the same order, and where both tables give a column,
   the index's value is kept. When both tables have ``FILE_SPECIFICATION_NAME``, a
-  supplement row whose image is not the one in the same row of the index raises :exc:`~oops.host.HostIndexError` when the iteration reaches
-  it, and so does a supplement that ends first or has rows left over.
+  supplement row whose image is not the one in the same row of the index raises
+  :exc:`~oops.host.HostIndexError` when the iteration reaches it, and so does a
+  supplement that ends first or has rows left over.
 - None reads the index alone.
 
 Other arguments
