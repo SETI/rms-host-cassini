@@ -91,20 +91,21 @@ choices for all three. Later calls to ``initialize()`` have no effect.
 those released no later than the start (00:00) of that date. Where every kernel that a
 query could choose was released after the start of the date, the query silently uses
 the kernel it would choose without a date. For example, ``asof='2008-01-01'`` still
-loads the spacecraft clock kernel released in 2018, the only one in the kernel
-database. That happens only when the whole query comes back empty: a set of SP or C
-kernels that covers the mission keeps just the kernels released by the start of the
-date, so a date inside the mission can leave the later part of the mission uncovered.
-With ``asof='2008-01-01'``, for example, the reconstructed SP kernels end on 2007-09-19
-and the reconstructed C kernels on 2007-12-28. The C kernels never fall back to the
-newest: the first reconstructed C kernel was released at 18:17 on 2004-01-28, and the
-first predicted one at 21:44 on 2004-03-23, so for any date up to and including
-2004-01-28, or 2004-03-23 with ``ck='predicted'``, ``initialize()`` raises
-:exc:`ValueError`. The date decides the leap seconds too: with ``asof='2008-01-01'``,
-the leap seconds kernel released on 2005-08-03 is used, which lacks the leap second at
-the end of 2008. Two sets of kernels are loaded without the date: the gap-filling C
-kernels, and each host's own instrument kernel, from which ISS and UVIS read their
-fields of view.
+loads the newest spacecraft clock kernel, released in 2018, because all three clock
+kernels in the kernel database were released in 2017 or 2018. That happens only when
+the whole query comes back empty: a set of SP or C kernels that covers the mission
+keeps just the kernels released by the start of the date, so a date inside the mission
+can leave the later part of the mission uncovered. With ``asof='2008-01-01'``, for
+example, the reconstructed SP kernels end on 2007-09-19 and the reconstructed C kernels
+on 2007-12-28. The C kernels never fall back to the newest, so for any date up to and
+including 2003-11-04, ``initialize()`` raises :exc:`ValueError`. When Saturn is among
+the planets, as it is by default, any date from 2003-11-05 through 2004-04-26 makes
+``initialize()`` raise :exc:`RuntimeError`, because the frames kernel of Saturn's small
+moons chosen for those dates has a malformed line that SPICE rejects. The date decides
+the leap seconds too: with ``asof='2008-01-01'``, the leap seconds kernel released on
+2005-08-03 is used, which lacks the leap second at the end of 2008. Two sets of kernels
+are loaded without the date: the gap-filling C kernels, and each host's own instrument
+kernel, from which ISS and UVIS read their fields of view.
 
 Data files and indexes
 ======================

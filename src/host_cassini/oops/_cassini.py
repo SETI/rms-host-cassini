@@ -134,9 +134,12 @@ class _Cassini:
                 otherwise.
 
         Raises:
+            RuntimeError: If Saturn is among the planets and `asof` is a date from
+                2003-11-05 through 2004-04-26, because the frames kernel of Saturn's
+                small moons chosen for those dates has a malformed line that SPICE
+                rejects.
             ValueError: If none of the C kernels of the chosen set was released by the
-                start of `asof`, as for any date up to and including 2004-01-28 with
-                the reconstructed set, or 2004-03-23 with the predicted set.
+                start of `asof`, as for any date up to and including 2003-11-04.
         """
 
         if _Cassini.initialized:

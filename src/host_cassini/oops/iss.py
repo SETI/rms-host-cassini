@@ -797,9 +797,11 @@ class CassiniISS(oops.Host):
                 of an early cruise image; raised when the iteration reaches that row.
             OopsTypeError: When the iteration reaches a row whose value cannot be
                 compared with a range in `filter`.
-            OopsValueError: If `select` is not None, or if `filter` uses a column that the
-                index does not have; for `row_dicts` that is not a sequence, the latter
-                is raised when the iteration reads the first row.
+            OopsValueError: If `select` is not None, if `pds3_options` holds an option
+                that the PDS3 label parser does not accept while `label` is not given, or
+                if `filter` uses a column that the index does not have; for `row_dicts`
+                that is not a sequence, the `filter` error is raised when the iteration
+                reads the first row.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` cannot be read.
@@ -1649,9 +1651,12 @@ class CassiniISS(oops.Host):
         Raises:
             HostError: If the instrument kernel gives a camera's field of view
                 in units other than degrees.
+            RuntimeError: If Saturn is among the planets and `asof` is a date from
+                2003-11-05 through 2004-04-26, because the frames kernel of Saturn's
+                small moons chosen for those dates has a malformed line that SPICE
+                rejects.
             ValueError: If none of the C kernels of the chosen set was released by the
-                start of `asof`, as for any date up to and including 2004-01-28 with
-                the reconstructed set, or 2004-03-23 with the predicted set.
+                start of `asof`, as for any date up to and including 2003-11-04.
         """
 
         # Quick exit after first call

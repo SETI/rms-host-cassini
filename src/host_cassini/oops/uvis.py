@@ -441,9 +441,11 @@ class CassiniUVIS(oops.Host):
                 the iteration reaches that row.
             OopsTypeError: If `select` has an invalid type; when the iteration reaches a
                 row whose value cannot be compared with a range in `filter`.
-            OopsValueError: If `select` is a string, or `filter` uses a column that the
-                index does not have; for `row_dicts` that is not a sequence, the latter
-                is raised when the iteration reads the first row.
+            OopsValueError: If `select` is a string, if `pds3_options` holds an option
+                that the PDS3 label parser does not accept while neither `label` nor
+                `row_dicts` is given, or if `filter` uses a column that the index does not
+                have; for `row_dicts` that is not a sequence, the `filter` error is raised
+                when the iteration reads the first row.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -1328,9 +1330,12 @@ class CassiniUVIS(oops.Host):
 
         Raises:
             OopsValueError: If the instrument kernel gives an unrecognized FOV_SHAPE.
+            RuntimeError: If Saturn is among the planets and `asof` is a date from
+                2003-11-05 through 2004-04-26, because the frames kernel of Saturn's
+                small moons chosen for those dates has a malformed line that SPICE
+                rejects.
             ValueError: If none of the C kernels of the chosen set was released by the
-                start of `asof`, as for any date up to and including 2004-01-28 with
-                the reconstructed set, or 2004-03-23 with the predicted set.
+                start of `asof`, as for any date up to and including 2003-11-04.
         """
 
         # Quick exit after first call
