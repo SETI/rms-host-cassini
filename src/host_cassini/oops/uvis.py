@@ -337,7 +337,10 @@ class CassiniUVIS(oops.Host):
                 it. If provided, they are used in place of the tables and their labels,
                 and `supplement`, `label` and `pds3_options` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
+                options are checked when the call is made, unless `row_dicts` is given,
+                when they are not used. The index's label is parsed with all of them, and
+                the supplement's label with the method alone.
             filter (dict[str, Any], optional): A dictionary of index column names and
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
@@ -441,11 +444,12 @@ class CassiniUVIS(oops.Host):
                 the iteration reaches that row.
             OopsTypeError: If `select` has an invalid type; when the iteration reaches a
                 row whose value cannot be compared with a range in `filter`.
-            OopsValueError: If `select` is a string, if `pds3_options` holds an option
-                that the PDS3 label parser does not accept while neither `label` nor
-                `row_dicts` is given, or if `filter` uses a column that the index does not
-                have; for `row_dicts` that is not a sequence, the `filter` error is raised
-                when the iteration reads the first row.
+            OopsValueError: If `select` is a string, or if `filter` uses a column that
+                the index does not have; for `row_dicts` that is not a sequence, the
+                `filter` error is raised when the iteration reads the first row. Also if
+                `pds3_options` names a method the parser does not have or an option it
+                does not take. The call checks the options when it is made, unless
+                `row_dicts` is given.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -520,7 +524,7 @@ class CassiniUVIS(oops.Host):
 
         A row names the kind of product in DATA_OBJECT_TYPE, where a product label has
         a QUBE, TIME_SERIES or SPECTRUM object, so the object is built from the row's
-        columns (#33).
+        columns.
 
         Parameters:
             row_dict (dict[str, Any]): The merged row. It is not modified.
@@ -1315,10 +1319,10 @@ class CassiniUVIS(oops.Host):
                 after the start of the date silently uses the kernel it would choose
                 without a date. A set of SP or C kernels keeps only those released by
                 the start of the date, so the later part of the mission can lack
-                coverage. The C kernels never fall back, and ValueError is raised
-                instead. Two loads ignore the date: the gap-filling C kernels, and the
-                UVIS instrument kernel, from which the fields of view are read. None to
-                choose the newest kernels.
+                coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. Two loads ignore the date: the gap-filling
+                C kernels, and the UVIS instrument kernel, from which the fields of view
+                are read. None to choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.

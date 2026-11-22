@@ -179,10 +179,8 @@ its image file, or from an index, and ``dict`` holds the corrected counts. If th
 kernel cannot convert a count, the read raises :exc:`oops.OopsSpiceError`.
 
 How the start count of an early cruise image whose shutter was disabled should be
-computed is an open question
-(`rms-host-cassini#35 <https://github.com/SETI/rms-host-cassini/issues/35>`_). The host
-computes it the same way for every early cruise image, as the stop count less the
-exposure.
+computed is an open question. The host computes it the same way for every early cruise
+image, as the stop count less the exposure.
 
 UVIS and VIMS metadata
 ======================

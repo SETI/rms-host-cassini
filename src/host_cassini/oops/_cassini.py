@@ -125,9 +125,9 @@ class _Cassini:
                 was released after the start of the date silently uses the kernel it
                 would choose without a date; a set of SP or C kernels keeps only those
                 released by the start of the date, so the later part of the mission can
-                lack coverage. The C kernels never fall back, and ValueError is raised
-                instead. The gap-filling C kernels are loaded without the date. None to
-                choose the newest kernels.
+                lack coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. The gap-filling C kernels are loaded
+                without the date. None to choose the newest kernels.
             mst_pck (bool, optional): True to include MST PCKs, which update the rotation
                 models for some of the small moons.
             irregulars (bool, optional): True to include the irregular satellites; False

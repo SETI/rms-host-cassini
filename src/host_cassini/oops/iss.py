@@ -688,9 +688,12 @@ class CassiniISS(oops.Host):
                 `label` or, if it is not given, from the label of `filepath`, as for rows
                 read from the table.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser. They
-                are checked when the call parses the index label, which it does only if
-                `label` is not given.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
+                options are checked when the call is made, unless `row_dicts` is given,
+                when they are not used. The index's label is parsed with all of them, and
+                the supplement's label with the method alone. (The index's label is still
+                parsed with them, and so they are still checked, when `row_dicts` is
+                given and `label` is not.)
             filter (dict[str, Any], optional): A dictionary of index column names and
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
@@ -797,11 +800,13 @@ class CassiniISS(oops.Host):
                 of an early cruise image; raised when the iteration reaches that row.
             OopsTypeError: When the iteration reaches a row whose value cannot be
                 compared with a range in `filter`.
-            OopsValueError: If `select` is not None, if `pds3_options` holds an option
-                that the PDS3 label parser does not accept while `label` is not given, or
-                if `filter` uses a column that the index does not have; for `row_dicts`
-                that is not a sequence, the `filter` error is raised when the iteration
-                reads the first row.
+            OopsValueError: If `select` is not None, or if `filter` uses a column that
+                the index does not have; for `row_dicts` that is not a sequence, the
+                `filter` error is raised when the iteration reads the first row. Also if
+                `pds3_options` names a method the parser does not have or an option it
+                does not take. The call checks the options when it is made, unless
+                `row_dicts` is given. (It still checks them, by parsing the index's label
+                with them, when `row_dicts` is given and `label` is not.)
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` cannot be read.
@@ -1258,12 +1263,12 @@ class CassiniISS(oops.Host):
         """The text of a PDS3 label of an ISS image, with its known defects repaired.
 
         ``oops.Host`` calls this before any parser reads a label of this host, the labels
-        of the index tables included. Three defects of the archive's labels are repaired
-        (#11): a quoted value that starts on the line after its keyword is moved up to
-        that line; the unterminated DESCRIPTION of some calibrated labels is closed at the
-        end of the line before the next keyword; and the DESCRIPTION of others, closed on
-        a line of its own and followed by a second quoted string, is joined into one
-        string. A label without these defects is returned unchanged.
+        of the index tables included. Three defects of the archive's labels are repaired:
+        a quoted value that starts on the line after its keyword is moved up to that
+        line; the unterminated DESCRIPTION of some calibrated labels is closed at the end
+        of the line before the next keyword; and the DESCRIPTION of others, closed on a
+        line of its own and followed by a second quoted string, is joined into one string.
+        A label without these defects is returned unchanged.
 
         Parameters:
             text (str): The text of the label, with <LF> line terminators.
@@ -1635,10 +1640,10 @@ class CassiniISS(oops.Host):
                 after the start of the date silently uses the kernel it would choose
                 without a date. A set of SP or C kernels keeps only those released by
                 the start of the date, so the later part of the mission can lack
-                coverage. The C kernels never fall back, and ValueError is raised
-                instead. Two loads ignore the date: the gap-filling C kernels, and the
-                ISS instrument kernel, from which the fields of view are read. None to
-                choose the newest kernels.
+                coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. Two loads ignore the date: the gap-filling
+                C kernels, and the ISS instrument kernel, from which the fields of view
+                are read. None to choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.

@@ -165,10 +165,8 @@ product gives a single observation. Two options control this:
 The ``label_dict`` subfield holds the PDS3 label and ``dict`` the same keywords without
 their missing values, as :doc:`user_guide_metadata` describes. ``filepath``,
 ``basename``, and ``image_url`` give the label, not the data file; whether they should
-give the data file instead is an open question
-(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
-``abspath`` is the local path of the data file, given only by a normal read, which
-retrieves it.
+give the data file instead is an open question. ``abspath`` is the local path of the
+data file, given only by a normal read, which retrieves it.
 ``pds3_options``, ``astrometry``, and the standard overrides work as they do for ISS,
 and the parser falls back from the fast method to the strict and the loose ones in the
 same way. Parsed content that came from no file works as it does for ISS: an astrometry
@@ -200,10 +198,8 @@ The label that was read is ``label_dict`` for a detached PDS3 label and ``header
 for the cube's own ISIS label, and ``dict`` holds its keywords without their missing
 values, as :doc:`user_guide_metadata` describes. ``filepath``, ``basename``, and
 ``image_url`` give the file that was passed in, which is the label when the label is
-given; whether they should give the cube instead is an open question
-(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
-``abspath`` is the local path of the cube, given only by a normal read, which retrieves
-it.
+given; whether they should give the cube instead is an open question. ``abspath`` is
+the local path of the cube, given only by a normal read, which retrieves it.
 ``pds3_options``, ``astrometry``, parsed content, and the standard overrides work as they
 do for UVIS. Override ``fov`` only when ``select`` picks a single channel, because the
 two channels have different fields of view. Any other keyword raises :exc:`TypeError`.

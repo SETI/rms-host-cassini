@@ -501,7 +501,10 @@ class CassiniVIMS(oops.Host):
                 it. If provided, they are used in place of the tables and their labels,
                 and `supplement`, `label` and `pds3_options` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
+                options are checked when the call is made, unless `row_dicts` is given,
+                when they are not used. The index's label is parsed with all of them, and
+                the supplement's label with the method alone.
             filter (dict[str, Any], optional): A dictionary of index column names and
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
@@ -596,12 +599,12 @@ class CassiniVIMS(oops.Host):
                 BACKPLANE_SCLK_START_COUNT; raised when the iteration reaches that row.
             OopsTypeError: If `select` has an invalid type; when the iteration reaches a
                 row whose value cannot be compared with a range in `filter`.
-            OopsValueError: If a string in `select` is not a channel name, if
-                `pds3_options` holds an option that the PDS3 label parser does not accept
-                while neither `label` nor `row_dicts` is given, or if `filter` uses a
-                column that the index does not have; for `row_dicts` that is not a
-                sequence, the `filter` error is raised when the iteration reads the first
-                row.
+            OopsValueError: If a string in `select` is not a channel name, or if
+                `filter` uses a column that the index does not have; for `row_dicts` that
+                is not a sequence, the `filter` error is raised when the iteration reads
+                the first row. Also if `pds3_options` names a method the parser does not
+                have or an option it does not take. The call checks the options when it
+                is made, unless `row_dicts` is given.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` or `supplement` cannot be read.
@@ -1560,9 +1563,10 @@ class CassiniVIMS(oops.Host):
                 after the start of the date silently uses the kernel it would choose
                 without a date. A set of SP or C kernels keeps only those released by
                 the start of the date, so the later part of the mission can lack
-                coverage. The C kernels never fall back, and ValueError is raised
-                instead. Two loads ignore the date: the gap-filling C kernels, and the
-                VIMS instrument kernel. None to choose the newest kernels.
+                coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. Two loads ignore the date: the gap-filling
+                C kernels, and the VIMS instrument kernel. None to choose the newest
+                kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.

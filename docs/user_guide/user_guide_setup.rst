@@ -99,9 +99,10 @@ can leave the later part of the mission uncovered. With ``asof='2008-01-01'``, f
 example, the reconstructed SP kernels end on 2007-09-19 and the reconstructed C kernels
 on 2007-12-28. The C kernels never fall back to the newest, so unless ``ck`` is
 ``'none'``, ``initialize()`` raises :exc:`ValueError` for any date up to and including
-2003-11-04. ``planets`` must include Saturn, so any date from 2003-11-05 through
-2004-04-26 makes ``initialize()`` raise :exc:`RuntimeError`, because the frames kernel
-of Saturn's small moons chosen for those dates has a malformed line that SPICE rejects.
+2003-11-04. ``planets`` must include Saturn, or ``initialize()`` raises
+:exc:`KeyError`, so any date from 2003-11-05 through 2004-04-26 makes ``initialize()``
+raise :exc:`RuntimeError`, because the frames kernel of Saturn's small moons chosen for
+those dates has a malformed line that SPICE rejects.
 The date decides the leap seconds too: with ``asof='2008-01-01'``, the leap seconds
 kernel released on 2005-08-03 is used, which lacks the leap second at the end of 2008.
 Two sets of kernels are loaded without the date: the gap-filling C kernels, and each

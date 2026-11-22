@@ -19,12 +19,14 @@ the index is. For UVIS and VIMS, this holds while no supplement row is far from 
 the index puts it: those hosts hold each supplement row read ahead of its index row
 until the iteration reaches that row, so a supplement that lists the products in
 reverse order is read to its end before the first observation comes, and nearly all of
-its rows are held. Even then, the memory used stays the same from the first row to the
-last only with the OOPS change that frees each observation's frame when the observation
-is released (`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without
-it, the memory used grows a little with each row. An error in a row is raised when the
+its rows are held. Even when no row is far out of place, the memory used stays the same
+from the first row to the last only when the installed OOPS frees each observation's
+frame once the observation is released; with a version that keeps the frames, the
+memory used grows a little with each row. An error in a row is raised when the
 iteration reaches it, after the rows before it, and the iteration ends with that error.
-``filter`` can leave such a row out. To build every row at once, pass the iterator to
+``filter`` can leave out a row whose observation would raise, but it cannot avoid an
+error in reading or pairing the rows of the tables, because the rows are filtered only
+after they have been read and paired. To build every row at once, pass the iterator to
 ``list()``.
 
 ``from_index()`` reads a metadata index of the Ring-Moon Systems Node holdings, such as
@@ -99,7 +101,16 @@ Other arguments
     Must be None. Each row is one image, so there is nothing to select, and any other
     value raises :exc:`~oops.OopsValueError`.
 
-``fast_distortion``, ``return_all_planets``, ``pds3_options``, and the standard overrides
+``pds3_options``
+    The options of the PDS3 label parser, as for
+    :meth:`~host_cassini.oops.iss.CassiniISS.from_file`, except that an index's label is
+    not tried again with the strict or loose method. The options are checked when the
+    call is made, unless ``row_dicts`` is given, when they are not used. The index's
+    label is parsed with all of them, and the supplement's label with the method alone.
+    (The index's label is still parsed with them, and so they are still checked, when
+    ``row_dicts`` is given and ``label`` is not.)
+
+``fast_distortion``, ``return_all_planets``, and the standard overrides
     The same as for :meth:`~host_cassini.oops.iss.CassiniISS.from_file`, applied to every
     row. Override ``fov`` only when every row is of the same camera, because the two
     cameras have different fields of view.
@@ -256,13 +267,15 @@ is evaluated.
 
 The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from the
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
-Whether they should give the data file instead is an open question
-(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
-``label``, ``filter``, ``pds3_options``, and the standard overrides work as they do for
-ISS, and any other keyword raises :exc:`TypeError`. Rows given in ``row_dicts`` take the
-place of the tables, as for ISS, but the call then reads only those rows: the index's
-label and the supplement's need not exist, the index is not checked to be a UVIS index,
-and ``label`` and ``pds3_options`` are ignored.
+Whether they should give the data file instead is an open question. ``label``,
+``filter``, and the standard overrides work as they do for ISS, and any other keyword
+raises :exc:`TypeError`. ``pds3_options`` gives the options of the PDS3 label parser.
+The options are checked when the call is made, unless ``row_dicts`` is given, when they
+are not used. The index's label is parsed with all of them, and the supplement's label
+with the method alone. Rows given in ``row_dicts`` take the place of the tables, as for
+ISS, but the call then reads only those rows: the index's label and the supplement's
+need not exist, the index is not checked to be a UVIS index, and ``label`` and
+``pds3_options`` are ignored.
 
 VIMS indexes
 ============
