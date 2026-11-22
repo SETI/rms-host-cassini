@@ -44,7 +44,8 @@ class CassiniISS(Host):
     # FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame` is
     # given; the message ends with the SPICE error code), HostFormatError (a required item
     # missing or invalid), TypeError (an unknown keyword), oops.OopsValueError (`select`
-    # not None), PdsHostError, VicarHostError, OSError and WrongHostError.
+    # not None, or an option in pds3_options that the parser refuses while it parses a
+    # PDS3 label file), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel

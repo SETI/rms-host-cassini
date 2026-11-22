@@ -540,7 +540,10 @@ class CassiniISS(oops.Host):
                 `filepath` attributes hold the code and the image file. Also if the
                 spacecraft clock kernel cannot convert the clock counts of an early
                 cruise image.
-            OopsValueError: If `select` is not None.
+            OopsValueError: If `select` is not None, or if `pds3_options` holds an
+                option that the PDS3 label parser does not accept while the method parses
+                a PDS3 label file; the options are not checked for a VICAR file or for a
+                Pds3Label passed in.
             OSError: If the file cannot be read.
             PdsHostError: If the PDS3 label cannot be parsed, or its ^IMAGE pointer names
                 no file; the message names the label and, for a label that cannot be
@@ -1624,18 +1627,16 @@ class CassiniISS(oops.Host):
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
                 nine.
-            asof (str, optional): A date in ISO format; the kernels released before it
-                are used. Where none of the kernels that a query could choose was
-                released before the date, spicedb silently uses the one it would choose
-                without a date. A query that finds some kernels released before the date
-                uses only those, so for the SP and C kernel sets a date inside the
-                mission leaves the later part of the mission uncovered. The C kernel
-                queries never fall back: if none of the chosen set was released before
-                the date, ValueError is raised. The date decides the leap seconds too:
-                the dated leap-second kernel supersedes the one loaded first. Two loads
-                ignore the date: the gap-filling C kernels, and the ISS instrument
-                kernel, from which the fields of view are read. None to choose the
-                newest kernels.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from
+                those released no later than the start (00:00) of that date, the leap
+                seconds kernel included, and a query of which every kernel was released
+                after the start of the date silently uses the kernel it would choose
+                without a date. A set of SP or C kernels keeps only those released by
+                the start of the date, so the later part of the mission can lack
+                coverage. The C kernels never fall back, and ValueError is raised
+                instead. Two loads ignore the date: the gap-filling C kernels, and the
+                ISS instrument kernel, from which the fields of view are read. None to
+                choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1648,7 +1649,9 @@ class CassiniISS(oops.Host):
         Raises:
             HostError: If the instrument kernel gives a camera's field of view
                 in units other than degrees.
-            ValueError: If no C kernel of the chosen set was released before `asof`.
+            ValueError: If none of the C kernels of the chosen set was released by the
+                start of `asof`, as for any date up to and including 2004-01-28 with
+                the reconstructed set, or 2004-03-23 with the predicted set.
         """
 
         # Quick exit after first call

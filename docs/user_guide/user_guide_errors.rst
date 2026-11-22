@@ -32,7 +32,9 @@ Reading an ISS image file
     A keyword argument is not one that the method accepts.
 
 :exc:`~oops.OopsValueError`
-    ``select`` is not None.
+    ``select`` is not None, or ``pds3_options`` holds an option that the parser does not
+    accept. The options are checked only when the method parses a PDS3 label file, so
+    they are not checked for a VICAR file or for a label passed in already parsed.
 
 :exc:`~oops.host.PdsHostError`
     No method of the parser can read the PDS3 label, even after the repairs that
@@ -145,6 +147,10 @@ UVIS and VIMS
 :exc:`~oops.OopsIndexError`, :exc:`~oops.OopsTypeError`, :exc:`~oops.OopsValueError`
     ``select`` is out of range, is of a type that it does not accept, or gives a name
     that it does not accept. A wrong type or name is found before any file is read.
+    :exc:`~oops.OopsValueError` is also raised when ``pds3_options`` holds an option
+    that the parser does not accept. The options are checked only when the method
+    parses a label read from a file, so they are not checked for a label passed in
+    already parsed.
 
 :exc:`TypeError`
     A keyword argument is not one that the method accepts.

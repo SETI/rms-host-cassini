@@ -238,7 +238,9 @@ class CassiniUVIS(oops.Host):
                 frame (the midtime, after any cadence override, or the time that a
                 `tracker` selects, moved by a time shift).
             OopsTypeError: If `select` has an invalid type.
-            OopsValueError: If `select` is a string.
+            OopsValueError: If `select` is a string, or if `pds3_options` holds an
+                option that the PDS3 label parser does not accept while the method parses
+                a PDS3 label file; the options are not checked for a Pds3Label passed in.
             OSError: If `filepath` cannot be read.
             PdsHostError: If no parser can read the PDS3 label; the message names the
                 file and gives the error of each parser method tried.
@@ -1305,18 +1307,16 @@ class CassiniUVIS(oops.Host):
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
                 nine.
-            asof (str, optional): A date in ISO format; the kernels released before it
-                are used. Where none of the kernels that a query could choose was
-                released before the date, spicedb silently uses the one it would choose
-                without a date. A query that finds some kernels released before the date
-                uses only those, so for the SP and C kernel sets a date inside the
-                mission leaves the later part of the mission uncovered. The C kernel
-                queries never fall back: if none of the chosen set was released before
-                the date, ValueError is raised. The date decides the leap seconds too:
-                the dated leap-second kernel supersedes the one loaded first. Two loads
-                ignore the date: the gap-filling C kernels, and the UVIS instrument
-                kernel, from which the fields of view are read. None to choose the
-                newest kernels.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from
+                those released no later than the start (00:00) of that date, the leap
+                seconds kernel included, and a query of which every kernel was released
+                after the start of the date silently uses the kernel it would choose
+                without a date. A set of SP or C kernels keeps only those released by
+                the start of the date, so the later part of the mission can lack
+                coverage. The C kernels never fall back, and ValueError is raised
+                instead. Two loads ignore the date: the gap-filling C kernels, and the
+                UVIS instrument kernel, from which the fields of view are read. None to
+                choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1328,7 +1328,9 @@ class CassiniUVIS(oops.Host):
 
         Raises:
             OopsValueError: If the instrument kernel gives an unrecognized FOV_SHAPE.
-            ValueError: If no C kernel of the chosen set was released before `asof`.
+            ValueError: If none of the C kernels of the chosen set was released by the
+                start of `asof`, as for any date up to and including 2004-01-28 with
+                the reconstructed set, or 2004-03-23 with the predicted set.
         """
 
         # Quick exit after first call
