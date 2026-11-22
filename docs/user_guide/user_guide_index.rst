@@ -95,7 +95,15 @@ Other arguments
     Must be None. Each row is one image, so there is nothing to select, and any other
     value raises :exc:`~oops.OopsValueError`.
 
-``fast_distortion``, ``return_all_planets``, ``pds3_options``, and the standard overrides
+``pds3_options``
+    Options for the PDS3 label parser. The options are checked when the call is made,
+    unless ``row_dicts`` is given, when they are not used. The index's label is parsed
+    with all of them, and the supplement's label with the method alone. Each label is
+    parsed with one method, the fast method unless the options give another, and no
+    later method is tried. (The index's label is still parsed with them, and so they are
+    still checked, when ``row_dicts`` is given and ``label`` is not.)
+
+``fast_distortion``, ``return_all_planets``, and the standard overrides
     The same as for :meth:`~host_cassini.oops.iss.CassiniISS.from_file`, applied to every
     row. Override ``fov`` only when every row is of the same camera, because the two
     cameras have different fields of view.
@@ -255,8 +263,12 @@ The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
 Whether they should give the data file instead is an open question
 (`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
-``label``, ``row_dicts``, ``filter``, ``pds3_options``, and the standard overrides work
-as they do for ISS, and any other keyword raises :exc:`TypeError`.
+``label``, ``row_dicts``, ``filter``, and the standard overrides work as they do for
+ISS, and any other keyword raises :exc:`TypeError`. ``pds3_options`` gives options for
+the PDS3 label parser. The options are checked when the call is made, unless
+``row_dicts`` is given, when they are not used. The index's label is parsed with all of
+them, and the supplement's label with the method alone. Each label is parsed with one
+method, the fast method unless the options give another, and no later method is tried.
 
 VIMS indexes
 ============

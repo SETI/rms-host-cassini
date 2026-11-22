@@ -99,6 +99,11 @@ Reading an ISS index
     have. For rows given in ``row_dicts`` as an iterator rather than a list, the
     ``filter`` error comes when the iteration reads the first row.
 
+    ``pds3_options`` names a method the parser does not have or an option it does not
+    take. The call checks the options when it is made, unless ``row_dicts`` is given.
+    (It still checks them, by parsing the index's label with them, when ``row_dicts`` is
+    given and ``label`` is not.)
+
 :exc:`~oops.host.PdsHostError`
     The PDS3 label of the index or the supplement cannot be parsed.
 
@@ -191,6 +196,9 @@ UVIS and VIMS
     ``select`` gives a name that it does not accept, or ``filter`` asks for a column that
     the index does not have. For rows given in ``row_dicts`` as an iterator rather than
     a list, the ``filter`` error comes when the iteration reads the first row.
+
+    ``pds3_options`` names a method the parser does not have or an option it does not
+    take. The call checks the options when it is made, unless ``row_dicts`` is given.
 
 :exc:`~oops.host.PdsHostError`
     The PDS3 label of the index or the supplement cannot be parsed.

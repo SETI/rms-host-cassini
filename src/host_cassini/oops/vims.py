@@ -491,7 +491,12 @@ class CassiniVIMS(oops.Host):
                 already been read; each is filtered and built when the iteration reaches
                 it. If provided, `supplement` and `label` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
+                options are checked when the call is made, unless `row_dicts` is given,
+                when they are not used. The index's label is parsed with all of them, and
+                the supplement's label with the method alone. Each label is parsed with
+                one method, "fast" unless they give another, and no later method is
+                tried.
             filter (dict[str, Any], optional): A dictionary of index column names and
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
@@ -587,9 +592,12 @@ class CassiniVIMS(oops.Host):
                 BACKPLANE_SCLK_START_COUNT; raised when the iteration reaches that row.
             OopsTypeError: If `select` has an invalid type; when the iteration reaches a
                 row whose value cannot be compared with a range in `filter`.
-            OopsValueError: If a string in `select` is not a channel name, or `filter`
-                uses a column that the index does not have; for `row_dicts` that is not
-                a sequence, the latter is raised when the iteration reads the first row.
+            OopsValueError: If a string in `select` is not a channel name, or if
+                `filter` uses a column that the index does not have; for `row_dicts` that
+                is not a sequence, the `filter` error is raised when the iteration reads
+                the first row. Also if `pds3_options` names a method the parser does not
+                have or an option it does not take. The call checks the options when it
+                is made, unless `row_dicts` is given.
             PdsHostError: If the PDS3 label of the index or the supplement cannot be
                 parsed.
             OSError: If `filepath` or `supplement` cannot be read.
