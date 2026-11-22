@@ -70,9 +70,9 @@ Initialization
 The first call to a host's ``from_file()`` or ``from_index()`` loads the instrument
 kernel and defines the instrument's fields of view. To choose the kernel sets, the
 bodies that OOPS defines, or to use the kernels released by a given date, call the
-host's ``initialize()`` before opening the first product. This call loads the
-predicted C kernels in place of the reconstructed ones, and defines Saturn, planet 6,
-and its moons, and no other planet:
+host's ``initialize()`` before that first call, whether it opens a product or reads an
+index. This call loads the predicted C kernels in place of the reconstructed ones, and
+defines Saturn, planet 6, and its moons, and no other planet:
 
 .. code-block:: python
 
