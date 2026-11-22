@@ -13,9 +13,13 @@ the index and its supplement, so a wrong argument or a label that cannot be read
 an error at once. The rows of the two tables are read as the iteration proceeds, a few
 at a time, and each row's observation is built when the iteration reaches that row. The
 first observation comes without waiting for the rest of the table, and the rows read
-take little memory however long the index is. The memory used stays the same from the
-first row to the last only with the OOPS change that frees each observation's frame
-when the observation is released
+take little memory however long the index is. For UVIS and VIMS, this holds while no
+supplement row is far from where the index puts it: those hosts hold each supplement row
+read ahead of its index row until the iteration reaches that row, so a supplement that
+lists the products in reverse order is read to its end before the first observation
+comes, and nearly all of its rows are held. Even when no row is far out of place, the
+memory used stays the same from the first row to the last only with the OOPS change that
+frees each observation's frame when the observation is released
 (`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without it, the memory
 used grows a little with each row. An error in a row is raised when the iteration
 reaches it, after the rows before it, and the iteration ends with that error.
