@@ -102,13 +102,12 @@ Other arguments
     value raises :exc:`~oops.OopsValueError`.
 
 ``pds3_options``
-    The options of the PDS3 label parser, as for
-    :meth:`~host_cassini.oops.iss.CassiniISS.from_file`, except that an index's label is
-    not tried again with the strict or loose method. The options are checked when the
-    call is made, unless ``row_dicts`` is given, when they are not used. The index's
-    label is parsed with all of them, and the supplement's label with the method alone.
-    (The index's label is still parsed with them, and so they are still checked, when
-    ``row_dicts`` is given and ``label`` is not.)
+    Options for the PDS3 label parser. The options are checked when the call is made,
+    unless ``row_dicts`` is given, when they are not used. The index's label is parsed
+    with all of them, and the supplement's label with the method alone. Each label is
+    parsed with one method, the fast method unless the options give another, and no
+    later method is tried. (The index's label is still parsed with them, and so they are
+    still checked, when ``row_dicts`` is given and ``label`` is not.)
 
 ``fast_distortion``, ``return_all_planets``, and the standard overrides
     The same as for :meth:`~host_cassini.oops.iss.CassiniISS.from_file`, applied to every
@@ -269,13 +268,14 @@ The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
 Whether they should give the data file instead is an open question. ``label``,
 ``filter``, and the standard overrides work as they do for ISS, and any other keyword
-raises :exc:`TypeError`. ``pds3_options`` gives the options of the PDS3 label parser.
-The options are checked when the call is made, unless ``row_dicts`` is given, when they
-are not used. The index's label is parsed with all of them, and the supplement's label
-with the method alone. Rows given in ``row_dicts`` take the place of the tables, as for
-ISS, but the call then reads only those rows: the index's label and the supplement's
-need not exist, the index is not checked to be a UVIS index, and ``label`` and
-``pds3_options`` are ignored.
+raises :exc:`TypeError`. ``pds3_options`` gives options for the PDS3 label parser. The
+options are checked when the call is made, unless ``row_dicts`` is given, when they are
+not used. The index's label is parsed with all of them, and the supplement's label with
+the method alone. Each label is parsed with one method, the fast method unless the
+options give another, and no later method is tried. Rows given in ``row_dicts`` take the
+place of the tables, as for ISS, but the call then reads only those rows: the index's
+label and the supplement's need not exist, the index is not checked to be a UVIS index,
+and ``label`` and ``pds3_options`` are ignored.
 
 VIMS indexes
 ============
