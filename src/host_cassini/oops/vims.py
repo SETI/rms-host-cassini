@@ -558,11 +558,10 @@ class CassiniVIMS(oops.Host):
             without its missing values: those the table's label declares null
             constants, such as -999; "UNK", "UNKNOWN", "N/A", "NULL", "---", and the
             empty string; and 1e32 and -1e32. `label_target`, `observation_id` and the
-            clock counts are
-            given as for :meth:`from_file`, and `time_from_sclk` is True when
-            BACKPLANE_SCLK_START_COUNT gives the start. Where the C kernels cannot
-            supply the pointing, an observation's frame raises
-            :exc:`oops.OopsSpiceError` when it is used.
+            clock counts are given as for :meth:`from_file`, and `time_from_sclk` is True
+            when BACKPLANE_SCLK_START_COUNT gives the start. Where the C kernels cannot
+            supply the pointing, an observation's frame raises :exc:`oops.OopsSpiceError`
+            when it is used.
 
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within the volume named by VOLUME_ID, which is in the
@@ -1554,7 +1553,7 @@ class CassiniVIMS(oops.Host):
             planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
-                nine.
+                nine. Saturn, 6, must be among them.
             asof (str, optional): A date in ISO format. Each kernel is chosen from
                 those released no later than the start (00:00) of that date, the leap
                 seconds kernel included, and a query of which every kernel was released
@@ -1574,12 +1573,13 @@ class CassiniVIMS(oops.Host):
                 otherwise.
 
         Raises:
-            RuntimeError: If Saturn is among the planets and `asof` is a date from
-                2003-11-05 through 2004-04-26, because the frames kernel of Saturn's
-                small moons chosen for those dates has a malformed line that SPICE
-                rejects.
-            ValueError: If none of the C kernels of the chosen set was released by the
-                start of `asof`, as for any date up to and including 2003-11-04.
+            KeyError: If `planets` leaves out Saturn.
+            RuntimeError: If `asof` is a date from 2003-11-05 through 2004-04-26,
+                because the frames kernel of Saturn's small moons chosen for those dates
+                has a malformed line that SPICE rejects.
+            ValueError: If `ck` is not 'none' and none of the C kernels of the chosen
+                set was released by the start of `asof`, as for any date up to and
+                including 2003-11-04.
         """
 
         # Quick exit after first call

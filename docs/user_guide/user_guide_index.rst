@@ -15,11 +15,15 @@ fewer labels, or none, as described for each instrument below. The rows of the t
 tables are read as the iteration proceeds, a few at a time, and each row's observation
 is built when the iteration reaches that row. The first observation comes without
 waiting for the rest of the table, and the rows read take little memory however long
-the index is. The memory used stays the same from the first row to the last only with
-the OOPS change that frees each observation's frame when the observation is released
-(`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without it, the memory
-used grows a little with each row. An error in a row is raised when the iteration
-reaches it, after the rows before it, and the iteration ends with that error.
+the index is. For UVIS and VIMS, this holds while no supplement row is far from where
+the index puts it: those hosts hold each supplement row read ahead of its index row
+until the iteration reaches that row, so a supplement that lists the products in
+reverse order is read to its end before the first observation comes, and nearly all of
+its rows are held. Even then, the memory used stays the same from the first row to the
+last only with the OOPS change that frees each observation's frame when the observation
+is released (`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without
+it, the memory used grows a little with each row. An error in a row is raised when the
+iteration reaches it, after the rows before it, and the iteration ends with that error.
 ``filter`` can leave such a row out. To build every row at once, pass the iterator to
 ``list()``.
 
@@ -188,9 +192,8 @@ and most of each observation's values come from it:
 - By default, the host reads the supplement beside the index, which must exist.
 - A path or URL reads that file instead.
 - None or an empty string raises :exc:`~oops.host.HostIndexError`, unless ``row_dicts``
-  is given. Each row
-  given in ``row_dicts`` must include the supplement's columns, or it raises
-  :exc:`~oops.host.HostIndexError` when the iteration reaches it.
+  is given. Each row given in ``row_dicts`` must include the supplement's columns, or it
+  raises :exc:`~oops.host.HostIndexError` when the iteration reaches it.
 
 The two tables must list the same products, and until the supplements are corrected,
 54 of the 61 supplements list them in another order than their indexes. The host
@@ -317,6 +320,6 @@ its own host.
 Only when no host claims the label is the first row read, once, to find the host from
 its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. A label or first row that more than
 one registered host claims raises ``oops.host.AmbiguousHostError``, which names the
-hosts. The index then goes, with all of the
-other arguments, to the host's ``from_index()``, which reads and pairs the rows itself,
-so the two give the same observations, also when ``supplement`` gives a path.
+hosts. The index then goes, with all of the other arguments, to the host's
+``from_index()``, which reads and pairs the rows itself, so the two give the same
+observations, also when ``supplement`` gives a path.

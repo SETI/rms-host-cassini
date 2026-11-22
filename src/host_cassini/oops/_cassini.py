@@ -117,7 +117,7 @@ class _Cassini:
             planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
-                nine.
+                nine. Saturn, 6, must be among them.
             asof (str, optional): A date in ISO format, which every database query
                 receives as the date-time that :meth:`_format_asof` returns. Each kernel
                 is chosen from those released no later than the start (00:00) of that
@@ -134,12 +134,13 @@ class _Cassini:
                 otherwise.
 
         Raises:
-            RuntimeError: If Saturn is among the planets and `asof` is a date from
-                2003-11-05 through 2004-04-26, because the frames kernel of Saturn's
-                small moons chosen for those dates has a malformed line that SPICE
-                rejects.
-            ValueError: If none of the C kernels of the chosen set was released by the
-                start of `asof`, as for any date up to and including 2003-11-04.
+            KeyError: If `planets` leaves out Saturn.
+            RuntimeError: If `asof` is a date from 2003-11-05 through 2004-04-26,
+                because the frames kernel of Saturn's small moons chosen for those dates
+                has a malformed line that SPICE rejects.
+            ValueError: If `ck` is not 'none' and none of the C kernels of the chosen
+                set was released by the start of `asof`, as for any date up to and
+                including 2003-11-04.
         """
 
         if _Cassini.initialized:
