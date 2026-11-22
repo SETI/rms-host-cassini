@@ -634,6 +634,20 @@ def test_from_index_row_without_a_column_is_a_format_error() -> None:
                              'Cassini UVIS index row has no LINE_SAMPLES: ')
 
 
+# The observation of a qube or spectrum reads these columns, which a null value in the row
+# leaves out
+@pytest.mark.parametrize(('kind', 'column'), [('QUBE', 'PRODUCT_ID'),
+                                              ('QUBE', 'SLIT_STATE'),
+                                              ('QUBE', 'INTEGRATION_DURATION'),
+                                              ('SPECTRUM', 'SLIT_STATE')])
+def test_from_index_row_without_an_observation_column_is_a_format_error(
+        kind: str, column: str) -> None:
+    row = qube_row(PRODUCT_ID='EUV2005_001_00_00', DATA_OBJECT_TYPE=kind)
+    del row[column]
+    raises_at_the_second_row(row, oops.host.HostFormatError,
+                             f'Cassini UVIS index row has no {column}: ')
+
+
 @pytest.mark.parametrize('column', ['VOLUME_ID', 'FILE_SPECIFICATION_NAME'])
 def test_from_index_row_without_a_file_is_an_index_error(column: str) -> None:
     """A row that gives a column of its file's path as a placeholder raises at that
