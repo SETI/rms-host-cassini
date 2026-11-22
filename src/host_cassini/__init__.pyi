@@ -44,7 +44,8 @@ class CassiniISS(Host):
     # FileNotFoundError, oops.OopsSpiceError (no C kernel pointing, unless `frame` is
     # given; the message ends with the SPICE error code), HostFormatError (a required item
     # missing or invalid), TypeError (an unknown keyword), oops.OopsValueError (`select`
-    # not None), PdsHostError, VicarHostError, OSError and WrongHostError.
+    # not None, or an option in pds3_options that the parser refuses while it parses a
+    # PDS3 label file), PdsHostError, VicarHostError, OSError and WrongHostError.
     @staticmethod
     def from_file(  # type: ignore[override]
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
@@ -62,7 +63,9 @@ class CassiniISS(Host):
     # Every row is one Snapshot. The pointing is never checked. select must be None
     # (oops.OopsValueError), and any other keyword raises TypeError. The call reads only
     # the labels; the iterator reads the rows a few at a time and builds each row's
-    # Snapshot when it reaches the row.
+    # Snapshot when it reaches the row. Rows given in row_dicts take the place of the
+    # tables: the call then reads only the index label, for its null constants, unless
+    # label is given, so the supplement, the tables and the host are not checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,
@@ -105,6 +108,8 @@ class CassiniUVIS(Host):
     # `select` accepts no channel name. The supplement is required: None or '' raises
     # oops.host.HostIndexError unless row_dicts is given. Any other keyword raises
     # TypeError. The iterator builds each row's observations when it reaches the row.
+    # Rows given in row_dicts take the place of the tables: the call then reads only the
+    # given rows, so the labels, the host and pds3_options are not checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *, enclose: bool = False,
@@ -146,7 +151,9 @@ class CassiniVIMS(Host):
     # Every row is a (vis, ir) pair or a selection from one. The supplement is required:
     # None or '' raises oops.host.HostIndexError unless row_dicts is given. Any other
     # keyword raises TypeError. The iterator builds each row's observations when it
-    # reaches the row.
+    # reaches the row. Rows given in row_dicts take the place of the tables: the call
+    # then reads only the given rows, so the labels, the host and pds3_options are not
+    # checked.
     @staticmethod
     def from_index(  # type: ignore[override]
         filepath: str | pathlib.Path | FCPath, *,

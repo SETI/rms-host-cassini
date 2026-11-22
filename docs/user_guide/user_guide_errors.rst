@@ -32,7 +32,9 @@ Reading an ISS image file
     A keyword argument is not one that the method accepts.
 
 :exc:`~oops.OopsValueError`
-    ``select`` is not None.
+    ``select`` is not None, or ``pds3_options`` holds an option that the parser does not
+    accept. The options are checked only when the method parses a PDS3 label file, so
+    they are not checked for a VICAR file or for a label passed in already parsed.
 
 :exc:`~oops.host.PdsHostError`
     No method of the parser can read the PDS3 label, even after the repairs that
@@ -58,7 +60,15 @@ Reading an ISS image file
 Reading an ISS index
 ====================
 
-:meth:`~host_cassini.oops.iss.CassiniISS.from_index` raises:
+:meth:`~host_cassini.oops.iss.CassiniISS.from_index` raises the errors listed below.
+When the rows are given in ``row_dicts``, the call reads only the index's PDS3 label,
+for the null values it declares, and not even that if ``label`` is given. The errors
+that come from the supplement, from a table, or from an index of another instrument are
+then never raised: the supplement need not exist, the index label is not checked to
+describe a table that can be read, and the index is not checked to be a Cassini ISS
+index. The checks of ``select`` and ``filter`` are still made, as their entries say, and
+so are those of each row. ``pds3_options`` is then checked only by that parse of the
+index's label.
 
 :exc:`~oops.host.HostFormatError`
     A row lacks ``START_TIME``, ``EXPOSURE_DURATION``, ``INSTRUMENT_MODE_ID``, or
@@ -144,6 +154,10 @@ UVIS and VIMS
 :exc:`~oops.OopsIndexError`, :exc:`~oops.OopsTypeError`, :exc:`~oops.OopsValueError`
     ``select`` is out of range, is of a type that it does not accept, or gives a name
     that it does not accept. A wrong type or name is found before any file is read.
+    :exc:`~oops.OopsValueError` is also raised when ``pds3_options`` holds an option
+    that the parser does not accept. The options are checked only when the method
+    parses a label read from a file, so they are not checked for a label passed in
+    already parsed.
 
 :exc:`TypeError`
     A keyword argument is not one that the method accepts.
@@ -152,7 +166,12 @@ UVIS and VIMS
     A file cannot be read.
 
 :meth:`~host_cassini.oops.uvis.CassiniUVIS.from_index` and
-:meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise:
+:meth:`~host_cassini.oops.vims.CassiniVIMS.from_index` raise the errors listed below.
+When the rows are given in ``row_dicts``, the call reads only those rows, so the errors
+that come from reading a label or a table are never raised: the labels need not exist or
+be readable, the index is not checked to be one of the host's instrument, and
+``pds3_options`` is not checked. The checks of ``select`` and ``filter`` are still made,
+as their entries say, and so are those of each row.
 
 :exc:`~oops.host.HostIndexError`
     When the method is called: the PDS3 label of the index or the supplement does not
@@ -194,8 +213,8 @@ UVIS and VIMS
 
 :exc:`~oops.OopsValueError`
     ``select`` gives a name that it does not accept, or ``filter`` asks for a column that
-    the index does not have. For rows given in ``row_dicts`` as an iterator rather than
-    a list, the ``filter`` error comes when the iteration reads the first row.
+    the index does not have. For rows given in ``row_dicts`` as an iterator rather than a
+    list, the ``filter`` error comes when the iteration reads the first row.
 
     ``pds3_options`` names a method the parser does not have or an option it does not
     take. The call checks the options when it is made, unless ``row_dicts`` is given.

@@ -540,7 +540,10 @@ class CassiniISS(oops.Host):
                 `filepath` attributes hold the code and the image file. Also if the
                 spacecraft clock kernel cannot convert the clock counts of an early
                 cruise image.
-            OopsValueError: If `select` is not None.
+            OopsValueError: If `select` is not None, or if `pds3_options` holds an
+                option that the PDS3 label parser does not accept while the method parses
+                a PDS3 label file; the options are not checked for a VICAR file or for a
+                Pds3Label passed in.
             OSError: If the file cannot be read.
             PdsHostError: If the PDS3 label cannot be parsed, or its ^IMAGE pointer names
                 no file; the message names the label and, for a label that cannot be
@@ -654,6 +657,15 @@ class CassiniISS(oops.Host):
         Snapshot is built when the iteration reaches that row, so an error in a row is
         raised at that row, after every earlier row has been yielded.
 
+        With `row_dicts`, the given rows take the place of the tables, and the call reads
+        only the label of the index, for the null constants that it declares, and not
+        even that if `label` is given. The errors below that come from the supplement,
+        from a table, or from the check of the host are then never raised: the supplement
+        need not exist, the index label is not checked to describe a table that can be
+        read, and the index need not be Cassini ISS. What is still checked is `select`,
+        the reading of the index label, `filter` against the first row, and each row
+        when the iteration reaches it.
+
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to a Cassini ISS index
                 file or its PDS label.
@@ -671,9 +683,10 @@ class CassiniISS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` has already been read;
                 each is filtered and built when the iteration reaches it. If provided,
-                `supplement` is ignored, and the null constants that the index declares
-                are read from `label` or, if it is not given, from the label of
-                `filepath`, as for rows read from the table.
+                they are used in place of the tables and the supplement, `supplement` is
+                ignored, and the null constants that the index declares are read from
+                `label` or, if it is not given, from the label of `filepath`, as for rows
+                read from the table.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
                 options are checked when the call is made, unless `row_dicts` is given,
@@ -807,7 +820,9 @@ class CassiniISS(oops.Host):
         # label, parsed once, also tells how its declared null constants are read, for
         # rows given in row_dicts too, which oops.Host.from_index passes without the
         # label. The archive has no ISS supplement, so the default looks for one without
-        # requiring it, while one that is given must exist.
+        # requiring it, while one that is given must exist. Given rows are used as they
+        # are: _index_rows() returns them before it reads anything else, so the
+        # supplement, the tables and the host are not checked.
         label = CassiniISS._read_index_label(filepath, label=label,
                                              pds3_options=pds3_options)
         (unmasked, zeros, fills) = CassiniISS._index_fill_rules(label)
@@ -1249,12 +1264,12 @@ class CassiniISS(oops.Host):
         """The text of a PDS3 label of an ISS image, with its known defects repaired.
 
         ``oops.Host`` calls this before any parser reads a label of this host, the labels
-        of the index tables included. Three defects of the archive's labels are repaired
-        (#11): a quoted value that starts on the line after its keyword is moved up to
-        that line; the unterminated DESCRIPTION of some calibrated labels is closed at the
-        end of the line before the next keyword; and the DESCRIPTION of others, closed on
-        a line of its own and followed by a second quoted string, is joined into one
-        string. A label without these defects is returned unchanged.
+        of the index tables included. Three defects of the archive's labels are repaired:
+        a quoted value that starts on the line after its keyword is moved up to that
+        line; the unterminated DESCRIPTION of some calibrated labels is closed at the end
+        of the line before the next keyword; and the DESCRIPTION of others, closed on a
+        line of its own and followed by a second quoted string, is joined into one string.
+        A label without these defects is returned unchanged.
 
         Parameters:
             text (str): The text of the label, with <LF> line terminators.
@@ -1619,9 +1634,17 @@ class CassiniISS(oops.Host):
             planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
-                nine.
-            asof (str, optional): Only use SPICE kernels that existed before this date;
-                None to ignore.
+                nine. Saturn, 6, must be among them.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from
+                those released no later than the start (00:00) of that date, the leap
+                seconds kernel included, and a query of which every kernel was released
+                after the start of the date silently uses the kernel it would choose
+                without a date. A set of SP or C kernels keeps only those released by
+                the start of the date, so the later part of the mission can lack
+                coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. Two loads ignore the date: the gap-filling
+                C kernels, and the ISS instrument kernel, from which the fields of view
+                are read. None to choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1634,6 +1657,13 @@ class CassiniISS(oops.Host):
         Raises:
             HostError: If the instrument kernel gives a camera's field of view
                 in units other than degrees.
+            KeyError: If `planets` leaves out Saturn.
+            RuntimeError: If `asof` is a date from 2003-11-05 through 2004-04-26,
+                because the frames kernel of Saturn's small moons chosen for those dates
+                has a malformed line that SPICE rejects.
+            ValueError: If `ck` is not 'none' and none of the C kernels of the chosen
+                set was released by the start of `asof`, as for any date up to and
+                including 2003-11-04.
         """
 
         # Quick exit after first call

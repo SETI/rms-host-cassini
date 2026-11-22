@@ -238,7 +238,9 @@ class CassiniUVIS(oops.Host):
                 frame (the midtime, after any cadence override, or the time that a
                 `tracker` selects, moved by a time shift).
             OopsTypeError: If `select` has an invalid type.
-            OopsValueError: If `select` is a string.
+            OopsValueError: If `select` is a string, or if `pds3_options` holds an
+                option that the PDS3 label parser does not accept while the method parses
+                a PDS3 label file; the options are not checked for a Pds3Label passed in.
             OSError: If `filepath` cannot be read.
             PdsHostError: If no parser can read the PDS3 label; the message names the
                 file and gives the error of each parser method tried.
@@ -301,6 +303,12 @@ class CassiniUVIS(oops.Host):
         when the iteration reaches that row, so an error in a row is raised at that row,
         after every earlier row has been yielded.
 
+        With `row_dicts`, the given rows take the place of the tables, and the call reads
+        only those rows. The errors below that come from reading a label or a table are
+        then never raised: the labels need not exist, the index need not be Cassini UVIS,
+        and `pds3_options` is not checked. What is still checked is `select`,
+        `filter` against the first row, and each row when the iteration reaches it.
+
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
                 data file index.
@@ -326,7 +334,8 @@ class CassiniUVIS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` and `supplement` have
                 already been read; each is filtered and built when the iteration reaches
-                it. If provided, `supplement` and `label` are ignored.
+                it. If provided, they are used in place of the tables and their labels,
+                and `supplement`, `label` and `pds3_options` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
                 options are checked when the call is made, unless `row_dicts` is given,
@@ -462,7 +471,8 @@ class CassiniUVIS(oops.Host):
         # volume and "DATA/.../X.LBL", in another order for most volumes until the
         # supplements are corrected (SETI/rms-data-projects#255 item 1; #30). The rows
         # are paired by these paths, compared without regard to case, which is the
-        # whole check of a pair.
+        # whole check of a pair. Given rows are used as they are: _index_rows() returns
+        # them before it reads either label, so the label checks are not made.
         rows = CassiniUVIS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
                                        filter=filter, validate=(),
@@ -516,7 +526,7 @@ class CassiniUVIS(oops.Host):
 
         A row names the kind of product in DATA_OBJECT_TYPE, where a product label has
         a QUBE, TIME_SERIES or SPECTRUM object, so the object is built from the row's
-        columns (#33).
+        columns.
 
         Parameters:
             row_dict (dict[str, Any]): The merged row. It is not modified.
@@ -1309,9 +1319,17 @@ class CassiniUVIS(oops.Host):
             planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
-                nine.
-            asof (str, optional): Only use SPICE kernels that existed before this date;
-                None to ignore.
+                nine. Saturn, 6, must be among them.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from
+                those released no later than the start (00:00) of that date, the leap
+                seconds kernel included, and a query of which every kernel was released
+                after the start of the date silently uses the kernel it would choose
+                without a date. A set of SP or C kernels keeps only those released by
+                the start of the date, so the later part of the mission can lack
+                coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. Two loads ignore the date: the gap-filling
+                C kernels, and the UVIS instrument kernel, from which the fields of view
+                are read. None to choose the newest kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1322,7 +1340,14 @@ class CassiniUVIS(oops.Host):
                 otherwise.
 
         Raises:
+            KeyError: If `planets` leaves out Saturn.
             OopsValueError: If the instrument kernel gives an unrecognized FOV_SHAPE.
+            RuntimeError: If `asof` is a date from 2003-11-05 through 2004-04-26,
+                because the frames kernel of Saturn's small moons chosen for those dates
+                has a malformed line that SPICE rejects.
+            ValueError: If `ck` is not 'none' and none of the C kernels of the chosen
+                set was released by the start of `asof`, as for any date up to and
+                including 2003-11-04.
         """
 
         # Quick exit after first call

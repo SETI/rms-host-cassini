@@ -301,8 +301,18 @@ def test_initialize_passes_options_to_mission(fake_spicedb: FakeSpiceDB,
                           asof='2010-02-03', mst_pck=False, irregulars=False)
     assert fake_spicedb.named('select_spk')[0][1]['name'] == 'CAS-SPK-PREDICTED'
     assert fake_spicedb.named('select_ck')[0][1]['name'] == 'CAS-CK-PREDICTED'
-    assert fake_spice.solar_system[0][1] == {'asof': '2010-02-03', 'planets': [6],
-                                             'mst_pck': False, 'irregulars': False}
+    assert fake_spice.solar_system[0][1] == {'asof': '2010-02-03T00:00:00',
+                                             'planets': [6], 'mst_pck': False,
+                                             'irregulars': False}
+
+
+def test_initialize_gives_every_query_the_same_date(fake_spicedb: FakeSpiceDB,
+                                                    fake_spice: FakeSpice) -> None:
+    CassiniISS.initialize(asof='2010-02-03')
+    dates = [kwargs['asof'] for (_, kwargs) in fake_spice.solar_system]
+    dates += [kwargs['asof'] for name in ('select_spk', 'select_ck', 'furnish_inst')
+              for (_, kwargs) in fake_spicedb.named(name)]
+    assert dates == ['2010-02-03T00:00:00'] * 5
 
 
 def test_initialize_ignores_later_calls(initialized_iss: FakeSpiceDB) -> None:
@@ -2126,6 +2136,20 @@ def test_from_index_given_rows_without_a_label_need_the_index_label(
     rows = index_rows(tmp_path)
     with pytest.raises(FileNotFoundError, match=r'missing\.lbl'):
         CassiniISS.from_index(tmp_path / 'missing.lbl', row_dicts=rows)
+
+
+def test_from_index_with_given_rows_reads_only_the_index_label(
+        tmp_path: pathlib.Path) -> None:
+    """Given rows are used in place of the tables, so the call reads only the index label,
+    for its null constants: a supplement that does not exist, and an index whose name
+    gives another instrument's volume, still give a Snapshot for every row."""
+
+    rows = index_rows(tmp_path)
+    other = tmp_path / 'COUVIS_0001_index.lbl'
+    other.write_bytes((tmp_path / 'INDEX.LBL').read_bytes())
+    obs = list(CassiniISS.from_index(other, supplement=tmp_path / 'missing.lbl',
+                                     row_dicts=rows))
+    assert len(obs) == 2
 
 
 @pytest.mark.parametrize(('column', 'value'), [

@@ -190,7 +190,13 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   `_index_rows()`, which reads only the labels at call time, then returns a generator
   that builds each row's observation when the iteration reaches it, so an error in one
   row waits for that row. It must not be a generator function, which would defer every
-  argument error to the first `next()`.
+  argument error to the first `next()`. `_index_rows()` returns given `row_dicts` before
+  it reads any label, so a call with `row_dicts` skips everything it would read and
+  check (the labels, the tables, the host, `pds3_options`). UVIS and VIMS then do not
+  read any label; ISS still reads the index label with `_read_index_label()`, which
+  parses it with `pds3_options`, for `_index_fill_rules()`, unless `label` is given.
+  Otherwise only `select`, `filter` (against the first row) and each row are checked.
+  `oops.Host.from_index()` still parses the index label to pick the host.
 - Every index workaround must still give the right answer once the index files are
   corrected (the holdings' product labels and data files cannot change; the index and
   supplement files can, and each instrument's index problems are listed in one issue in
@@ -222,7 +228,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - `_Cassini` in `host_cassini/oops/_cassini.py` is never instantiated; all its state
   lives in class attributes. CK and SPK kernels load lazily by "month": the 1997-10-01 to
   2017-10-01 mission is split into 240 equal periods, each padded by `SLOP`. Before `TOUR`
-  the Jupiter system is used, after it the Saturn system.
+  the Jupiter system is used, after it the Saturn system. Every spicedb or
+  `define_solar_system` call receives the `asof` date as `_Cassini._format_asof()`
+  writes it (`YYYY-MM-DDTHH:MM:SS`): spicedb compares the text with each kernel's
+  release date-time, so a date alone and the same date with a time choose differently.
 - Running anything needs a SPICE kernel database through `spicedb` (`SPICE_PATH`, or
   `$OOPS_RESOURCES/SPICE`, plus `SPICE_SQLITE_DB_NAME`). It must contain the kernel sets
   `CAS-SPK-*`, `CAS-CK-*` and `CAS-CK-GAPFILL`. `spicedb` currently ships inside rms-oops.

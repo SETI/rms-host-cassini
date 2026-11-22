@@ -382,7 +382,10 @@ class CassiniVIMS(oops.Host):
                 `tracker` selects, moved by a time shift), or if the spacecraft clock
                 kernel cannot convert the cube's time backplanes.
             OopsTypeError: If `select` has an invalid type.
-            OopsValueError: If a string in `select` is not a channel name.
+            OopsValueError: If a string in `select` is not a channel name, or if
+                `pds3_options` holds an option that the PDS3 label parser does not accept
+                while the method parses the label of a cube or a PDS3 label file; the
+                options are not checked for a Pds3Label passed in.
             PdsHostError: If no parser can read the PDS3 or ISIS label; the message
                 names the file and gives the error of each parser method tried.
             OSError: If the file cannot be read.
@@ -451,6 +454,12 @@ class CassiniVIMS(oops.Host):
         iteration reaches that row, so an error in a row is raised at that row, after
         every earlier row has been yielded.
 
+        With `row_dicts`, the given rows take the place of the tables, and the call reads
+        only those rows. The errors below that come from reading a label or a table are
+        then never raised: the labels need not exist, the index need not be Cassini VIMS,
+        and `pds3_options` is not checked. What is still checked is `select`,
+        `filter` against the first row, and each row when the iteration reaches it.
+
         The observations are for astrometry only and have no `data`.
 
         A supplemental index that records them would supply the cube's actual shape
@@ -489,7 +498,8 @@ class CassiniVIMS(oops.Host):
             row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
                 the index, one dictionary per row, if `filepath` and `supplement` have
                 already been read; each is filtered and built when the iteration reaches
-                it. If provided, `supplement` and `label` are ignored.
+                it. If provided, they are used in place of the tables and their labels,
+                and `supplement`, `label` and `pds3_options` are ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
                 values to be passed to the :class:`~pdsparser.Pds3Label` parser. The
                 options are checked when the call is made, unless `row_dicts` is given,
@@ -553,11 +563,10 @@ class CassiniVIMS(oops.Host):
             without its missing values: those the table's label declares null
             constants, such as -999; "UNK", "UNKNOWN", "N/A", "NULL", "---", and the
             empty string; and 1e32 and -1e32. `label_target`, `observation_id` and the
-            clock counts are
-            given as for :meth:`from_file`, and `time_from_sclk` is True when
-            BACKPLANE_SCLK_START_COUNT gives the start. Where the C kernels cannot
-            supply the pointing, an observation's frame raises
-            :exc:`oops.OopsSpiceError` when it is used.
+            clock counts are given as for :meth:`from_file`, and `time_from_sclk` is True
+            when BACKPLANE_SCLK_START_COUNT gives the start. Where the C kernels cannot
+            supply the pointing, an observation's frame raises :exc:`oops.OopsSpiceError`
+            when it is used.
 
             `filepath` and `image_url` name the row's file, its FILE_SPECIFICATION_NAME,
             as a full path or URL within the volume named by VOLUME_ID, which is in the
@@ -618,7 +627,9 @@ class CassiniVIMS(oops.Host):
         # "data/.../v1294638283_1.lbl", in another order for some volumes until the
         # supplements are corrected (SETI/rms-data-projects#257 item 1; #34). The rows
         # are paired by these paths, compared without regard to case or extension,
-        # which is the whole check of a pair.
+        # which is the whole check of a pair. Given rows are used as they are:
+        # _index_rows() returns them before it reads either label, so the label checks
+        # are not made.
         rows = CassiniVIMS._index_rows(filepath, supplement=supplement, label=label,
                                        row_dicts=row_dicts, pds3_options=pds3_options,
                                        filter=filter, validate=(),
@@ -1547,9 +1558,17 @@ class CassiniVIMS(oops.Host):
             planets (int | Sequence[int], optional): The number of a planet, 1 to 9, or a
                 sequence of such numbers, whose systems
                 :meth:`~oops.Body.define_solar_system` defines. None or 0 means all
-                nine.
-            asof (str, optional): Only use SPICE kernels that existed before this date;
-                None to ignore.
+                nine. Saturn, 6, must be among them.
+            asof (str, optional): A date in ISO format. Each kernel is chosen from
+                those released no later than the start (00:00) of that date, the leap
+                seconds kernel included, and a query of which every kernel was released
+                after the start of the date silently uses the kernel it would choose
+                without a date. A set of SP or C kernels keeps only those released by
+                the start of the date, so the later part of the mission can lack
+                coverage. The C kernels never fall back; unless `ck` is 'none',
+                ValueError is raised instead. Two loads ignore the date: the gap-filling
+                C kernels, and the VIMS instrument kernel. None to choose the newest
+                kernels.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -1558,6 +1577,15 @@ class CassiniVIMS(oops.Host):
                 models for some of the small moons.
             irregulars (bool, optional): True to include the irregular satellites; False
                 otherwise.
+
+        Raises:
+            KeyError: If `planets` leaves out Saturn.
+            RuntimeError: If `asof` is a date from 2003-11-05 through 2004-04-26,
+                because the frames kernel of Saturn's small moons chosen for those dates
+                has a malformed line that SPICE rejects.
+            ValueError: If `ck` is not 'none' and none of the C kernels of the chosen
+                set was released by the start of `asof`, as for any date up to and
+                including 2003-11-04.
         """
 
         # Quick exit after first call

@@ -10,20 +10,23 @@ chapter describes ISS first, then UVIS and VIMS.
 ``from_index()`` returns an iterator, which gives the observations row by row, in the
 order of the index. The call itself checks the arguments and reads the PDS3 labels of
 the index and its supplement, so a wrong argument or a label that cannot be read raises
-an error at once. The rows of the two tables are read as the iteration proceeds, a few
-at a time, and each row's observation is built when the iteration reaches that row. The
-first observation comes without waiting for the rest of the table, and the rows read
-take little memory however long the index is. For UVIS and VIMS, this holds while no
-supplement row is far from where the index puts it: those hosts hold each supplement row
-read ahead of its index row until the iteration reaches that row, so a supplement that
-lists the products in reverse order is read to its end before the first observation
-comes, and nearly all of its rows are held. Even when no row is far out of place, the
-memory used stays the same from the first row to the last only with the OOPS change that
-frees each observation's frame when the observation is released
-(`rms-oops#252 <https://github.com/SETI/rms-oops/pull/252>`_); without it, the memory
-used grows a little with each row. An error in a row is raised when the iteration
-reaches it, after the rows before it, and the iteration ends with that error.
-``filter`` can leave such a row out. To build every row at once, pass the iterator to
+an error at once. Rows given in ``row_dicts`` are the exception: the call then reads
+fewer labels, or none, as described for each instrument below. The rows of the two
+tables are read as the iteration proceeds, a few at a time, and each row's observation
+is built when the iteration reaches that row. The first observation comes without
+waiting for the rest of the table, and the rows read take little memory however long
+the index is. For UVIS and VIMS, this holds while no supplement row is far from where
+the index puts it: those hosts hold each supplement row read ahead of its index row
+until the iteration reaches that row, so a supplement that lists the products in
+reverse order is read to its end before the first observation comes, and nearly all of
+its rows are held. Even when no row is far out of place, the memory used stays the same
+from the first row to the last only when the installed OOPS frees each observation's
+frame once the observation is released; with a version that keeps the frames, the
+memory used grows a little with each row. An error in a row is raised when the
+iteration reaches it, after the rows before it, and the iteration ends with that error.
+``filter`` can leave out a row whose observation would raise, but it cannot avoid an
+error in reading or pairing the rows of the tables, because the rows are filtered only
+after they have been read and paired. To build every row at once, pass the iterator to
 ``list()``.
 
 ``from_index()`` reads a metadata index of the Ring-Moon Systems Node holdings, such as
@@ -63,8 +66,9 @@ The archive has no supplemental index for ISS, so the host needs none. The
 - A path or URL reads that file instead, and the file must exist. Its rows must list
   the same images as the index, in the same order, and where both tables give a column,
   the index's value is kept. When both tables have ``FILE_SPECIFICATION_NAME``, a
-  supplement row whose image is not the one in the same row of the index raises :exc:`~oops.host.HostIndexError` when the iteration reaches
-  it, and so does a supplement that ends first or has rows left over.
+  supplement row whose image is not the one in the same row of the index raises
+  :exc:`~oops.host.HostIndexError` when the iteration reaches it, and so does a
+  supplement that ends first or has rows left over.
 - None reads the index alone.
 
 Other arguments
@@ -79,7 +83,9 @@ Other arguments
     tables, ``supplement`` is ignored, and each row is filtered and built when the
     iteration reaches it. The null values that the index declares (see below) are read
     from ``label`` or, if it is not given, from the index's own label, which must then
-    exist.
+    exist. That label is the only one read: the tables and the supplement's label are
+    not, so the supplement need not exist, and the index is not checked to be an ISS
+    index.
 
 ``filter``
     A dictionary of column names and the values to keep. A row is kept when each column
@@ -196,9 +202,8 @@ and most of each observation's values come from it:
 - By default, the host reads the supplement beside the index, which must exist.
 - A path or URL reads that file instead.
 - None or an empty string raises :exc:`~oops.host.HostIndexError`, unless ``row_dicts``
-  is given. Each row
-  given in ``row_dicts`` must include the supplement's columns, or it raises
-  :exc:`~oops.host.HostIndexError` when the iteration reaches it.
+  is given. Each row given in ``row_dicts`` must include the supplement's columns, or it
+  raises :exc:`~oops.host.HostIndexError` when the iteration reaches it.
 
 The two tables must list the same products, and until the supplements are corrected,
 54 of the 61 supplements list them in another order than their indexes. The host
@@ -261,14 +266,16 @@ is evaluated.
 
 The ``filepath`` and ``image_url`` subfields give the product's PDS3 label, from the
 supplement's ``FILE_SPECIFICATION_NAME``, as a full path or URL formed as for ISS.
-Whether they should give the data file instead is an open question
-(`rms-host-cassini#32 <https://github.com/SETI/rms-host-cassini/issues/32>`_).
-``label``, ``row_dicts``, ``filter``, and the standard overrides work as they do for
-ISS, and any other keyword raises :exc:`TypeError`. ``pds3_options`` gives options for
-the PDS3 label parser. The options are checked when the call is made, unless
-``row_dicts`` is given, when they are not used. The index's label is parsed with all of
-them, and the supplement's label with the method alone. Each label is parsed with one
-method, the fast method unless the options give another, and no later method is tried.
+Whether they should give the data file instead is an open question. ``label``,
+``filter``, and the standard overrides work as they do for ISS, and any other keyword
+raises :exc:`TypeError`. ``pds3_options`` gives options for the PDS3 label parser. The
+options are checked when the call is made, unless ``row_dicts`` is given, when they are
+not used. The index's label is parsed with all of them, and the supplement's label with
+the method alone. Each label is parsed with one method, the fast method unless the
+options give another, and no later method is tried. Rows given in ``row_dicts`` take the
+place of the tables, as for ISS, but the call then reads only those rows: the index's
+label and the supplement's need not exist, the index is not checked to be a UVIS index,
+and ``label`` and ``pds3_options`` are ignored.
 
 VIMS indexes
 ============
@@ -326,6 +333,6 @@ its own host.
 Only when no host claims the label is the first row read, once, to find the host from
 its instrument, ``DATA_SET_ID``, or ``VOLUME_ID``. A label or first row that more than
 one registered host claims raises ``oops.host.AmbiguousHostError``, which names the
-hosts. The index then goes, with all of the
-other arguments, to the host's ``from_index()``, which reads and pairs the rows itself,
-so the two give the same observations, also when ``supplement`` gives a path.
+hosts. The index then goes, with all of the other arguments, to the host's
+``from_index()``, which reads and pairs the rows itself, so the two give the same
+observations, also when ``supplement`` gives a path.

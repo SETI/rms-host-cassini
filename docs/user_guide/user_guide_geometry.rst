@@ -74,9 +74,9 @@ give wrongly or that are not bodies. The ISS host repairs these:
      - ``NONE``
 
 The UVIS host gives the target ``NONE`` for ``CALIB``, ``IPH``, ``SKY``, ``SOLAR WIND``,
-and ``STAR``, and expands the two-letter codes of small moons,
-such as ``DA`` for ``DAPHNIS``. The VIMS host gives the target ``NONE`` for ``DARK SKY``,
-``DUST``, ``OTHER``, and ``SKY``.
+and ``STAR``, and expands the two-letter codes of small moons, such as ``DA`` for
+``DAPHNIS``. The VIMS host gives the target ``NONE`` for ``DARK SKY``, ``DUST``,
+``OTHER``, and ``SKY``.
 
 An ISS or VIMS observation of the rings has a ring plane as its target. The host
 recognizes it by the target code in ``OBSERVATION_ID``, ``RI`` or ``RA`` through ``RG``,
