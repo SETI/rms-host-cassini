@@ -1162,7 +1162,8 @@ def test_from_file_keeps_a_later_start_count(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.parametrize(('text', 'expected'), [
-    ('  ^DESCRIPTION = "../../label/vicar2.txt"\n', '  ^DESCRIPTION = "vicar2.txt"\n'),
+    ('  ^DESCRIPTION = "../../label/vicar2.txt"\n  ^STRUCTURE = "../../label/t.fmt"\n',
+     '  ^DESCRIPTION = "vicar2.txt"\n  ^STRUCTURE = "t.fmt"\n'),
     ('PRODUCT_CREATION_TIME = 2019-06- 9T09:58:43\n',
      'PRODUCT_CREATION_TIME = 2019-06-09T09:58:43\n'),
     ('MISSING_LINES = N/A\n', 'MISSING_LINES = "N/A"\n'),

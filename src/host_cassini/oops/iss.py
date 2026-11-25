@@ -273,11 +273,14 @@ _HEADER_TIME = re.compile(r'\d{4}-(?:(?!000)\d{3}|\d{2}-\d{2})'
 # a defect that the strict parser refuses in the current archive, and changes only the
 # text that has the defect. The count of each is from a scan of every current label.
 _LABEL_CORRECTIONS = (
-    # A pointer that names a file in another directory, which PDS3 does not allow, in
-    # 232,524 raw COISS_2xxx labels, such as N1601512976_1.LBL of COISS_2049:
+    # A pointer that names a file in the volume's label directory by a path, which PDS3
+    # does not allow, in 232,524 raw COISS_2xxx labels, such as N1601512976_1.LBL of
+    # COISS_2049, many of which give three:
     #     ^DESCRIPTION = "../../label/vicar2.txt"
+    #     ^STRUCTURE = "../../label/tlmtab.fmt"
+    #     ^LINE_PREFIX_STRUCTURE = "../../label/prefix3.fmt"
     # The file name is kept, which PDS3 looks for in the volume's label directory too.
-    (r'(\^DESCRIPTION = ")\.\./\.\./label/', r'\1'),
+    (r'(\^[A-Z_]+ = ")\.\./\.\./label/', r'\1'),
     # A blank in place of the leading zero of a day, in 110,185 calibrated COISS_2xxx
     # labels, such as N1454725799_1_CALIB.LBL of COISS_2001:
     #     PRODUCT_CREATION_TIME = 2019-06- 9T09:58:43
@@ -911,13 +914,14 @@ class CassiniISS(oops.Host):
         """The text of a PDS3 label of an ISS image, with its known defects corrected.
 
         Six defects of the archive's labels, each of which the "strict" parser refuses,
-        are corrected: a ^DESCRIPTION pointer to "../../label/vicar2.txt", which keeps
-        the file name alone; a PRODUCT_CREATION_TIME with a blank for the leading zero of
-        its day, which gets the zero; MISSING_LINES = N/A, which is quoted; the orphan
-        second line of a raw description after the closing quote of a calibrated
-        DESCRIPTION, which is deleted; a second quoted string after the closing quote of
-        a calibrated DESCRIPTION, which is joined to it; and an EARTH_RECEIVED_START_TIME
-        with the day number 000, which is quoted. A label without these defects is
+        are corrected: a pointer to a file in "../../label/", such as ^DESCRIPTION =
+        "../../label/vicar2.txt", which keeps the file name alone; a
+        PRODUCT_CREATION_TIME with a blank for the leading zero of its day, which gets
+        the zero; MISSING_LINES = N/A, which is quoted; the orphan second line of a raw
+        description after the closing quote of a calibrated DESCRIPTION, which is
+        deleted; a second quoted string after the closing quote of a calibrated
+        DESCRIPTION, which is joined to it; and an EARTH_RECEIVED_START_TIME with the day
+        number 000, which is quoted. A label without these defects is
         returned unchanged.
 
         Parameters:
