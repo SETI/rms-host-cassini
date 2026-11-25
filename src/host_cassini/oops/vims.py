@@ -14,7 +14,6 @@ import re
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
-import cspyce
 import julian
 
 from filecache import FCPath
@@ -22,8 +21,9 @@ from pdsparser import Pds3Label
 
 import oops
 from oops.host import HostFormatError, HostIndexError, WrongHostError
-from ._cassini import (_Cassini, _cassini_obs_id_code, _fix_cassini_ring_target,
-                       _pds3_options_with_defaults, _CMATRIX_ROTATION)
+from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION, _file_errors,
+                       _fix_cassini_ring_target, _metadata_subfields,
+                       _pds3_options_with_defaults, _tdb_from_sclk, _without_nulls)
 
 __all__ = ['CassiniVIMS']
 
@@ -116,6 +116,25 @@ _INDEX_BANDS = 352
 # least 97% of OCCULTATION cubes are 64 x 64.
 _CORE_ITEMS_FROM_MODE = {'POINT'      : (1, _INDEX_BANDS, 64),
                          'OCCULTATION': (64, _INDEX_BANDS, 64)}
+
+# The corrections to the text of a VIMS product label, as (pattern, replacement), which
+# CassiniVIMS._correct_label_text applies before the parser reads the label. Each is for
+# a defect that the strict parser refuses in the current archive, and changes only the
+# text that has the defect. The count of each is from a scan of every current label.
+_LABEL_CORRECTIONS = (
+    # An unquoted N/A inside a set, in 189,658 labels, such as v1295207538_1.lbl of
+    # COVIMS_0001:
+    #     GAIN_MODE_ID                     = (N/A, LOW)
+    # The N/A is quoted.
+    (r'(?<=[(,])([ \t]*)N/A(?=[ \t]*[,)])', r'\1"N/A"'),
+    # A comment that opens on the line of a value and closes on the next line, which no
+    # PDS3 parser accepts, because a PDS3 comment ends on the line where it starts, in
+    # 76,403 labels, such as v1481842120_1_048.lbl of COVIMS_0005:
+    #     SNAPSHOT_MODE_FLAG               = OFF/* IR high resolution,
+    #                                          IR low resolution, Visible (degree K) */
+    # The two lines of the comment are joined.
+    (r'(/\*(?:[^*\n]|\*(?!/))*)\n([^\n]*?\*/)', r'\1 \2'),
+)
 
 # The SPICE frames of the VIS channel, the IR channel, and the IR channel's solar port
 _VIS_FRAME_NAME    = 'CASSINI_VIMS_V'
@@ -251,6 +270,18 @@ class CassiniVIMS(oops.Host):
     #: that appears in its error messages.
     NAME = 'Cassini VIMS'
 
+    # The order of the supplements is SETI/rms-data-projects#257 item 1.
+    #
+    #: The supplements of 25 of the 95 VIMS metadata indexes list the cubes in another
+    #: order than the index, as much as 28,990 rows away, so each index row is paired
+    #: with the supplement row for the same cube.
+    MERGE_SUPPLEMENT_BY_FILE = True
+
+    #: The VIMS index gives each cube's file in the columns VOLUME_ID, PATH_NAME and
+    #: FILE_NAME, as "COVIMS_0001", "/data/1999010T054026_1999010T060958" and
+    #: "v1294638283_1.qub"; the supplement gives the label of the same cube.
+    INDEX_FILE_KEY = ('VOLUME_ID', 'PATH_NAME', 'FILE_NAME')
+
     _INSTRUMENT_KERNEL = None
     _initialized = False
 
@@ -258,8 +289,14 @@ class CassiniVIMS(oops.Host):
     def from_file(fileinfo, *, pds3_options=None, select=None, astrometry=False,
                   target=None, lightsource=None, path=None, frame=None, cadence=None,
                   fov=None, calibrations=None, timeshift=None, navigation=None,
-                  tracker=None, parallel=None, **kwargs):
+                  tracker=None, parallel=None):
         """A pair of Observations based on a Cassini VIMS cube or its PDS3 label.
+
+        Given the detached PDS3 label, the label is read and, unless `astrometry` is
+        True, so is the cube that its ^QUBE pointer names. Given the cube, its attached
+        label is read and, unless `astrometry` is True, so is its array. A label is
+        parsed with the "strict" method unless `pds3_options` gives another, after the
+        corrections of the known defects of the archive's labels.
 
         Parameters:
             fileinfo (str | pathlib.Path | FCPath | Pds3Label): The path to a VIMS cube
@@ -281,7 +318,8 @@ class CassiniVIMS(oops.Host):
             lightsource (oops.LightSource, optional): Override for the LightSource of both
                 observations, which is otherwise the Sun.
             path (str | oops.Path, optional): Override for the Path of the observer.
-            frame (str | oops.Frame, optional): Override for the Frame of both channels.
+            frame (str | oops.Frame, optional): Override for the Frame of both channels,
+                such as a :class:`~oops.frame.Cmatrix`, used as given.
             cadence (oops.Cadence, optional): Override for the Cadence of the observation.
             fov (oops.FOV, optional): Override for the default FOV of the observing
                 instrument. Note that this should only be used if either the IR or VIS
@@ -309,7 +347,6 @@ class CassiniVIMS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which each Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments; they are accepted and ignored.
 
         Returns:
             tuple[Observation | None, Observation | None] | Observation | None: Without
@@ -318,27 +355,34 @@ class CassiniVIMS(oops.Host):
             observations chosen by a slice or a tuple.
 
             Each observation has subfields `dict`, `host`, `instrument`, `detector`,
-            `sampling`, `label_target`, `observation_id`, `filepath` and `basename`, and
-            `data` unless `astrometry` is True.
+            `sampling`, `spice_kernels`, `spice_to_frame`, `spice_frame_name`,
+            `spice_frame_id`, `ck_object_id` (-82000), `ck_sclk_id` (-82) and
+            `spice_frame_is_frozen` (False); `label_target` and `observation_id` when
+            the label gives their items; `filepath`, `basename` and `image_url`, which
+            name the cube; `image_abspath` when the cube was read; `label_url`,
+            `label_abspath` and `label_dict`, the parsed detached label, when it was
+            read; `header_dict`, the parsed attached label of the cube, when `fileinfo`
+            is the cube; and `data` unless `astrometry` is True. `label_dict` and
+            `header_dict` are as the parser gives them; `dict` is whichever of them was
+            read without the values that PDS3 writes for no value ("UNK", "UNKNOWN",
+            "N/A", "NULL", "NOT APPLICABLE", "---" or the empty string), each of which is
+            left out, or None in a list.
 
         Raises:
-            HostFormatError: If some aspect of the label or file is not valid or describes
-                an unsupported option.
-            PdsHostError: If the PDS3 or ISIS label cannot be parsed.
-            OSError: If the file cannot be read.
+            FileNotFoundError: If the file, or the cube that a label read without
+                `astrometry` names, does not exist.
+            HostFormatError: If the label or the cube cannot be read or interpreted: if
+                the label lacks an item that the observation needs, gives an invalid one
+                or describes an unsupported option, or if the cube ends before the array
+                that its label describes. Subclass PdsHostError is raised if the label
+                cannot be parsed. Each message names the file.
             WrongHostError: If the file is not a Cassini VIMS file.
         """
 
         CassiniVIMS.initialize()  # define everything the first time through; use
                                   # defaults unless initialize() was called explicitly.
 
-        # Default Pds3Label options are method="fast", sources=False
         pds3_options = _pds3_options_with_defaults(pds3_options)
-
-        # Read the label
-        fileinfo = CassiniVIMS._read_fileinfo(fileinfo, formats='P',
-                                              astrometry=astrometry,
-                                              pds3_options=pds3_options)
 
         # Define the overrides
         overrides = {
@@ -355,64 +399,99 @@ class CassiniVIMS(oops.Host):
             'parallel'    : parallel,
         }
 
-        # Define and select the object(s)
-        label = CassiniVIMS._standard_label(fileinfo.as_dict())
-        pair = CassiniVIMS._make_observations(label, fileinfo.filepath,
-                                              astrometry=astrometry, overrides=overrides)
+        given = fileinfo.filepath if isinstance(fileinfo, Pds3Label) else fileinfo
+        with _file_errors(given):
+            fileinfo = CassiniVIMS._read_fileinfo(fileinfo, formats='P',
+                                                  astrometry=astrometry,
+                                                  pds3_options=pds3_options)
+            if not CassiniVIMS._detect_in_pds3(fileinfo):
+                raise oops.Host._no_host_error([CassiniVIMS], 'PDS3 label',
+                                               fileinfo.filepath)
+
+            # A detached label names its cube; a cube holds its own label. The cube's
+            # label holds most items inside its QUBE object, which the standard form
+            # copies to the top.
+            content = fileinfo.as_dict()
+            label = CassiniVIMS._standard_label(dict(content))
+            subfields = _metadata_subfields(_without_nulls(label))
+            subfields['dict'] = _without_nulls(content)
+            filepath = FCPath(fileinfo.filepath)
+            if filepath.suffix.lower() == '.lbl':
+                (image_path, label_path) = (filepath.parent / content['^QUBE'], filepath)
+                subfields['label_dict'] = content
+            else:
+                (image_path, label_path) = (filepath, None)
+                subfields['header_dict'] = content
+
+            # Define and select the object(s)
+            pair = CassiniVIMS._make_observations(label, image_path=image_path,
+                                                  label_path=label_path,
+                                                  astrometry=astrometry,
+                                                  overrides=overrides,
+                                                  subfields=subfields)
         return oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
 
     @staticmethod
-    def from_index(filepath, *, supplement=None, label=None, row_dicts=None,
-                   pds3_options=None, filter=None, select=None, target=None,
-                   lightsource=None, path=None, frame=None, cadence=None, fov=None,
-                   calibrations=None, timeshift=None, navigation=None, tracker=None,
-                   parallel=None, **kwargs):
-        """A list of Observations, one for each row of a data file index.
+    def from_index(filepath, *, supplement=oops.Host.SUPPLEMENT, label=None,
+                   row_dicts=None, pds3_options=None, filter=None, select=None,
+                   target=None, lightsource=None, path=None, frame=None, cadence=None,
+                   fov=None, calibrations=None, timeshift=None, navigation=None,
+                   tracker=None, parallel=None):
+        """An iterator over Observations, one entry for each row of a data file index.
 
-        The observations are for astrometry only and have no `data`.
+        It reads a metadata index of the PDS Ring-Moon Systems Node, such as
+        metadata/COVIMS_0xxx/COVIMS_0001/COVIMS_0001_index.lbl, with its supplement,
+        which a VIMS index needs. The call reads the labels of both tables; the rows are
+        read as the iteration proceeds, 100 at a time, and each row's observations are
+        built when the iteration reaches it. A caller that needs ``len()`` or indexing
+        wraps the call in ``list()``.
 
-        A supplemental index that records them supplies the cube's actual shape
-        (CORE_SAMPLES, CORE_BANDS, CORE_LINES), the label's exposures
-        (IR_EXPOSURE_DURATION, VIS_EXPOSURE_DURATION) and, for a cube with time
-        backplanes, the spacecraft clock count of the first sample
+        Each index row is paired with the supplement row for the same cube, wherever it
+        is in the supplement: the index's VOLUME_ID, PATH_NAME and FILE_NAME, which name
+        the cube, name the same file as the supplement's VOLUME_ID and
+        FILE_SPECIFICATION_NAME, which name its label, compared without regard to case or
+        extension. Every other column that the two tables share must agree.
+
+        The observations are for astrometry only and have no `data`. The supplement
+        supplies the cube's actual shape (CORE_SAMPLES, CORE_BANDS, CORE_LINES), the
+        label's exposures (IR_EXPOSURE_DURATION, VIS_EXPOSURE_DURATION) and, for a cube
+        with time backplanes, the spacecraft clock count of the first sample
         (BACKPLANE_SCLK_START_COUNT), which then replaces START_TIME as each
-        observation's start.
-
-        Without those columns, the shape and the exposures are the index's best guess: a
-        row records the swath but not the cube's band count, so each label's CORE_ITEMS
-        lists a nominal 352 bands. A row does not record the pixel count of a POINT or
-        OCCULTATION cube either; nearly every such cube fills the full 64-line buffer,
-        so its observations assume 1 x 64 (POINT) or 64 x 64 (OCCULTATION) pixels with
-        nominal timing, as :meth:`from_file` assumes with `astrometry` for the same
-        cube. A channel whose recorded exposure is a placeholder (zero or negative) is
-        treated as off, because only the cube's label holds its real exposure.
+        observation's start. Without those columns, the shape and the exposures are the
+        index's best guess: a row records the swath but not the cube's band count, so
+        each label's CORE_ITEMS lists a nominal 352 bands. A row does not record the
+        pixel count of a POINT or OCCULTATION cube either; nearly every such cube fills
+        the full 64-line buffer, so its observations assume 1 x 64 (POINT) or 64 x 64
+        (OCCULTATION) pixels with nominal timing. A channel whose recorded exposure is a
+        placeholder (zero or negative) is treated as off, because only the cube's label
+        holds its real exposure.
 
         Parameters:
             filepath (str | pathlib.Path | FCPath): The full path to the PDS label of a
                 data file index.
-            supplement (str | pathlib.Path | FCPath, optional): The path to the PDS label
-                of a supplemental index file. This file must have the same records in the
-                same order as the table described by `filepath`. If not specified, the
-                directory of `filepath` will be searched for a file whose name matches
-                except that "_index" is replaced by "_supplemental_index" in upper or
-                lower case.
+            supplement (str | pathlib.Path | FCPath | object, optional): The path to the
+                PDS label of the supplemental index file, in any directory. The default,
+                `oops.Host.SUPPLEMENT`, reads the file beside `filepath` whose name has
+                "_supplemental_index" in place of "_index". None raises an error, because
+                the supplement is required.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
                 been read.
-            row_dicts (list[dict[str, Any]], optional): A list of dictionaries, one per
-                row of the index, if `filepath` and `supplement` have already been read.
-                If provided, `supplement` is ignored.
+            row_dicts (collections.abc.Iterable[dict[str, Any]], optional): The rows of
+                the index, already merged with the supplement, one dictionary per row, if
+                `filepath` has already been read. If provided, the tables are not read
+                and `supplement` is ignored.
             pds3_options (dict[str, Any], optional): Any keyword arguments and their
-                values to be passed to the :class:`~pdsparser.Pds3Label` parser.
+                values to be passed to the :class:`~pdsparser.Pds3Label` parser, with
+                which the label of the index, and with their method the label of the
+                supplement, are parsed. The method is "strict" unless they give another.
             filter (dict[str, Any], optional): A dictionary of index column names and
                 their values or a set or tuple of values. If provided, only rows of the
                 index in which each named column equals the value, falls in the set of
                 values, or falls in a range defined by a tuple of two values, will be
-                included in the returned list.
+                included.
             select (int | slice | str | tuple[int | slice | str, ...]): An index, slice,
-                or tuple of indices and slices to apply to the returned array of
-                Observation objects. For example, if the file contains two Observations
-                but `select=1`, only the second Observation will be returned.
-                Alternatively, specify one or more host-specific names of the data arrays.
+                or tuple of indices and slices to apply to each row's (vis, ir) pair. A
+                channel can also be chosen by name, "VIS" or "IR".
             target (str | oops.Body, optional): Override for the default target Body of
                 every observation. Use "NONE" for inertial pointing, indicating that no
                 Solar System body was tracked.
@@ -420,7 +499,7 @@ class CassiniVIMS(oops.Host):
                 of every observation.
             path (str | oops.Path, optional): Override for the Path of the observer.
             frame (str | oops.Frame, optional): Override for the Frame of the observing
-                instrument.
+                instrument, such as a :class:`~oops.frame.Cmatrix`, used as given.
             cadence (oops.Cadence, optional): Override for the Cadence of the observation.
             fov (oops.FOV, optional): Override for the default FOV of the observing
                 instrument. Note that this should only be used if either the IR or VIS
@@ -447,38 +526,43 @@ class CassiniVIMS(oops.Host):
             parallel (Observation, optional): A parallel Observation (same origin and
                 time, different frame and FOV) relative to which this Observation has a
                 fixed offset.
-            **kwargs: Additional keyword arguments, ignored here except as noted below.
 
         Returns:
-            list[tuple[Observation | None, Observation | None] | Observation | None]:
-            One entry per filtered row of the index: the (vis, ir) pair, in which a
-            channel that is off is None, or the observation or tuple of observations
-            chosen by `select`.
+            collections.abc.Iterator[tuple[Observation | None, Observation | None] |
+            Observation | None]: For every filtered row of the index, in index order, the
+            (vis, ir) pair, in which a channel that is off is None, or the observation or
+            tuple of observations chosen by `select`. Each observation has the subfields
+            of :meth:`from_file` with `astrometry` True, except `label_dict` and the file
+            subfields: `filepath` is the row's VOLUME_ID and FILE_SPECIFICATION_NAME
+            joined by "/", relative to the root of the volumes, and `basename` is the
+            file name. `dict` is the merged row as the tables give it, with the "_mask"
+            entry of each column.
 
         Raises:
-            HostFormatError: If some aspect of an index row is not valid or describes an
-                unsupported option.
-            HostIndexError: If the supplement does not match the index row for row, or
-                if `row_dicts` has no supplemental index merged in.
-            PdsHostError: If the PDS3 label cannot be parsed.
-            OSError: If `filepath` or `supplement` cannot be read.
+            FileNotFoundError: If the label of `filepath` or of the supplement does not
+                exist; when the iteration starts, if a table file does not exist.
+            HostIndexError: When called, if `supplement` is None while `row_dicts` is
+                not given, or if the label of the index or the supplement does not
+                describe a table that can be read; during the iteration, as the reading
+                of the rows finds that the supplement does not match the index.
+            PdsHostError: If the PDS3 label of the index or the supplement cannot be
+                parsed.
             WrongHostError: If `filepath` is not a Cassini VIMS index file.
         """
 
         CassiniVIMS.initialize()
 
-        # Read and filter the index table
-        if row_dicts is None:
-            supplement = supplement or oops.Host.SUPPLEMENT     # supplement is required
-            row_dicts = CassiniVIMS._read_index_rows(filepath, supplement=supplement,
-                                                     validate=CassiniVIMS._validate_index,
-                                                     pds3_options=pds3_options)
+        if supplement is None and row_dicts is None:
+            raise HostIndexError(f'Cassini VIMS index needs its supplemental index: '
+                                 f'{filepath}')
 
-        # The file path and most of the observation's parameters come from the supplement
-        if row_dicts and 'FILE_SPECIFICATION_NAME' not in row_dicts[0]:
-            raise HostIndexError(f'Cassini VIMS needs a supplemental index: {filepath}')
-
-        row_dicts = oops.Host._filter_index_rows(row_dicts, filter)
+        # Every column that the two tables share, other than the file keys, gives the same
+        # value in both, so the default check of a pair holds for every VIMS index
+        rows = CassiniVIMS._index_rows(filepath, supplement=supplement, label=label,
+                                       row_dicts=row_dicts,
+                                       pds3_options=_pds3_options_with_defaults(
+                                           pds3_options),
+                                       filter=filter)
 
         overrides = {
             'target'      : target,
@@ -494,37 +578,18 @@ class CassiniVIMS(oops.Host):
             'parallel'    : parallel,
         }
 
-        # Create the list of Observations
-        obslist = []
-        for row_dict in row_dicts:
-            fpath = row_dict['VOLUME_ID'] + '/' + row_dict['FILE_SPECIFICATION_NAME']
-            label = CassiniVIMS._label_from_index_row(row_dict)
-            pair = CassiniVIMS._make_observations(label, fpath, astrometry=True,
-                                                  overrides=overrides)
-            item = oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
-            obslist.append(item)
+        # Build each row's observations when the iteration reaches it
+        def observations():
+            for row_dict in rows:
+                image_path = (str(row_dict['VOLUME_ID']) + '/'
+                              + str(row_dict['FILE_SPECIFICATION_NAME']))
+                pair = CassiniVIMS._make_observations(
+                    CassiniVIMS._label_from_index_row(row_dict), image_path=image_path,
+                    label_path=None, astrometry=True, overrides=overrides,
+                    subfields=_metadata_subfields(row_dict))
+                yield oops.Host._apply_select(pair, select, _CHANNEL_NAMES)
 
-        return obslist
-
-    @staticmethod
-    def _validate_index(indx_dict, supp_dict):
-        """Raise an exception if the index row and supplement row do not match."""
-
-        if 'VOLUME_ID' not in supp_dict:
-            raise HostIndexError('missing VOLUME_ID in supplemental index')
-        if indx_dict['VOLUME_ID'] != supp_dict['VOLUME_ID']:
-            indx_val = indx_dict['VOLUME_ID']
-            supp_val = supp_dict['VOLUME_ID']
-            raise HostIndexError(f'VOLUME_IDs do not match: "{indx_val}", "{supp_val}"')
-
-        if 'FILE_SPECIFICATION_NAME' not in supp_dict:
-            raise HostIndexError('missing FILE_SPECIFICATION_NAME in supplemental index')
-        indx_name = indx_dict['FILE_NAME']
-        supp_name = supp_dict['FILE_SPECIFICATION_NAME'].rpartition('/')[-1]
-        if indx_name[:-3] != supp_name[:-3]:
-            raise HostIndexError(f'file names do not match: "{indx_name}", "{supp_name}"')
-
-        return True
+        return observations()
 
     @staticmethod
     def _standard_label(label):
@@ -623,7 +688,7 @@ class CassiniVIMS(oops.Host):
         # supplemental index that has this column; it is more accurate than START_TIME
         sclk = row_dict.get('BACKPLANE_SCLK_START_COUNT', '').strip()
         if sclk:
-            tdb = cspyce.scs2e(-82, sclk)
+            tdb = _tdb_from_sclk(sclk)
             label['START_TIME'] = julian.iso_from_tai(julian.tai_from_tdb(tdb), digits=3)
 
         # The index sometimes records a -999 placeholder for the exposure of a channel
@@ -636,15 +701,21 @@ class CassiniVIMS(oops.Host):
         return label
 
     @staticmethod
-    def _make_observations(label, filepath, *, astrometry, overrides):
+    def _make_observations(label, *, image_path, label_path, astrometry, overrides,
+                           subfields):
         """The VIS and IR observations described by a standardized VIMS label.
 
         Parameters:
             label (dict): The label, as returned by :meth:`_standard_label` or
                 :meth:`_label_from_index_row`.
-            filepath (str | FCPath): The path to the cube or to its detached PDS3 label.
+            image_path (str | FCPath): The cube, an FCPath for a file and the relative
+                path that the index gives for a row.
+            label_path (FCPath | None): The detached PDS3 label that was read; None if
+                none was.
             astrometry (bool): True to omit the data arrays.
             overrides (dict): The standard override options of :meth:`from_file`.
+            subfields (dict[str, Any]): The subfields that come from the metadata, which
+                each observation receives.
 
         Returns:
             tuple[Observation | None, Observation | None]: Observation, if any, for VIS
@@ -654,6 +725,7 @@ class CassiniVIMS(oops.Host):
             HostFormatError: If some aspect of the label or file is not valid.
         """
 
+        filepath = image_path   # named in errors
         qube_dict = label['SPECTRAL_QUBE']
 
         # Load any needed SPICE kernels
@@ -682,13 +754,11 @@ class CassiniVIMS(oops.Host):
             ir_data = None
             times = None
         else:
-            filepath = FCPath(filepath)
-            if filepath.suffix.lower() == '.lbl':
-                data_file = filepath.parent / label['^QUBE']
-                header_recs = label['^QUBE_offset'] - 1
-            else:
-                data_file = filepath
+            data_file = image_path
+            if label_path is None:      # the cube's own label gives the record
                 header_recs = label['^QUBE'] - 1
+            else:
+                header_recs = label['^QUBE_offset'] - 1
 
             (array, times) = CassiniVIMS._load_data_and_times(data_file, header_recs,
                                                               label)
@@ -787,6 +857,11 @@ class CassiniVIMS(oops.Host):
         ir_texp  = label['EXPOSURE_DURATION'][0] * 0.001 * _TIME_FACTOR
         vis_texp = label['EXPOSURE_DURATION'][1] * 0.001 * _TIME_FACTOR
 
+        # The exposure of the visible cadences has a floor, as in the reader of rms-oops,
+        # which keeps a zero or a -999 placeholder from giving an exposure that is not
+        # positive; the VIMS rework is to treat the placeholder as missing instead (#37)
+        vis_texp_nonzero = max(vis_texp, 1.e-8)
+
         interframe_delay = label['INTERFRAME_DELAY_DURATION'] * 0.001 * _TIME_FACTOR
         interline_delay  = label['INTERLINE_DELAY_DURATION']  * 0.001 * _TIME_FACTOR
 
@@ -821,7 +896,7 @@ class CassiniVIMS(oops.Host):
         # zero or a -999 placeholder, so no cadence is built for a channel that is off.
         if not vis_is_off:
             vis_header_cadence = oops.cadence.Metronome(tstart, length_stride,
-                                                        vis_texp, swath_length)
+                                                        vis_texp_nonzero, swath_length)
         if not ir_is_off:
             ir_fast_cadence = oops.cadence.Metronome(tstart, ir_texp, ir_texp,
                                                      swath_width)
@@ -863,7 +938,8 @@ class CassiniVIMS(oops.Host):
             # IR raster's timing with the VIS exposure. A cube with embedded timing never
             # has VIS on, so the IR raster's cadences are always defined here.
             if not vis_is_off:
-                viscad = oops.cadence.Metronome(tstart, fast_stride, vis_texp, samples)
+                viscad = oops.cadence.Metronome(tstart, fast_stride, vis_texp_nonzero,
+                                                samples)
                 viscad = oops.cadence.DualCadence(slowcad, viscad)
                 vis_cadence = oops.cadence.ReshapedCadence(viscad, (samples*lines,))
 
@@ -893,7 +969,7 @@ class CassiniVIMS(oops.Host):
                     vis_data = vis_data.reshape((samples, 96))
 
                 vis_info = (oops.observation.Slit1D, ('u','b'),
-                            oops.cadence.SnapCadence(tstart, vis_texp),
+                            oops.cadence.SnapCadence(tstart, vis_texp_nonzero),
                             vis_fov, _VIS_FRAME_NAME)
 
             if not ir_is_off:
@@ -962,20 +1038,19 @@ class CassiniVIMS(oops.Host):
                 }
 
                 # Apply standard overrides
-                oops.Host._apply_overrides(params, filepath, **overrides)
+                oops.Host._apply_overrides(params, **overrides)
 
                 # Construct
                 obs = obs_subclass(axes, **params)
                 if arrays[k] is not None:
                     obs.insert_subfield('data', arrays[k])
+                oops.Host._set_path_attributes(obs, image_path, label_path)
 
-                obs.insert_subfield('dict', label)
+                obs.insert_subfields(subfields)
                 obs.insert_subfield('host', 'Cassini')
                 obs.insert_subfield('instrument', 'VIMS')
                 obs.insert_subfield('detector', detectors[k])
                 obs.insert_subfield('sampling', sampling[k])
-                obs.insert_subfield('label_target', label['TARGET_NAME'])
-                obs.insert_subfield('observation_id', label['OBSERVATION_ID'])
 
                 kernels = _Cassini.used_kernels(obs.time, 'vims', ck=using_cks,
                                                 return_all_planets=False)
@@ -1087,6 +1162,12 @@ class CassiniVIMS(oops.Host):
         local_path = data_file.retrieve()
         array = np.fromfile(local_path, dtype=core_dtype)
 
+        # A cube that ends before the lines that its label describes would give an array
+        # read from beyond the end of the file
+        if (array.size - offset) * core_item_bytes < line_stride * core_lines:
+            raise HostFormatError(f'{data_file} ends before the cube that its label '
+                                  f'describes')
+
         # Slice away the core lines, leaving off the line suffix
         array = array[offset:offset+size]
 
@@ -1147,23 +1228,41 @@ class CassiniVIMS(oops.Host):
         if np.any(mask):
             if not np.all(mask.ravel()[1:]):
                 raise HostFormatError(f'invalid embedded times in {data_file}')
-            formatted = f'{sclock[0,0]:16.3f}'
             times = np.empty(sclock.shape)
-            times[...] = cspyce.scs2e(-82, formatted)
+            times[...] = CassiniVIMS._tdb_from_clock_seconds(sclock[0,0])
 
         else:
             sclock_min = sclock.min()
-            formatted = f'{sclock_min:16.3f}'
-            tdb_min = cspyce.scs2e(-82, formatted) + (sclock_min - float(formatted))
+            tdb_min = CassiniVIMS._tdb_from_clock_seconds(sclock_min)
 
             sclock_max = sclock.max()
-            formatted = f'{sclock_max:16.3f}'
-            tdb_max = cspyce.scs2e(-82, formatted) + (sclock_max - float(formatted))
+            tdb_max = CassiniVIMS._tdb_from_clock_seconds(sclock_max)
 
             times = tdb_min + (sclock - sclock_min) * ((tdb_max - tdb_min) /
                                                        (sclock_max - sclock_min))
 
         return (data, times)
+
+    @staticmethod
+    def _tdb_from_clock_seconds(sclock):
+        """The time in seconds TDB of a spacecraft clock reading in decimal seconds.
+
+        The Cassini clock count that the clock kernel converts counts the whole seconds
+        and then 1/256 s ticks after the point, so "1640775127.128" is half a second
+        after "1640775127.000". A time backplane gives seconds and a decimal fraction
+        instead, so the whole seconds are converted as a count and the fraction is added
+        in seconds.
+
+        Parameters:
+            sclock (float): The clock reading in seconds, with a decimal fraction.
+
+        Returns:
+            float: The time in seconds TDB.
+        """
+
+        # Read as ticks, the fraction made COVIMS_0030 v1596456719_1 start 2.565 s late
+        whole = int(np.floor(sclock))
+        return _tdb_from_sclk(f'{whole}.000') + (float(sclock) - whole)
 
     @staticmethod
     def meshgrid_and_times(obs, *, oversample=6, extend=1.5):
@@ -1253,6 +1352,28 @@ class CassiniVIMS(oops.Host):
     # Detectors
     ######################################################################################
 
+    @classmethod
+    def _correct_label_text(cls, text, filepath):
+        """The text of a PDS3 label of a VIMS cube, with its known defects corrected.
+
+        Two defects of the archive's labels, each of which the "strict" parser refuses,
+        are corrected: an unquoted N/A inside a set, as in GAIN_MODE_ID = (N/A, LOW),
+        which is quoted; and a comment that opens on the line of a value and closes on
+        the next line, whose two lines are joined. A label without these defects is
+        returned unchanged.
+
+        Parameters:
+            text (str): The text of the label, with <LF> line terminators.
+            filepath (FCPath): The path to the label.
+
+        Returns:
+            str: The corrected text.
+        """
+
+        for (pattern, replacement) in _LABEL_CORRECTIONS:
+            text = re.sub(pattern, replacement, text)
+        return text
+
     @staticmethod
     def _detect_in_pds3(label):
         """True if the given parsed PDS3 label describes data from Cassini VIMS.
@@ -1322,7 +1443,9 @@ class CassiniVIMS(oops.Host):
             ck (str, optional): The set of C kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no C kernels automatically,
                 leaving their handling to the caller. 'reconstructed' also loads the
-                reconstructed C kernels of the Jupiter flyby.
+                reconstructed C kernels of the Jupiter flyby and the cruise C kernels,
+                which the reconstructed kernels take precedence over where both cover a
+                time.
             planets (list, optional): A list of planets to pass to
                 :meth:`~oops.Body.define_solar_system`. None or 0 means all.
             asof (str, optional): Only use SPICE kernels that existed before this date;

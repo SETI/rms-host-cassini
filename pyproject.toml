@@ -9,14 +9,14 @@ description = "Cassini mission hosts (ISS, UVIS, VIMS) for the OOPS observation 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "cspyce>=2.3.2",          # 2.3.2 is the first with Python 3.13 wheels
+  "cspyce>=2.3.2",
   "numpy>=2.0",
   "rms-filecache>=2.0.3",
-  "rms-julian>=3.0.2",      # 3.0.2 drops pyparsing's deprecated camelCase API
-  "rms-oops>=0.4.0",        # 0.4.0 adds the oops.Host API; also provides spicedb
-  "rms-pdsparser>=2.3.0",   # 2.3.0 adds as_dict
-  "rms-pdstable>=1.0.1",    # 1.0.1 accepts an FCPath label path
-  "rms-vicar>=1.4.0",       # 1.4.0 adds as_dict
+  "rms-julian>=3.0.2",
+  "rms-oops @ git+https://github.com/SETI/rms-oops.git@rf_261124_host_contract",
+  "rms-pdsparser>=2.3.0",
+  "rms-pdstable>=1.0.1",
+  "rms-vicar>=1.4.0",
 ]
 license = "Apache-2.0"
 authors = [

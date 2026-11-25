@@ -46,7 +46,9 @@ pip install rms-host-cassini
 
 Geometry calculations need a SPICE kernel database, located through `spicedb` by the
 `SPICE_PATH` environment variable (or `$OOPS_RESOURCES/SPICE`) and `SPICE_SQLITE_DB_NAME`.
-It must contain the kernel sets `CAS-SPK-*`, `CAS-CK-*`, and `CAS-CK-GAPFILL`.
+It must contain the kernel sets `CAS-SPK-*`, `CAS-CK-*`, and `CAS-CK-GAPFILL`. The C kernels
+of the cruise, which the database does not list, are read from `Cassini/CK-cruise/` in the
+same SPICE directory.
 
 # Getting Started
 
@@ -74,13 +76,21 @@ ir = CassiniVIMS.from_file('v1484505000_1.qub', select='IR')
 
 The hosts are:
 
-- `CassiniISS`: The Imaging Science Subsystem narrow- and wide-angle cameras. A file
-  becomes a `Snapshot`; an image index can also be read with `CassiniISS.from_index()`.
-- `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A file becomes one observation, or
-  one for each window of a QUBE with several windows.
-- `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube becomes a pair of
-  observations, one for each channel (None for an inactive channel), and `select='VIS'` or
-  `select='IR'` returns just one.
+- `CassiniISS`: The Imaging Science Subsystem narrow- and wide-angle cameras. An image file
+  or its detached PDS3 label becomes a `Snapshot`.
+- `CassiniUVIS`: The Ultraviolet Imaging Spectrograph. A product label becomes one
+  observation, or one for each window of a QUBE with several windows.
+- `CassiniVIMS`: The Visual and Infrared Mapping Spectrometer. A cube or its label becomes a
+  pair of observations, one for each channel (None for an inactive channel), and
+  `select='VIS'` or `select='IR'` returns just one.
+
+Each host also reads the metadata index of its instrument, with `from_index()`, which
+returns an iterator over the observations of the index rows. Wrap it in `list()` to count
+or index them.
+
+The metadata of each observation is in its `dict` subfield, without the values that a label
+gives for "no value", such as "UNK" or "N/A". The parsed labels themselves are in
+`label_dict` and, for an image file read, `header_dict`.
 
 SPICE kernels are loaded only as needed, a month of the mission at a time. A target named
 in the label is repaired where the label is known to be wrong, and an observation of a
