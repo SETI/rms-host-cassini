@@ -896,9 +896,9 @@ def test_from_file_label_that_cannot_be_parsed(tmp_path: pathlib.Path) -> None:
 @uses_iss_file
 def test_from_file_label_value_that_cannot_be_converted(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, extra_lines=['TEST_TIME = 2005-02-30T00:00:00'])
+    # Python words the date error differently from version to version
     with pytest.raises(oops.host.PdsHostError,
-                       match=re.escape(f'cannot parse the PDS3 label {path}: day is out '
-                                       'of range for month')):
+                       match=re.escape(f'cannot parse the PDS3 label {path}: day ')):
         CassiniISS.from_file(path, astrometry=True)
 
 

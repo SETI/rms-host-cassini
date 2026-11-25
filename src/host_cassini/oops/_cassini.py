@@ -357,14 +357,14 @@ class _Cassini:
         # furnished, even in a later month that brings no new kernel (issue 42).
         for m in range(m1, m2+1):
             if not loaded[m]:
-                new = [kernel for kernel in lists[m]
-                       if kernel.filespec not in kernel_dict]
+                new = {kernel.filespec: kernel for kernel in lists[m]
+                       if kernel.filespec not in kernel_dict}
                 if new:
-                    kernel_dict.update((kernel.filespec, kernel) for kernel in new)
-                    first = [kernel.filespec for kernel in kernels].index(new[0].filespec)
+                    first = [kernel.filespec for kernel in kernels].index(next(iter(new)))
                     spicedb.furnish_kernels([kernel for kernel in kernels[first:]
-                                             if kernel.filespec in kernel_dict],
-                                            fast=False)
+                                             if kernel.filespec in kernel_dict
+                                             or kernel.filespec in new], fast=False)
+                    kernel_dict.update(new)
                 loaded[m] = True
 
     ######################################################################################

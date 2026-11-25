@@ -148,6 +148,20 @@ def test_load_kernels_records_furnished_kernels() -> None:
     assert kernel_dict == {'a.bc': kernel}
 
 
+def test_load_kernels_records_no_kernel_that_failed_to_furnish(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    def furnish_kernels(*args: Any, **kwargs: Any) -> None:
+        raise OSError('no such file')
+
+    monkeypatch.setattr(spicedb, 'furnish_kernels', furnish_kernels)
+    kernel_dict: dict[str, Any] = {}
+    with pytest.raises(OSError, match='no such file'):
+        _load(tdb_in_month(10.5), tdb_in_month(10.5),
+              np.zeros(_Cassini.MONTHS, dtype='bool'),
+              _month_lists({10: [FakeKernel('a.bc')]}), kernel_dict)
+    assert kernel_dict == {}
+
+
 def test_load_kernels_skips_kernels_already_furnished(fake_spicedb: FakeSpiceDB) -> None:
     kernel = FakeKernel('a.bc')
     _load(tdb_in_month(10.5), tdb_in_month(10.5),
