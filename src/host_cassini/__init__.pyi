@@ -16,7 +16,7 @@ The detectors and support methods that a Host subclass overrides or calls, such 
 
 import pathlib
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, overload
 
 from filecache import FCPath
 from pdsparser import Pds3Label
@@ -34,15 +34,34 @@ from oops.path import Path
 
 __all__ = ['CassiniISS', 'CassiniUVIS', 'CassiniVIMS']
 
+_Select = int | slice | tuple[int | slice, ...]
+
 class CassiniISS(Host):
     # The runtime names the first parameter `fileinfo`, where Host names it `filepath`.
+    @overload  # type: ignore[override]
     @staticmethod
-    def from_file(  # type: ignore[override]
+    def from_file(
         fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
         | VicarImage, *,
         fast_distortion: bool | None = True, return_all_planets: bool = False,
         pds3_options: dict[str, Any] | None = None,
-        select: int | slice | tuple[int | slice, ...] | None = None,
+        select: None = None,
+        astrometry: bool = False,
+        target: str | Body | None = None, lightsource: LightSource | None = None,
+        path: str | Path | None = None, frame: str | Frame | None = None,
+        cadence: Cadence | None = None, fov: FOV | None = None,
+        calibrations: Calibration | list[Calibration] | None = None,
+        timeshift: tuple[float, str] | None = None,
+        navigation: tuple[float, ...] | None = None, tracker: str | None = None,
+        parallel: Observation | None = None) -> Snapshot: ...
+    @overload
+    @staticmethod
+    def from_file(
+        fileinfo: str | pathlib.Path | FCPath | Pds3Label | VicarLabel
+        | VicarImage, *,
+        fast_distortion: bool | None = True, return_all_planets: bool = False,
+        pds3_options: dict[str, Any] | None = None,
+        select: _Select,
         astrometry: bool = False,
         target: str | Body | None = None, lightsource: LightSource | None = None,
         path: str | Path | None = None, frame: str | Frame | None = None,
@@ -53,8 +72,9 @@ class CassiniISS(Host):
         parallel: Observation | None = None) -> Snapshot | tuple[Snapshot, ...]: ...
     # Each row gives one Snapshot, or what select chooses, so the iterator is typed more
     # narrowly than Host's; select accepts no name, because ISS has none.
+    @overload  # type: ignore[override]
     @staticmethod
-    def from_index(  # type: ignore[override]
+    def from_index(
         filepath: str | pathlib.Path | FCPath, *,
         supplement: str | pathlib.Path | FCPath | object | None = ...,
         label: Pds3Label | None = None,
@@ -62,7 +82,27 @@ class CassiniISS(Host):
         pds3_options: dict[str, Any] | None = None,
         filter: dict[str, Any] | None = None, fast_distortion: bool | None = True,
         return_all_planets: bool = False,
-        select: int | slice | tuple[int | slice, ...] | None = None,
+        select: None = None,
+        target: str | Body | None = None,
+        lightsource: LightSource | None = None, path: str | Path | None = None,
+        frame: str | Frame | None = None, cadence: Cadence | None = None,
+        fov: FOV | None = None,
+        calibrations: Calibration | list[Calibration] | None = None,
+        timeshift: tuple[float, str] | None = None,
+        navigation: tuple[float, ...] | None = None, tracker: str | None = None,
+        parallel: Observation | None = None
+        ) -> Iterator[Snapshot]: ...
+    @overload
+    @staticmethod
+    def from_index(
+        filepath: str | pathlib.Path | FCPath, *,
+        supplement: str | pathlib.Path | FCPath | object | None = ...,
+        label: Pds3Label | None = None,
+        row_dicts: Iterable[dict[str, Any]] | None = None,
+        pds3_options: dict[str, Any] | None = None,
+        filter: dict[str, Any] | None = None, fast_distortion: bool | None = True,
+        return_all_planets: bool = False,
+        select: _Select,
         target: str | Body | None = None,
         lightsource: LightSource | None = None, path: str | Path | None = None,
         frame: str | Frame | None = None, cadence: Cadence | None = None,
