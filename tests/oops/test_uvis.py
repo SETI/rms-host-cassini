@@ -12,7 +12,7 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines, write_table
+from conftest import approx_time, FakeSpice, FakeSpiceDB, pds3_lines, write_table
 from filecache import FCPath
 from pdsparser import Pds3Label
 
@@ -243,7 +243,7 @@ def test_one_line_qube_subfields(tmp_path: pathlib.Path) -> None:
 def test_qube_times(tmp_path: pathlib.Path) -> None:
     obs = CassiniUVIS.from_file(write_qube(tmp_path))
     tstart = julian.tdb_from_iso(START_TIME)
-    assert obs.time == pytest.approx((tstart, tstart + 3 * 2.))
+    assert obs.time == approx_time((tstart, tstart + 3 * 2.))
 
 
 def test_multi_line_qube_window(tmp_path: pathlib.Path) -> None:
@@ -316,7 +316,7 @@ def test_time_series(tmp_path: pathlib.Path, detector: str) -> None:
 def test_time_series_cadence(tmp_path: pathlib.Path) -> None:
     obs = CassiniUVIS.from_file(write_time_series(tmp_path))
     tstart = julian.tdb_from_iso(START_TIME)
-    assert obs.time == pytest.approx((tstart, tstart + 5 * 0.002))
+    assert obs.time == approx_time((tstart, tstart + 5 * 0.002))
 
 
 def test_time_series_rejects_other_detectors(tmp_path: pathlib.Path) -> None:
@@ -632,17 +632,17 @@ def test_from_index_qube_matches_from_file(tmp_path: pathlib.Path,
                                            index_observations: list[Any]) -> None:
     obs = CassiniUVIS.from_file(write_qube(tmp_path), astrometry=True)
     assert index_observations[0].shape == obs.shape
-    assert index_observations[0].time == pytest.approx(obs.time)
+    assert index_observations[0].time == approx_time(obs.time)
 
 
 def test_from_index_hsp_cadence(index_observations: list[Any]) -> None:
     tstart = julian.tdb_from_iso(START_TIME)
-    assert index_observations[1].time == pytest.approx((tstart, tstart + 5 * 0.002))
+    assert index_observations[1].time == approx_time((tstart, tstart + 5 * 0.002))
 
 
 def test_from_index_hdac_cadence(index_observations: list[Any]) -> None:
     tstart = julian.tdb_from_iso(START_TIME)
-    assert index_observations[2].time == pytest.approx((tstart, tstart + 6 * 0.25))
+    assert index_observations[2].time == approx_time((tstart, tstart + 6 * 0.25))
 
 
 def test_from_index_spectrum(tmp_path: pathlib.Path,

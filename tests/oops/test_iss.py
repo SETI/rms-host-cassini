@@ -19,7 +19,7 @@ from filecache import FCPath
 from pdsparser import Pds3Label
 import pytest
 import vicar
-from conftest import (NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
+from conftest import (approx_time, NAC_HALF_FOV_DEG, PIXELS, WAC_HALF_FOV_DEG, FakeSpice,
                       FakeSpiceDB, ik_dict, pds3_lines, tdb_in_month, write_table)
 
 import host_cassini
@@ -358,21 +358,21 @@ uses_iss = pytest.mark.usefixtures('initialized_iss')
 @uses_iss
 def test_snapshot_ends_at_image_time() -> None:
     tstop = julian.tdb_from_iso(IMAGE_TIME)
-    assert snapshot(START_TIME=IMAGE_TIME).time == pytest.approx((tstop - 1., tstop))
+    assert snapshot(START_TIME=IMAGE_TIME).time == approx_time((tstop - 1., tstop))
 
 
 @uses_iss
 def test_snapshot_with_shutter_disabled_starts_at_start_time() -> None:
     tstart = julian.tdb_from_iso(IMAGE_TIME)
     obs = snapshot(START_TIME=IMAGE_TIME, SHUTTER_STATE_ID='DISABLED')
-    assert obs.time == pytest.approx((tstart, tstart + 1.))
+    assert obs.time == approx_time((tstart, tstart + 1.))
 
 
 @uses_iss
 def test_snapshot_zero_exposure() -> None:
     tstop = julian.tdb_from_iso(IMAGE_TIME)
     obs = snapshot(EXPOSURE_DURATION=0.)
-    assert obs.time == pytest.approx((tstop, tstop))
+    assert obs.time == approx_time((tstop, tstop))
 
 
 @uses_iss
@@ -1105,7 +1105,7 @@ def test_early_vicar_header_without_a_keyword(missing: str, absent: str) -> None
 def test_from_file_early_vicar_header(tmp_path: pathlib.Path) -> None:
     obs = CassiniISS.from_file(write_vicar_image(tmp_path, keywords=_EARLY_VICAR))
     tstart = julian.tdb_from_iso(_EARLY_TIME)
-    assert obs.time == pytest.approx((tstart, tstart + 0.5), abs=1.e-6)
+    assert obs.time == approx_time((tstart, tstart + 0.5))
     assert obs.detector == 'WAC'
     assert obs.filter == 'GRN'
     assert obs.gain_mode == 3
@@ -1119,7 +1119,7 @@ def test_from_file_early_vicar_header_with_the_shutter_enabled(
     keywords = _EARLY_VICAR | {'SHUTTER_MODE_ID': 'ENABLED'}
     obs = CassiniISS.from_file(write_vicar_image(tmp_path, keywords=keywords))
     tstop = julian.tdb_from_iso(_EARLY_TIME)
-    assert obs.time == pytest.approx((tstop - 0.5, tstop), abs=1.e-6)
+    assert obs.time == approx_time((tstop - 0.5, tstop))
 
 ##########################################################################################
 # Clock counts of the early cruise images
@@ -1274,7 +1274,7 @@ def test_from_index_rows(index_snapshots: list[oops.observation.Snapshot]) -> No
 
 def test_from_index_times(index_snapshots: list[oops.observation.Snapshot]) -> None:
     tstart = julian.tdb_from_iso('2005-01-15T18:31:00.000')
-    assert index_snapshots[1].time == pytest.approx((tstart, tstart + 0.5))
+    assert index_snapshots[1].time == approx_time((tstart, tstart + 0.5))
 
 
 def test_from_index_pads_short_clock_counts(

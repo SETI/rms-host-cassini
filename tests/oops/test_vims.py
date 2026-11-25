@@ -12,7 +12,7 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines, write_table
+from conftest import approx_time, FakeSpice, FakeSpiceDB, pds3_lines, write_table
 from filecache import FCPath
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from pdsparser import Pds3Label
@@ -97,6 +97,8 @@ def write_pds3_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 3
     :func:`cube_bytes` describes.
     """
 
+    if backplanes is None:
+        backplanes = np.zeros((len(suffix_names), lines, samples), dtype='int32')
     data = cube_bytes(samples, bands, lines, backplanes)
     (directory / 'v0000000001_1.qub').write_bytes(bytes(RECORD_BYTES) + data)
 
@@ -277,8 +279,8 @@ def test_image_fovs(image_pair: Observations) -> None:
 def test_image_times(image_pair: Observations) -> None:
     (vis, ir) = image_pair
     tstart = julian.tdb_from_iso(START_TIME)
-    assert vis.time[0] == pytest.approx(tstart)
-    assert ir.time[0] == pytest.approx(tstart)
+    assert vis.time[0] == approx_time(tstart)
+    assert ir.time[0] == approx_time(tstart)
 
 
 def test_image_metadata(tmp_path: pathlib.Path) -> None:
@@ -357,7 +359,7 @@ def test_point_with_vis_on(tmp_path: pathlib.Path) -> None:
     assert type(vis) is oops.observation.Pixel
     assert vis.data.shape == (2, 96)
     assert vis.cadence.shape == (2,)
-    assert vis.time[0] == pytest.approx(ir.time[0])
+    assert vis.time[0] == approx_time(ir.time[0])
     assert vis.cadence.texp == pytest.approx(1. * vims._TIME_FACTOR)
 
 
@@ -445,13 +447,14 @@ def test_from_index_uses_backplane_sclk() -> None:
                     CORE_LINES=24, BACKPLANE_SCLK_START_COUNT='1294638282.666')
     [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
     assert ir.cadence.shape == (24,)
-    assert ir.time[0] == pytest.approx(1294638282.666)
+    # The start goes through a START_TIME written to the millisecond
+    assert ir.time[0] == pytest.approx(1294638282.666, rel=0., abs=1.e-3)
 
 
 def test_from_index_blank_backplane_sclk_uses_start_time() -> None:
     row = index_row(BACKPLANE_SCLK_START_COUNT='              ')
     [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
-    assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+    assert ir.time[0] == approx_time(julian.tdb_from_iso(START_TIME))
 
 
 def test_label_from_index_row_leaves_row_unchanged() -> None:
@@ -464,7 +467,7 @@ def test_from_index_image_matches_from_file(image_pair: Observations) -> None:
     [pair] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()])
     for (from_index, from_file) in zip(pair, image_pair, strict=True):
         assert type(from_index) is type(from_file)
-        assert from_index.time == pytest.approx(from_file.time)
+        assert from_index.time == approx_time(from_file.time)
         assert tuple(from_index.fov.uv_shape.vals) == tuple(from_file.fov.uv_shape.vals)
 
 
@@ -482,7 +485,7 @@ def test_from_index_point_assumes_full_buffer(mode: str, steps: int) -> None:
     assert vis is None
     assert type(ir) is oops.observation.Pixel
     assert ir.cadence.shape == (steps,)
-    assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+    assert ir.time[0] == approx_time(julian.tdb_from_iso(START_TIME))
 
 
 def test_from_index_point_with_vis_on() -> None:
@@ -490,7 +493,7 @@ def test_from_index_point_with_vis_on() -> None:
     [(vis, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
     assert type(vis) is oops.observation.Pixel
     assert vis.cadence.shape == (64,)
-    assert vis.time[0] == pytest.approx(ir.time[0])
+    assert vis.time[0] == approx_time(ir.time[0])
 
 
 def test_from_index_point_with_ir_off() -> None:
@@ -883,8 +886,8 @@ def test_time_backplane_gives_the_start(tmp_path: pathlib.Path) -> None:
     path = write_pds3_cube(tmp_path, suffix_names=_TIME_SUFFIXES,
                            backplanes=time_backplanes(seconds))
     (vis, ir) = CassiniVIMS.from_file(path)
-    assert ir.time[0] == pytest.approx(1000.)
-    assert vis.time[0] == pytest.approx(1000.)
+    assert ir.time[0] == approx_time(1000.)
+    assert vis.time[0] == approx_time(1000.)
 
 
 def test_time_backplane_with_only_its_first_time(tmp_path: pathlib.Path) -> None:
@@ -893,7 +896,7 @@ def test_time_backplane_with_only_its_first_time(tmp_path: pathlib.Path) -> None
     path = write_pds3_cube(tmp_path, suffix_names=_TIME_SUFFIXES,
                            backplanes=time_backplanes(seconds))
     (_, ir) = CassiniVIMS.from_file(path)
-    assert ir.time[0] == pytest.approx(1000.)
+    assert ir.time[0] == approx_time(1000.)
 
 
 def test_time_backplane_with_invalid_times(tmp_path: pathlib.Path) -> None:

@@ -93,6 +93,15 @@ def write_table(directory: pathlib.Path, stem: str,
     return path
 
 
+def approx_time(value: Any) -> Any:
+    """pytest.approx for times in seconds TDB: within a microsecond, whatever their size.
+
+    The default relative tolerance of pytest.approx allows minutes at mission epochs.
+    """
+
+    return pytest.approx(value, rel=0., abs=1.e-6)
+
+
 def iso_from_tdb(tdb: float) -> str:
     """The ISO date-time, to the millisecond, of a time in seconds TDB."""
 
