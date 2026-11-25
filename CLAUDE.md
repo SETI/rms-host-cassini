@@ -30,8 +30,9 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   `venv/` that the scripts expect; set `VENV` to use another.
 - The host contract that these hosts build on (`_index_rows`, `_set_path_attributes`,
   `_correct_label_text`) is unreleased: `pyproject.toml` installs rms-oops from its
-  `rf_261124_host_contract` branch. Give it a minimum version once a release has it. The `ObsArray` entry in `nitpick_ignore_regex` in `docs/conf.py`
-  stays: oops never documents that type alias.
+  `rf_261124_host_contract` branch. Give it a minimum version once a release has it.
+  The `ObsArray` entry in `nitpick_ignore_regex` in `docs/conf.py` stays: oops never
+  documents that type alias.
 - The type information is published in two stubs: `host_cassini/__init__.pyi` declares
   the three hosts in full, and `host_cassini/oops/__init__.pyi` re-exports them. `stubtest`
   checks them against the runtime in the check script and in CI, so adding, renaming or
@@ -45,9 +46,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
 - Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project and
-  patch targets in `codecov.yml`); it is at 94%, held down by `vims.py` at 85%. The ubuntu /
-  Python 3.13 CI job uploads to Codecov and fails if the upload fails. The upload
-  authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
+  patch targets in `codecov.yml`); it is at 99%, short only of lines that cannot run and
+  of the UVIS debugging checks. The ubuntu / Python 3.13 CI job uploads to Codecov and
+  fails if the upload fails. The upload authenticates through GitHub OIDC (`use_oidc`),
+  so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
   fakes for every test, and gives each test its own copy of the oops path, frame and body
   registries, so new tests get this automatically. A test that tracks a target with
@@ -89,8 +91,9 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - `_Cassini` in `host_cassini/oops/_cassini.py` is never instantiated; all its state
   lives in class attributes. CK and SPK kernels load lazily by "month": the 1997-10-01 to
   2017-10-01 mission is split into 240 equal periods, each padded by `SLOP`. Before `TOUR`
-  the Jupiter system is used, after it the Saturn system. The kernels of a month are
-  furnished in list order, the later taking precedence, and the cruise C kernels of
+  the Jupiter system is used, after it the Saturn system. Whatever order the months load
+  in, the furnished kernels of each kind keep the order of the full list kept in
+  `CK_KERNELS` or `SPK_KERNELS`, the later taking precedence, and the cruise C kernels of
   `_CRUISE_CKS`, which the SPICE database does not list, come first.
 - Running anything needs a SPICE kernel database through `spicedb` (`SPICE_PATH`, or
   `$OOPS_RESOURCES/SPICE`, plus `SPICE_SQLITE_DB_NAME`). It must contain the kernel sets

@@ -3,6 +3,7 @@
 ##########################################################################################
 """Tests for the mission-level support in host_cassini.oops._cassini."""
 
+import pathlib
 import re
 from typing import Any
 
@@ -105,44 +106,53 @@ def _month_lists(contents: dict[int, list[FakeKernel]]) -> np.ndarray:
     return lists
 
 
+def _load(t0: float, t1: float, loaded: np.ndarray, lists: np.ndarray,
+          kernel_dict: dict[str, Any]) -> None:
+    # load_kernels, given every kernel of the monthly lists in the order of the months
+    kernels: list[FakeKernel] = []
+    for entry in lists:
+        kernels += [kernel for kernel in entry if kernel not in kernels]
+    _Cassini.load_kernels(t0, t1, loaded, kernels, lists, kernel_dict)
+
+
 def test_load_kernels_loads_only_the_month() -> None:
     lists = _month_lists({9: [FakeKernel('a.bc')], 10: [FakeKernel('b.bc')],
                           11: [FakeKernel('c.bc')]})
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists, {})
     assert list(np.nonzero(loaded)[0]) == [10]
 
 
 def test_load_kernels_furnishes_only_the_month(fake_spicedb: FakeSpiceDB) -> None:
     lists = _month_lists({9: [FakeKernel('a.bc')], 10: [FakeKernel('b.bc')],
                           11: [FakeKernel('c.bc')]})
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
     assert fake_spicedb.furnished() == ['b.bc']
 
 
 def test_load_kernels_furnishes_each_kernel_once(fake_spicedb: FakeSpiceDB) -> None:
     shared = FakeKernel('shared.bc')
     lists = _month_lists({10: [shared, FakeKernel('a.bc')], 11: [shared]})
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(11.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(11.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
     assert fake_spicedb.furnished() == ['shared.bc', 'a.bc']
 
 
 def test_load_kernels_records_furnished_kernels() -> None:
     kernel = FakeKernel('a.bc')
     kernel_dict: dict[str, Any] = {}
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'),
-                          _month_lists({10: [kernel]}), kernel_dict)
+    _load(tdb_in_month(10.5), tdb_in_month(10.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'),
+          _month_lists({10: [kernel]}), kernel_dict)
     assert kernel_dict == {'a.bc': kernel}
 
 
 def test_load_kernels_skips_kernels_already_furnished(fake_spicedb: FakeSpiceDB) -> None:
     kernel = FakeKernel('a.bc')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'),
-                          _month_lists({10: [kernel]}), {'a.bc': kernel})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'),
+          _month_lists({10: [kernel]}), {'a.bc': kernel})
     assert fake_spicedb.furnished() == []
 
 
@@ -150,14 +160,14 @@ def test_load_kernels_skips_months_already_loaded(fake_spicedb: FakeSpiceDB) -> 
     lists = _month_lists({10: [FakeKernel('a.bc')], 11: [FakeKernel('b.bc')]})
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
     loaded[10] = True
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(11.5), loaded, lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(11.5), loaded, lists, {})
     assert fake_spicedb.furnished() == ['b.bc']
 
 
 def test_load_kernels_marks_a_month_with_no_kernels_loaded() -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded,
+          _month_lists({}), {})
     assert loaded[10]
 
 
@@ -165,33 +175,33 @@ def test_load_kernels_does_not_repeat_a_loaded_month(fake_spicedb: FakeSpiceDB) 
     lists = _month_lists({10: [FakeKernel('a.bc')]})
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
     kernel_dict: dict[str, Any] = {}
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
-                          kernel_dict)
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
+          kernel_dict)
     kernel_dict.clear()
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
-                          kernel_dict)
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
+          kernel_dict)
     assert fake_spicedb.furnished() == ['a.bc']
 
 
 def test_load_kernels_covers_a_time_range() -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(13.5), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(10.5), tdb_in_month(13.5), loaded,
+          _month_lists({}), {})
     assert list(np.nonzero(loaded)[0]) == [10, 11, 12, 13]
 
 
 @pytest.mark.parametrize('month', [-10.0, 250.0], ids=['before-mission', 'after-mission'])
 def test_load_kernels_ignores_times_outside_mission(month: float) -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(month), tdb_in_month(month), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(month), tdb_in_month(month), loaded,
+          _month_lists({}), {})
     assert not loaded.any()
 
 
 def test_load_kernels_clips_to_last_month() -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(239.5), tdb_in_month(239.5), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(239.5), tdb_in_month(239.5), loaded,
+          _month_lists({}), {})
     assert list(np.nonzero(loaded)[0]) == [239]
 
 
@@ -204,8 +214,9 @@ def test_load_kernels_clips_to_last_month() -> None:
 def test_load_methods_use_their_own_kernel_tables(method: str, args: tuple[float, ...],
                                                   kind: str) -> None:
     other = 'SPK' if kind == 'CK' else 'CK'
-    _Cassini.initialize_kernels([kernel_for_months('k', 20.1, 20.2)],
-                                getattr(_Cassini, kind + '_LIST'))
+    kernels = [kernel_for_months('k', 20.1, 20.2)]
+    setattr(_Cassini, kind + '_KERNELS', kernels)
+    _Cassini.initialize_kernels(kernels, getattr(_Cassini, kind + '_LIST'))
     getattr(_Cassini, method)(*args)
     assert list(getattr(_Cassini, kind + '_DICT')) == ['k']
     assert not getattr(_Cassini, other + '_LOADED').any()
@@ -554,6 +565,22 @@ def test_cruise_kernels_are_listed_in_their_directory() -> None:
     assert kernels[0].filespec == 'Cassini/CK-cruise/97288_98002rc.bc'
 
 
+def test_cruise_kernels_resolve_under_the_spice_path(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # spicedb resolves each filespec against the SPICE root that SPICE_PATH gives
+    monkeypatch.setenv('SPICE_PATH', str(tmp_path))
+    monkeypatch.setattr(spicedb, 'SPICE_PATH', None)
+    monkeypatch.setattr(spicedb, 'SPICE_FILECACHE_PREFIX', None)
+    expected = []
+    for kernel in _cruise_kernels():
+        path = tmp_path / 'Cassini' / 'CK-cruise' / kernel.filespec.rpartition('/')[2]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'')
+        expected.append(path)
+    prefix = spicedb.get_spice_filecache_prefix()
+    assert [prefix.retrieve(kernel.filespec) for kernel in _cruise_kernels()] == expected
+
+
 def test_cruise_kernels_reach_a_month_they_cover() -> None:
     _Cassini.initialize()
     assert _filespecs(_Cassini.CK_LIST[_CRUISE_MID_1999]) == [
@@ -590,19 +617,46 @@ def test_reconstructed_kernel_is_furnished_after_a_new_cruise_kernel(
     assert fake_spicedb.furnished()[-1] == _RECONSTRUCTED_2003.filespec
 
 
+def _load_order(fake_spicedb: FakeSpiceDB) -> list[str]:
+    # The furnished filespecs from first to last, each placed where it was furnished last
+    order: list[str] = []
+    for filespec in fake_spicedb.furnished():
+        if filespec in order:
+            order.remove(filespec)
+        order.append(filespec)
+    return order
+
+
+def test_reconstructed_kernel_wins_after_a_month_with_no_new_kernel(
+        fake_spicedb: FakeSpiceDB) -> None:
+    # November 2003 loads first; July then adds a cruise kernel that also covers
+    # September, and September, which brings no new kernel, loads last
+    fake_spicedb.ck_kernels = {'CAS-CK-RECONSTRUCTED': [_RECONSTRUCTED_2003]}
+    _Cassini.initialize()
+    for iso in ('2003-11-15T00:00:00', '2003-07-20T00:00:00', '2003-09-15T00:00:00'):
+        _Cassini.load_ck(julian.tdb_from_iso(iso))
+    tdb = julian.tdb_from_iso('2003-09-15T00:00:00')
+    covering = {kernel.filespec for kernel in _cruise_kernels() + [_RECONSTRUCTED_2003]
+                if julian.tdb_from_iso(kernel.start_time) <= tdb
+                <= julian.tdb_from_iso(kernel.stop_time)}
+    assert [filespec for filespec in _load_order(fake_spicedb)
+            if filespec in covering][-1] == _RECONSTRUCTED_2003.filespec
+
+
 def test_load_kernels_furnishes_again_after_a_new_kernel(
         fake_spicedb: FakeSpiceDB) -> None:
-    (old, new) = (FakeKernel('old.bc'), FakeKernel('new.bc'))
-    lists = _month_lists({10: [old], 11: [new, old]})
+    # The later kernel, furnished for month 10, follows the new kernel of month 11 in the
+    # full list, so it is furnished again although month 11 does not list it
+    (early, later) = (FakeKernel('early.bc'), FakeKernel('later.bc'))
     _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(11.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
-    assert fake_spicedb.furnished() == ['old.bc', 'new.bc', 'old.bc']
+                          np.zeros(_Cassini.MONTHS, dtype='bool'), [early, later],
+                          _month_lists({10: [later], 11: [early]}), {})
+    assert fake_spicedb.furnished() == ['later.bc', 'early.bc', 'later.bc']
 
 
 def test_load_kernels_furnishes_in_order(fake_spicedb: FakeSpiceDB) -> None:
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'),
-                          _month_lists({10: [FakeKernel('a.bc')]}), {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), np.zeros(_Cassini.MONTHS, dtype='bool'),
+          _month_lists({10: [FakeKernel('a.bc')]}), {})
     assert fake_spicedb.named('furnish_kernels')[0][1] == {'fast': False}
 
 ##########################################################################################

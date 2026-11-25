@@ -105,11 +105,15 @@ class _Cassini:
             deciding which kernels apply to it.
         CK_LOADED (numpy.ndarray): Boolean array with one flag per month, True if the C
             kernels for that month have been furnished.
+        CK_KERNELS (list[KernelInfo]): Every C kernel that the months draw on, in load
+            order.
         CK_LIST (numpy.ndarray): Object array holding, for each month, the list of
             KernelInfo objects for the C kernels needed within that month.
         CK_DICT (dict[str, KernelInfo]): The furnished C kernels, keyed by filespec.
         SPK_LOADED (numpy.ndarray): Boolean array with one flag per month, True if the SP
             kernels for that month have been furnished.
+        SPK_KERNELS (list[KernelInfo]): Every SP kernel that the months draw on, in load
+            order.
         SPK_LIST (numpy.ndarray): Object array holding, for each month, the list of
             KernelInfo objects for the SP kernels needed within that month.
         SPK_DICT (dict[str, KernelInfo]): The furnished SP kernels, keyed by filespec.
@@ -138,12 +142,14 @@ class _Cassini:
     # geometry calculation involving Cassini, a quick call to load_ck(time) or
     # load_spk(time) will ensure that the information is available.
 
-    CK_LOADED = np.zeros(MONTHS, dtype='bool')      # True if month was loaded
-    CK_LIST   = np.empty(MONTHS, dtype='object')    # Kernels needed by month
-    CK_DICT   = {}      # Dictionary keyed by filespec returns kernel info object, but
+    CK_LOADED  = np.zeros(MONTHS, dtype='bool')     # True if month was loaded
+    CK_KERNELS = []                                 # Every kernel, in load order
+    CK_LIST    = np.empty(MONTHS, dtype='object')   # Kernels needed by month
+    CK_DICT    = {}     # Dictionary keyed by filespec returns kernel info object, but
                         # only if loaded.
 
     SPK_LOADED  = np.zeros(MONTHS, dtype='bool')
+    SPK_KERNELS = []
     SPK_LIST    = np.empty(MONTHS, dtype='object')
     SPK_DICT    = {}
 
@@ -203,6 +209,7 @@ class _Cassini:
             kernels = spicedb.select_spk(-82, name='CAS-SPK-' + spk,
                                          time=(_Cassini.START_TIME, _Cassini.STOP_TIME),
                                          asof=asof)
+            _Cassini.SPK_KERNELS = kernels
             _Cassini.initialize_kernels(kernels, _Cassini.SPK_LIST)
 
         ck = ck.upper()
@@ -226,6 +233,7 @@ class _Cassini:
                                                      _Cassini.STOP_TIME),
                                                asof=asof))
 
+            _Cassini.CK_KERNELS = kernels
             _Cassini.initialize_kernels(kernels, _Cassini.CK_LIST)
 
         # Load extra kernels if necessary
@@ -245,10 +253,12 @@ class _Cassini:
         _Cassini.loaded_instruments = []
 
         _Cassini.CK_LOADED = np.zeros(_Cassini.MONTHS, dtype='bool')
+        _Cassini.CK_KERNELS = []
         _Cassini.CK_LIST = np.empty(_Cassini.MONTHS, dtype='object')
         _Cassini.CK_DICT = {}
 
         _Cassini.SPK_LOADED = np.zeros(_Cassini.MONTHS, dtype='bool')
+        _Cassini.SPK_KERNELS = []
         _Cassini.SPK_LIST = np.empty(_Cassini.MONTHS, dtype='object')
         _Cassini.SPK_DICT = {}
 
@@ -263,8 +273,8 @@ class _Cassini:
         Parameters:
             t (float): The time in seconds.
         """
-        _Cassini.load_kernels(t, t, _Cassini.CK_LOADED, _Cassini.CK_LIST,
-                              _Cassini.CK_DICT)
+        _Cassini.load_kernels(t, t, _Cassini.CK_LOADED, _Cassini.CK_KERNELS,
+                              _Cassini.CK_LIST, _Cassini.CK_DICT)
 
     @staticmethod
     def load_cks(t0, t1):
@@ -278,8 +288,8 @@ class _Cassini:
             t0 (float): The start time in seconds.
             t1 (float): The stop time in seconds.
         """
-        _Cassini.load_kernels(t0, t1, _Cassini.CK_LOADED, _Cassini.CK_LIST,
-                              _Cassini.CK_DICT)
+        _Cassini.load_kernels(t0, t1, _Cassini.CK_LOADED, _Cassini.CK_KERNELS,
+                              _Cassini.CK_LIST, _Cassini.CK_DICT)
 
     @staticmethod
     def load_spk(t):
@@ -290,8 +300,8 @@ class _Cassini:
         Parameters:
             t (float): The time in seconds.
         """
-        _Cassini.load_kernels(t, t, _Cassini.SPK_LOADED, _Cassini.SPK_LIST,
-                              _Cassini.SPK_DICT)
+        _Cassini.load_kernels(t, t, _Cassini.SPK_LOADED, _Cassini.SPK_KERNELS,
+                              _Cassini.SPK_LIST, _Cassini.SPK_DICT)
 
     @staticmethod
     def load_spks(t0, t1):
@@ -306,25 +316,29 @@ class _Cassini:
             t0 (float): The start time in seconds.
             t1 (float): The stop time in seconds.
         """
-        _Cassini.load_kernels(t0, t1, _Cassini.SPK_LOADED, _Cassini.SPK_LIST,
-                              _Cassini.SPK_DICT)
+        _Cassini.load_kernels(t0, t1, _Cassini.SPK_LOADED, _Cassini.SPK_KERNELS,
+                              _Cassini.SPK_LIST, _Cassini.SPK_DICT)
 
     @staticmethod
-    def load_kernels(t0, t1, loaded, lists, kernel_dict):
+    def load_kernels(t0, t1, loaded, kernels, lists, kernel_dict):
         """Furnish every kernel in the given lists that applies within a time range.
 
-        The kernels of a month are furnished in the order of its list, so that a later
-        kernel takes precedence over an earlier one wherever both cover a time. A kernel
-        that an earlier month furnished is furnished again after the first kernel of the
-        month that is new, so that the order of the list holds across months too.
+        Whatever order the months are loaded in, the furnished kernels stay in the order
+        of `kernels`, so that a later kernel takes precedence over an earlier one wherever
+        both cover a time. When a month brings kernels that are new, every furnished
+        kernel from the first new one onward in `kernels` is furnished again, in that
+        order.
 
         Parameters:
             t0 (float): The start time in seconds TDB.
             t1 (float): The stop time in seconds TDB.
             loaded (numpy.ndarray): Boolean array with one flag per month, True if that
                 month's kernels have already been furnished; it is updated in place.
+            kernels (list[KernelInfo]): Every kernel that the months draw on, in load
+                order.
             lists (numpy.ndarray): Object array holding, for each month of the mission,
-                the list of KernelInfo objects needed within that month.
+                the list of KernelInfo objects needed within that month, in the order of
+                `kernels`.
             kernel_dict (dict[str, KernelInfo]): The furnished KernelInfo objects, keyed
                 by filespec; it is updated in place.
         """
@@ -337,18 +351,20 @@ class _Cassini:
         m2 = min(m2, _Cassini.MONTHS - 1)
 
         # Load any months not already loaded. SPICE gives precedence to the kernel
-        # furnished last, so a kernel already furnished that follows a new one in the
-        # month's list is furnished again after it; otherwise a cruise C kernel new to
-        # this month would take precedence over the reconstructed kernel that an earlier
-        # month furnished (issue 42).
+        # furnished last, so every furnished kernel that follows a new one in the full
+        # list is furnished again after it; otherwise a cruise C kernel new to this month
+        # would take precedence over the reconstructed kernel that an earlier month
+        # furnished, even in a later month that brings no new kernel (issue 42).
         for m in range(m1, m2+1):
             if not loaded[m]:
-                new = [k for (k, kernel) in enumerate(lists[m])
+                new = [kernel for kernel in lists[m]
                        if kernel.filespec not in kernel_dict]
                 if new:
-                    kernels = lists[m][new[0]:]
-                    spicedb.furnish_kernels(kernels, fast=False)
-                    kernel_dict.update((kernel.filespec, kernel) for kernel in kernels)
+                    kernel_dict.update((kernel.filespec, kernel) for kernel in new)
+                    first = [kernel.filespec for kernel in kernels].index(new[0].filespec)
+                    spicedb.furnish_kernels([kernel for kernel in kernels[first:]
+                                             if kernel.filespec in kernel_dict],
+                                            fast=False)
                 loaded[m] = True
 
     ######################################################################################
@@ -709,6 +725,33 @@ def _file_errors(filepath):
             raise
         raise oops.host.HostFormatError(f'{filepath}: {type(err).__name__}: {err}'
                                         ) from err
+
+
+def _read_label(host, fileinfo, *, astrometry, pds3_options):
+    """The parsed PDS3 label of a Cassini product, read by its host.
+
+    Parameters:
+        host (type): The host class, whose correction of label text is applied.
+        fileinfo (str | pathlib.Path | FCPath | Pds3Label): The path to the label, or the
+            label already parsed, which is returned as it is.
+        astrometry (bool): True if the observations are for astrometry only.
+        pds3_options (dict[str, Any]): The options for the PDS3 label parser.
+
+    Returns:
+        Pds3Label: The parsed label.
+
+    Raises:
+        PdsHostError: If the label cannot be parsed with the options given, or holds a
+            value that cannot be converted, such as the date 2005-02-30. The message
+            names the label.
+    """
+
+    try:
+        return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
+                                   pds3_options=pds3_options)
+    except oops.OopsValueError as err:
+        raise oops.host.PdsHostError(f'cannot parse the PDS3 label {fileinfo}: {err}'
+                                     ) from err
 
 
 def _is_spice_error(err):

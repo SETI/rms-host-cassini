@@ -15,7 +15,7 @@ import oops
 from oops.host import HostFormatError, HostIndexError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
                        _file_errors, _metadata_subfields, _pds3_options_with_defaults,
-                       _without_nulls)
+                       _read_label, _without_nulls)
 
 __all__ = ['CassiniUVIS']
 
@@ -246,8 +246,8 @@ class CassiniUVIS(oops.Host):
                 interpreted: if the label lacks an item that the observation needs, gives
                 an invalid one or describes an unsupported option, or if the data file
                 does not hold the number of values that the label gives. Subclass
-                PdsHostError is raised if the label cannot be parsed. Each message names
-                the file.
+                PdsHostError is raised if the label cannot be parsed or holds a value
+                that cannot be converted. Each message names the file.
             OopsIndexError: If an index in `select` is out of range.
             OopsTypeError: If `select` has an invalid type.
             OopsValueError: If `select` is a string.
@@ -275,12 +275,8 @@ class CassiniUVIS(oops.Host):
 
         given = fileinfo.filepath if isinstance(fileinfo, Pds3Label) else fileinfo
         with _file_errors(given):
-            fileinfo = CassiniUVIS._read_fileinfo(fileinfo, formats='P',
-                                                  astrometry=astrometry,
-                                                  pds3_options=pds3_options)
-            if not CassiniUVIS._detect_in_pds3(fileinfo):
-                raise oops.Host._no_host_error([CassiniUVIS], 'PDS3 label',
-                                               fileinfo.filepath)
+            fileinfo = _read_label(CassiniUVIS, fileinfo, astrometry=astrometry,
+                                   pds3_options=pds3_options)
             label_path = FCPath(fileinfo.filepath)
             label = fileinfo.as_dict()
             key = next((key for key in _PRODUCT_OBJECTS if key in label), 'SPECTRUM')

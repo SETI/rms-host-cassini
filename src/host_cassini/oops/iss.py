@@ -15,7 +15,7 @@ from vicar     import VicarImage, VicarLabel
 import oops
 from ._cassini import (_Cassini, _CMATRIX_ROTATION, _POINTING_SUBFIELDS, _file_errors,
                        _fix_cassini_ring_target, _pds3_options_with_defaults,
-                       _sclk_from_tdb, _tdb_from_sclk, _without_nulls)
+                       _read_label, _sclk_from_tdb, _tdb_from_sclk, _without_nulls)
 
 __all__ = ['CassiniISS']
 
@@ -271,7 +271,9 @@ _HEADER_TIME = re.compile(r'\d{4}-(?:(?!000)\d{3}|\d{2}-\d{2})'
 # The corrections to the text of an ISS product label, as (pattern, replacement), which
 # CassiniISS._correct_label_text applies before the parser reads the label. Each is for
 # a defect that the strict parser refuses in the current archive, and changes only the
-# text that has the defect. The count of each is from a scan of every current label.
+# text that has the defect. The count given for each is the number of current labels, in
+# a scan of all of them, whose first defect under strict is that one; a label can have
+# more than one defect.
 _LABEL_CORRECTIONS = (
     # A pointer that names a file in the volume's label directory by a path, which PDS3
     # does not allow, in 232,524 raw COISS_2xxx labels, such as N1601512976_1.LBL of
@@ -469,10 +471,10 @@ class CassiniISS(oops.Host):
                 interpreted: if it lacks an item that the observation needs or gives an
                 invalid one, if the image file ends before its array, or if the array is
                 not the size that the label gives. Subclass PdsHostError is raised if the
-                label cannot be parsed, and VicarHostError if the VICAR content of the
-                image file cannot be read, as for an image of more than one band. Each
-                message names the file.
-            WrongHostError: If the file, or the parsed content given, is not of a Cassini
+                label cannot be parsed or holds a value that cannot be converted, and
+                VicarHostError if the VICAR content of the image file cannot be read, as
+                for an image of more than one band. Each message names the file.
+            WrongHostError: If the file, or the VICAR header given, is not of a Cassini
                 ISS image.
         """
 
@@ -864,7 +866,8 @@ class CassiniISS(oops.Host):
 
         Raises:
             HostFormatError: If the array is not the size that the label gives.
-            WrongHostError: If the content is not of a Cassini ISS image.
+            WrongHostError: If the file, or the VICAR header given, is not of a Cassini
+                ISS image.
         """
 
         # A VICAR header, given as content or read here with the loose VICAR reader,
@@ -888,10 +891,8 @@ class CassiniISS(oops.Host):
                 header = VicarImage(image_path, strict=False)
             return (None, header, header.data_2d, image_path)
 
-        label = CassiniISS._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
-                                          pds3_options=pds3_options)
-        if not CassiniISS._detect_in_pds3(label):
-            raise oops.Host._no_host_error([CassiniISS], 'PDS3 label', label.filepath)
+        label = _read_label(CassiniISS, fileinfo, astrometry=astrometry,
+                            pds3_options=pds3_options)
         image_path = FCPath(label.filepath).parent / label['^IMAGE']
         if astrometry:
             return (label, None, None, image_path)

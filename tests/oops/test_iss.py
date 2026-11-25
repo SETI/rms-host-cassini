@@ -398,9 +398,11 @@ def test_snapshot_pointing_subfields() -> None:
     assert obs.spice_frame_is_frozen is False
 
 
+@uses_iss
 def test_ck_object_clock_matches_ck_sclk_id() -> None:
     # cspyce.ckmeta derives the clock of a CK object without any kernel
-    assert cspyce.ckmeta(-82000, 'SCLK') == -82
+    obs = snapshot()
+    assert cspyce.ckmeta(obs.ck_object_id, 'SCLK') == obs.ck_sclk_id
 
 
 @uses_iss
@@ -847,13 +849,6 @@ def test_from_file_rejects_another_hosts_label(tmp_path: pathlib.Path) -> None:
 
 
 @uses_iss_file
-def test_from_file_rejects_another_hosts_parsed_label(tmp_path: pathlib.Path) -> None:
-    path = write_pds3_image(tmp_path, INSTRUMENT_HOST_NAME='GALILEO ORBITER')
-    with pytest.raises(oops.host.WrongHostError, match='not a Cassini ISS PDS3 label'):
-        CassiniISS.from_file(Pds3Label(path), astrometry=True)
-
-
-@uses_iss_file
 def test_from_file_rejects_another_hosts_image(tmp_path: pathlib.Path) -> None:
     path = write_vicar_image(tmp_path, INSTRUMENT_HOST_NAME='GALILEO ORBITER')
     with pytest.raises(oops.host.WrongHostError, match='not a Cassini ISS VICAR file'):
@@ -895,6 +890,15 @@ def test_from_file_label_that_cannot_be_parsed(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, extra_lines=['NOT A STATEMENT'])
     with pytest.raises(oops.host.PdsHostError,
                        match=re.escape(f'cannot parse the PDS3 label {FCPath(path)}')):
+        CassiniISS.from_file(path, astrometry=True)
+
+
+@uses_iss_file
+def test_from_file_label_value_that_cannot_be_converted(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_image(tmp_path, extra_lines=['TEST_TIME = 2005-02-30T00:00:00'])
+    with pytest.raises(oops.host.PdsHostError,
+                       match=re.escape(f'cannot parse the PDS3 label {path}: day is out '
+                                       'of range for month')):
         CassiniISS.from_file(path, astrometry=True)
 
 
@@ -1284,6 +1288,15 @@ def test_from_index_pads_short_clock_counts(
         '1484506647.120', '1484506649.000']
     assert [obs.dict['SPACECRAFT_CLOCK_STOP_COUNT'] for obs in index_snapshots] == [
         '1484506648.122', '1484506649.500']
+
+
+def test_from_index_keeps_the_early_cruise_counts(tmp_path: pathlib.Path) -> None:
+    # Unlike a label or an image file, an early cruise index row gives its own counts
+    path = write_index(tmp_path, IMAGE_NUMBER=['1294562651', '1484506649'],
+                       SPACECRAFT_CLOCK_START_COUNT=['1294560651.000', '1484506649'],
+                       SPACECRAFT_CLOCK_STOP_COUNT=['1294562651.000', '1484506649.5'])
+    obs = next(CassiniISS.from_index(path))
+    assert obs.spacecraft_clock_start_count == '1294560651.000'
 
 
 def test_from_index_dict_is_the_row(

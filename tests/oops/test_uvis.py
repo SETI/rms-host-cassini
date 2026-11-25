@@ -584,9 +584,10 @@ _FILES = ['DATA/D2005_001/FUV2005_001_00_00.LBL', 'DATA/D2005_001/HSP2005_001_00
           'DATA/D2005_001/HDAC2005_001_00_00.LBL', 'DATA/D2005_001/EUV2005_001_00_00.LBL']
 
 
-def write_uvis_index(directory: pathlib.Path) -> pathlib.Path:
+def write_uvis_index(directory: pathlib.Path, **changes: list[Any]) -> pathlib.Path:
     """Write a four-row UVIS index and its supplement, the supplement in another order;
-    return the index label's path."""
+    return the index label's path. `changes` replace columns of the supplement, their
+    values in the order of the index."""
 
     index = write_table(directory, 'COUVIS_0001_index',
                         {'FILE_NAME': ['/COUVIS_0001/' + name for name in _FILES]})
@@ -612,6 +613,7 @@ def write_uvis_index(directory: pathlib.Path) -> pathlib.Path:
         'MAXIMUM_BAND_NUMBER'       : [7, 0, 0, 105],
         'BAND_BINNING_FACTOR'       : [1, 1, 1, 1],
     }
+    supplement.update(changes)
     write_table(directory, 'COUVIS_0001_supplemental_index',
                 {name: [values[k] for k in order]
                  for (name, values) in supplement.items()})
@@ -650,6 +652,28 @@ def test_from_index_spectrum(tmp_path: pathlib.Path,
     obs = CassiniUVIS.from_file(write_spectrum(tmp_path), astrometry=True)
     assert index_observations[3].shape == obs.shape
     assert index_observations[3].line_window == obs.line_window
+
+
+def test_from_index_qube_window_and_binning(tmp_path: pathlib.Path) -> None:
+    path = write_uvis_index(tmp_path, WINDOW_MINIMUM_LINE_NUMBER=[8, 0, 0, 16],
+                            WINDOW_MAXIMUM_LINE_NUMBER=[39, 0, 0, 31],
+                            LINE_BINNING_FACTOR=[4, 1, 1, 16],
+                            BAND_BINNING_FACTOR=[2, 1, 1, 1])
+    obs = next(CassiniUVIS.from_index(path))
+    assert tuple(obs.fov.uv_shape.vals) == (1, 8)
+
+
+@pytest.mark.parametrize(('line0', 'line1', 'line_bin'), [(0, 63, 64), (20, 20, 1)],
+                         ids=['full-extent', 'one-line'])
+def test_from_index_spectrum_window(tmp_path: pathlib.Path, line0: int, line1: int,
+                                    line_bin: int) -> None:
+    # The pixel of a spectrum spans its binned window of the detector lines
+    path = write_uvis_index(tmp_path, WINDOW_MINIMUM_LINE_NUMBER=[0, 0, 0, line0],
+                            WINDOW_MAXIMUM_LINE_NUMBER=[63, 0, 0, line1],
+                            LINE_BINNING_FACTOR=[64, 1, 1, line_bin])
+    obs = list(CassiniUVIS.from_index(path))[3]
+    (u_scale, v_scale) = CassiniUVIS._FOVS[('EUV', 'HIGH_RESOLUTION', 64)].uv_scale.vals
+    assert tuple(obs.fov.uv_scale.vals) == pytest.approx((u_scale, v_scale * line_bin))
 
 
 def test_from_index_subfields(index_observations: list[Any]) -> None:
@@ -691,12 +715,6 @@ def test_host_from_index_dispatches_to_uvis(tmp_path: pathlib.Path) -> None:
 ##########################################################################################
 # Labels that describe an unsupported product
 ##########################################################################################
-
-
-def test_rejects_another_hosts_parsed_label(tmp_path: pathlib.Path) -> None:
-    label = Pds3Label(write_qube(tmp_path, INSTRUMENT_ID='VIMS'))
-    with pytest.raises(oops.host.WrongHostError, match='not a Cassini UVIS PDS3 label'):
-        CassiniUVIS.from_file(label)
 
 
 @pytest.mark.parametrize(('old', 'new', 'message'), [

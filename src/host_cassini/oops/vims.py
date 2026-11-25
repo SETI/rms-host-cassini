@@ -23,7 +23,8 @@ import oops
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION, _file_errors,
                        _fix_cassini_ring_target, _metadata_subfields,
-                       _pds3_options_with_defaults, _tdb_from_sclk, _without_nulls)
+                       _pds3_options_with_defaults, _read_label, _tdb_from_sclk,
+                       _without_nulls)
 
 __all__ = ['CassiniVIMS']
 
@@ -120,7 +121,9 @@ _CORE_ITEMS_FROM_MODE = {'POINT'      : (1, _INDEX_BANDS, 64),
 # The corrections to the text of a VIMS product label, as (pattern, replacement), which
 # CassiniVIMS._correct_label_text applies before the parser reads the label. Each is for
 # a defect that the strict parser refuses in the current archive, and changes only the
-# text that has the defect. The count of each is from a scan of every current label.
+# text that has the defect. The count given for each is the number of current labels, in
+# a scan of all of them, whose first defect under strict is that one; a label can have
+# more than one defect.
 _LABEL_CORRECTIONS = (
     # An unquoted N/A inside a set, in 189,658 labels, such as v1295207538_1.lbl of
     # COVIMS_0001:
@@ -363,10 +366,14 @@ class CassiniVIMS(oops.Host):
             `label_abspath` and `label_dict`, the parsed detached label, when it was
             read; `header_dict`, the parsed attached label of the cube, when `fileinfo`
             is the cube; and `data` unless `astrometry` is True. `label_dict` and
-            `header_dict` are as the parser gives them; `dict` is whichever of them was
-            read without the values that PDS3 writes for no value ("UNK", "UNKNOWN",
-            "N/A", "NULL", "NOT APPLICABLE", "---" or the empty string), each of which is
-            left out, or None in a list.
+            `header_dict` are as the parser gives them. `dict` is whichever of them was
+            read, in a standard form, without the values that PDS3 writes for no value
+            ("UNK", "UNKNOWN", "N/A", "NULL", "NOT APPLICABLE", "---" or the empty
+            string), each of which is left out, or None in a list. In that form, the
+            cube's description is under both "QUBE" and "SPECTRAL_QUBE", the items of a
+            cube's own label that do not describe its structure are also at the top
+            level, and a detached label also holds the items of the VIMS format files,
+            such as CORE_NAME.
 
         Raises:
             FileNotFoundError: If the file, or the cube that a label read without
@@ -375,7 +382,8 @@ class CassiniVIMS(oops.Host):
                 the label lacks an item that the observation needs, gives an invalid one
                 or describes an unsupported option, or if the cube ends before the array
                 that its label describes. Subclass PdsHostError is raised if the label
-                cannot be parsed. Each message names the file.
+                cannot be parsed or holds a value that cannot be converted. Each message
+                names the file.
             WrongHostError: If the file is not a Cassini VIMS file.
         """
 
@@ -401,12 +409,8 @@ class CassiniVIMS(oops.Host):
 
         given = fileinfo.filepath if isinstance(fileinfo, Pds3Label) else fileinfo
         with _file_errors(given):
-            fileinfo = CassiniVIMS._read_fileinfo(fileinfo, formats='P',
-                                                  astrometry=astrometry,
-                                                  pds3_options=pds3_options)
-            if not CassiniVIMS._detect_in_pds3(fileinfo):
-                raise oops.Host._no_host_error([CassiniVIMS], 'PDS3 label',
-                                               fileinfo.filepath)
+            fileinfo = _read_label(CassiniVIMS, fileinfo, astrometry=astrometry,
+                                   pds3_options=pds3_options)
 
             # A detached label names its cube; a cube holds its own label. The cube's
             # label holds most items inside its QUBE object, which the standard form
@@ -414,7 +418,6 @@ class CassiniVIMS(oops.Host):
             content = fileinfo.as_dict()
             label = CassiniVIMS._standard_label(dict(content))
             subfields = _metadata_subfields(_without_nulls(label))
-            subfields['dict'] = _without_nulls(content)
             filepath = FCPath(fileinfo.filepath)
             if filepath.suffix.lower() == '.lbl':
                 (image_path, label_path) = (filepath.parent / content['^QUBE'], filepath)
