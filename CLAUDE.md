@@ -46,10 +46,9 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
 - Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project and
-  patch targets in `codecov.yml`); it is at 99%, short only of lines that cannot run and
-  of the UVIS debugging checks. The ubuntu / Python 3.13 CI job uploads to Codecov and
-  fails if the upload fails. The upload authenticates through GitHub OIDC (`use_oidc`),
-  so it needs no `CODECOV_TOKEN` secret.
+  patch targets in `codecov.yml`); it is at 100%, line and branch. The ubuntu /
+  Python 3.13 CI job uploads to Codecov and fails if the upload fails. The upload
+  authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
   fakes for every test, and gives each test its own copy of the oops path, frame and body
   registries, so new tests get this automatically. A test that tracks a target with

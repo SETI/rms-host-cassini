@@ -66,19 +66,16 @@ _TIME_FACTOR = 1.01725
 _IR_NORMAL_PIXEL  = 0.495e-3
 _VIS_NORMAL_PIXEL = 0.506e-3
 
-_IR_HIRES_FACTOR  = 1.98
 _VIS_HIRES_FACTOR = 2.99
 
 _IR_NORMAL_SCALE  = oops.Pair((_IR_NORMAL_PIXEL,  _IR_NORMAL_PIXEL))
 _VIS_NORMAL_SCALE = oops.Pair((_VIS_NORMAL_PIXEL, _VIS_NORMAL_PIXEL))
 
-_IR_HIRES_SCALE  = oops.Pair((_IR_NORMAL_PIXEL/_IR_HIRES_FACTOR, _IR_NORMAL_PIXEL))
 _VIS_HIRES_SCALE = oops.Pair((_VIS_NORMAL_PIXEL/_VIS_HIRES_FACTOR,
                               _VIS_NORMAL_PIXEL/_VIS_HIRES_FACTOR))
 
 _IR_OVER_VIS = _IR_NORMAL_PIXEL / _VIS_NORMAL_PIXEL
 
-_IR_FULL_FOV  = oops.fov.FlatFOV(_IR_NORMAL_SCALE,  oops.Pair((64,64)))
 _VIS_FULL_FOV = oops.fov.FlatFOV(_VIS_NORMAL_SCALE, oops.Pair((64,64)))
 
 # TARGET_NAME in a VIMS label -> the target body; "NONE" if no body was targeted
@@ -765,8 +762,6 @@ class CassiniVIMS(oops.Host):
 
             (array, times) = CassiniVIMS._load_data_and_times(data_file, header_recs,
                                                               label)
-            if array.shape != (lines, samples, bands):
-                raise HostFormatError(f'invalid array shape {array.shape} in {filepath}')
 
             if bands == 352:
                 vis_data = array[:,:,:96]   # index order is [line, sample, band]
@@ -823,33 +818,12 @@ class CassiniVIMS(oops.Host):
                                        uv_los=(_IR_OVER_VIS * uv_los[0],
                                                _IR_OVER_VIS * uv_los[1]))
 
-        # IR FOV
-        if label['INSTRUMENT_MODE_ID'] == 'OCCULTATION':
-            if ir_sampling == 'NORMAL':
-                ir_fov = oops.fov.FlatFOV(_IR_NORMAL_SCALE, uv_shape, uv_los=uv_los)
-            else:
-                ir_fov = oops.fov.FlatFOV(_IR_HIRES_SCALE, uv_shape, uv_los=uv_los)
-
-        elif ir_sampling in ('HI-RES','UNDER'):
-            ir_fov = oops.fov.FlatFOV(_IR_HIRES_SCALE, uv_shape,
-                                      uv_los=(_IR_HIRES_FACTOR * uv_los[0]
-                                              - uv_shape[0]/2., uv_los[1]))
-
-        elif uv_shape == (64,64):
-            ir_fov = _IR_FULL_FOV
-
-        else:
-            ir_fov = oops.fov.FlatFOV(_IR_NORMAL_SCALE, uv_shape, uv_los=uv_los)
-
         # Nyquist sampling
         # TBD: VIMS IR sampling mode UNDER is untested!!
         # In UNDER sampling the IR detector is twice the size of the sample spacing, so
         # the pixels overlap. An FOV cannot represent overlapping pixels, so the boundary
         # is slightly off, as noted at the top of this file. GapFOV models the opposite
         # case, pixels smaller than the sample spacing, so it does not apply here.
-        #
-        # Note that this assignment also overrides every branch of the "IR FOV" logic
-        # above.
         ir_fov = oops.fov.FlatFOV(_IR_NORMAL_SCALE, uv_shape, uv_los=uv_los)
 
         ##################################################################################

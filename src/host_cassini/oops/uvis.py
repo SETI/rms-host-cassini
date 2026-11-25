@@ -19,9 +19,6 @@ from ._cassini import (_Cassini, _cassini_obs_id_code, _CMATRIX_ROTATION,
 
 __all__ = ['CassiniUVIS']
 
-_DEBUG = False      # True to assert that the data array must have null values outside the
-                    # active windows
-_ARRAY_NULL = 65535  # Incorrectly -1 in many labels
 
 # The bands and lines of the EUV and FUV detectors, which are the full extent of every
 # QUBE; an index row gives only the window within them
@@ -638,13 +635,6 @@ class CassiniUVIS(oops.Host):
         band1 = info['LR_CORNER_BAND']
         band_bin = info['BAND_BIN']
 
-        # Check the outer periphery of the data array in DEBUG mode
-        if _DEBUG and array is not None:
-            assert np.all(array[:min(line0),    ...] == _ARRAY_NULL)
-            assert np.all(array[ max(line1)+1:, ...] == _ARRAY_NULL)
-            assert np.all(array[..., :min(band0)   ] == _ARRAY_NULL)
-            assert np.all(array[...,  max(band1)+1:] == _ARRAY_NULL)
-
         # One window
         if isinstance(line0, numbers.Integral):
             return CassiniUVIS._get_one_qube(filepath, label, array, line0=line0,
@@ -757,21 +747,14 @@ class CassiniUVIS(oops.Host):
             shape = (dline_binned,) + shape[1:]
 
             if array is not None:
-                if _DEBUG:
-                    assert np.all(array[dline_binned:, ...] == _ARRAY_NULL)
                 array = array[:dline_binned]
 
         # Bin the bands
         if rebin and band_bin > 1:
-            if _DEBUG:
-                assert dband % band_bin == 0    # seen to fail occasionally
-
             dband_binned = dband // band_bin
             shape = shape[:-1] + (dband_binned,)
 
             if array is not None:
-                if _DEBUG:
-                    assert np.all(array[..., dband_binned:] == _ARRAY_NULL)
                 array = array[..., :dband_binned]
 
         # Define the Observation parameters
@@ -1067,10 +1050,7 @@ class CassiniUVIS(oops.Host):
 
         # Extract the code, strip "UR", "OCC", etc.
         obs_code = _cassini_obs_id_code(obs_id)
-        match = CassiniUVIS._OBS_CODE_CLEANUP.match(obs_code)
-        if not match:
-            return None
-        obs_code = match.group(1)
+        obs_code = CassiniUVIS._OBS_CODE_CLEANUP.match(obs_code).group(1)
 
         # Apply repairs for known issues
         repaired = _OBS_CODE_REPAIRS.get(obs_code, obs_code)
