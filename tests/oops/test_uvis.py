@@ -539,7 +539,8 @@ def test_data_file_that_does_not_match_its_label(tmp_path: pathlib.Path) -> None
     data = tmp_path / 'HSP2005_001_00_00.DAT'
     data.write_bytes(data.read_bytes()[:-2])
     with pytest.raises(oops.host.HostFormatError,
-                       match=re.escape(f'{data} holds 4 values but its label gives 5')):
+                       match=re.escape(f'{FCPath(data)} holds 4 values but its label '
+                                       'gives 5')):
         CassiniUVIS.from_file(path)
 
 

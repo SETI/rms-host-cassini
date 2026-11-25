@@ -758,8 +758,8 @@ def test_truncated_cube(tmp_path: pathlib.Path) -> None:
     cube = tmp_path / 'v0000000001_1.qub'
     cube.write_bytes(cube.read_bytes()[:-1000])
     with pytest.raises(HostFormatError,
-                       match=re.escape(f'{cube} ends before the cube that its label '
-                                       'describes')):
+                       match=re.escape(f'{FCPath(cube)} ends before the cube that its '
+                                       'label describes')):
         CassiniVIMS.from_file(path)
 
 
@@ -814,10 +814,10 @@ def test_correct_label_text_leaves_a_good_label() -> None:
 
 def test_corrects_a_label_that_strict_refuses(tmp_path: pathlib.Path) -> None:
     path = write_pds3_cube(tmp_path)
-    path.write_text(path.read_text().replace(
-        'PACKING_FLAG = "OFF"',
-        'PACKING_FLAG = "OFF"/* first line\r\n    second line */\r\n'
-        'GAIN_MODE_ID = (N/A, LOW)'))
+    path.write_bytes(path.read_bytes().replace(
+        b'PACKING_FLAG = "OFF"',
+        b'PACKING_FLAG = "OFF"/* first line\r\n    second line */\r\n'
+        b'GAIN_MODE_ID = (N/A, LOW)'))
     (vis, _) = CassiniVIMS.from_file(path, astrometry=True)
     assert vis.label_dict['GAIN_MODE_ID'] == ['N/A', 'LOW']
     assert vis.dict['GAIN_MODE_ID'] == [None, 'LOW']

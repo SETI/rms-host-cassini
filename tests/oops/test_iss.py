@@ -735,8 +735,8 @@ def test_from_file_pds3_array_must_match_the_label(tmp_path: pathlib.Path) -> No
     path = write_pds3_image(tmp_path, label_lines=128)
     image = tmp_path / 'N0000000001_1.IMG'
     with pytest.raises(oops.host.HostFormatError,
-                       match=re.escape(f'{image}: the array is 256 x 256 but the label '
-                                       'gives 128 x 128')):
+                       match=re.escape(f'{FCPath(image)}: the array is 256 x 256 but '
+                                       'the label gives 128 x 128')):
         CassiniISS.from_file(path)
 
 
@@ -894,7 +894,7 @@ def test_from_file_label_without_a_needed_item(tmp_path: pathlib.Path) -> None:
 def test_from_file_label_that_cannot_be_parsed(tmp_path: pathlib.Path) -> None:
     path = write_pds3_image(tmp_path, extra_lines=['NOT A STATEMENT'])
     with pytest.raises(oops.host.PdsHostError,
-                       match=re.escape(f'cannot parse the PDS3 label {path}')):
+                       match=re.escape(f'cannot parse the PDS3 label {FCPath(path)}')):
         CassiniISS.from_file(path, astrometry=True)
 
 
