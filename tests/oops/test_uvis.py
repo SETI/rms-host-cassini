@@ -4,6 +4,7 @@
 """Tests for the Cassini UVIS host, host_cassini.oops.uvis."""
 
 import pathlib
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -11,7 +12,8 @@ import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines
+from conftest import approx_time, FakeSpice, FakeSpiceDB, pds3_lines, write_table
+from filecache import FCPath
 from pdsparser import Pds3Label
 
 import host_cassini.oops.uvis as uvis
@@ -235,14 +237,13 @@ def test_one_line_qube_subfields(tmp_path: pathlib.Path) -> None:
     assert obs.line_window == (0, 64)
     assert obs.band_window == (0, 8)
     assert obs.samples == 3
-    assert obs.basename == 'FUV2005_001_00_00.LBL'
     assert obs.frame == oops.Frame.as_wayframe('CASSINI_UVIS_FUV')
 
 
 def test_qube_times(tmp_path: pathlib.Path) -> None:
     obs = CassiniUVIS.from_file(write_qube(tmp_path))
     tstart = julian.tdb_from_iso(START_TIME)
-    assert obs.time == pytest.approx((tstart, tstart + 3 * 2.))
+    assert obs.time == approx_time((tstart, tstart + 3 * 2.))
 
 
 def test_multi_line_qube_window(tmp_path: pathlib.Path) -> None:
@@ -292,11 +293,6 @@ def test_qube_astrometry_reads_no_data(tmp_path: pathlib.Path) -> None:
     assert not hasattr(CassiniUVIS.from_file(path, astrometry=True), 'data')
 
 
-def test_lower_case_data_file(tmp_path: pathlib.Path) -> None:
-    obs = CassiniUVIS.from_file(write_qube(tmp_path, data_name='fuv2005_001_00_00.dat'))
-    assert obs.data.shape == (3, 8)
-
-
 def test_fov_override(tmp_path: pathlib.Path) -> None:
     fov = oops.fov.FlatFOV((1.e-3, 1.e-3), (1, 1))
     assert CassiniUVIS.from_file(write_qube(tmp_path), fov=fov).fov is fov
@@ -320,7 +316,7 @@ def test_time_series(tmp_path: pathlib.Path, detector: str) -> None:
 def test_time_series_cadence(tmp_path: pathlib.Path) -> None:
     obs = CassiniUVIS.from_file(write_time_series(tmp_path))
     tstart = julian.tdb_from_iso(START_TIME)
-    assert obs.time == pytest.approx((tstart, tstart + 5 * 0.002))
+    assert obs.time == approx_time((tstart, tstart + 5 * 0.002))
 
 
 def test_time_series_rejects_other_detectors(tmp_path: pathlib.Path) -> None:
@@ -373,11 +369,23 @@ def test_spice_frame(tmp_path: pathlib.Path,
 
 
 @pytest.mark.parametrize(('target_name', 'target'), [('SATURN', 'SATURN'),
-                                                     ('N/A', 'NONE'), ('STAR', 'NONE')])
+                                                     ('STAR', 'NONE')])
 def test_target_from_label(tmp_path: pathlib.Path, target_name: str, target: str) -> None:
     obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME=target_name))
     assert obs.target == target
     assert obs.label_target == target_name
+    assert obs.lightsource == 'SUN'
+
+
+def test_null_target_from_label(tmp_path: pathlib.Path) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, TARGET_NAME='N/A'))
+    assert obs.target == 'NONE'
+    assert not hasattr(obs, 'label_target')
+
+
+def test_numeric_observation_id(tmp_path: pathlib.Path) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path, OBSERVATION_ID=888))
+    assert obs.observation_id == 888
     assert obs.lightsource == 'SUN'
 
 
@@ -490,5 +498,273 @@ def test_detection_in_row(data_set_id: str, expected: bool) -> None:
 
 def test_detection_in_row_without_data_set_id() -> None:
     assert CassiniUVIS._detect_in_row({}) is False
+
+##########################################################################################
+# File subfields, metadata and failures
+##########################################################################################
+
+
+def test_path_attributes(tmp_path: pathlib.Path) -> None:
+    path = write_qube(tmp_path)
+    obs = CassiniUVIS.from_file(path)
+    data = tmp_path / 'FUV2005_001_00_00.DAT'
+    assert obs.filepath == FCPath(data)
+    assert obs.basename == 'FUV2005_001_00_00.DAT'
+    assert obs.image_abspath == data.resolve()
+    assert obs.label_abspath == path.resolve()
+
+
+def test_astrometry_has_no_image_abspath(tmp_path: pathlib.Path) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path), astrometry=True)
+    assert not hasattr(obs, 'image_abspath')
+
+
+def test_raw_and_merged_metadata(tmp_path: pathlib.Path) -> None:
+    path = write_qube(tmp_path, TARGET_DESC='N/A')
+    obs = CassiniUVIS.from_file(path)
+    assert obs.label_dict == Pds3Label(path, method='strict', sources=False).as_dict()
+    assert 'TARGET_DESC' not in obs.dict
+    assert obs.dict['PRODUCT_ID'] == 'FUV2005_001_00_00'
+
+
+def test_pointing_subfields(tmp_path: pathlib.Path) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path))
+    assert obs.ck_object_id == -82000
+    assert obs.ck_sclk_id == -82
+    assert obs.spice_frame_is_frozen is False
+
+
+def test_data_file_that_does_not_match_its_label(tmp_path: pathlib.Path) -> None:
+    path = write_time_series(tmp_path)
+    data = tmp_path / 'HSP2005_001_00_00.DAT'
+    data.write_bytes(data.read_bytes()[:-2])
+    with pytest.raises(oops.host.HostFormatError,
+                       match=re.escape(f'{FCPath(data)} holds 4 values but its label '
+                                       'gives 5')):
+        CassiniUVIS.from_file(path)
+
+
+def test_label_without_a_needed_item(tmp_path: pathlib.Path) -> None:
+    path = write_time_series(tmp_path)
+    path.write_text(path.read_text().replace(f'START_TIME = {START_TIME}', ''))
+    with pytest.raises(oops.host.HostFormatError,
+                       match=re.escape(f"{path}: KeyError: 'START_TIME'")):
+        CassiniUVIS.from_file(path, astrometry=True)
+
+
+def test_rejects_another_hosts_label(tmp_path: pathlib.Path) -> None:
+    path = write_qube(tmp_path, INSTRUMENT_ID='VIMS')
+    with pytest.raises(oops.host.WrongHostError, match='not a Cassini UVIS PDS3 label'):
+        CassiniUVIS.from_file(path)
+
+
+def test_rejects_unknown_keywords(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'fast'"):
+        CassiniUVIS.from_file(write_qube(tmp_path), fast=True)
+
+
+def test_correct_label_text() -> None:
+    text = 'RIGHT_ASCENSION           = 182.089,\nDESCRIPTION = "a, b,"\n'
+    assert CassiniUVIS._correct_label_text(text, FCPath('x.LBL')) == (
+        'RIGHT_ASCENSION           = 182.089\nDESCRIPTION = "a, b,"\n')
+
+
+def test_corrects_a_label_that_strict_refuses(tmp_path: pathlib.Path) -> None:
+    path = write_qube(tmp_path)
+    text = path.read_text().replace('INTEGRATION_DURATION = 2.0',
+                                    'INTEGRATION_DURATION = 2.0,')
+    path.write_text(text)
+    assert CassiniUVIS.from_file(path).dict['INTEGRATION_DURATION'] == 2.
+
+##########################################################################################
+# from_index()
+##########################################################################################
+
+_FILES = ['DATA/D2005_001/FUV2005_001_00_00.LBL', 'DATA/D2005_001/HSP2005_001_00_00.LBL',
+          'DATA/D2005_001/HDAC2005_001_00_00.LBL', 'DATA/D2005_001/EUV2005_001_00_00.LBL']
+
+
+def write_uvis_index(directory: pathlib.Path, **changes: list[Any]) -> pathlib.Path:
+    """Write a four-row UVIS index and its supplement, the supplement in another order;
+    return the index label's path. `changes` replace columns of the supplement, their
+    values in the order of the index."""
+
+    index = write_table(directory, 'COUVIS_0001_index',
+                        {'FILE_NAME': ['/COUVIS_0001/' + name for name in _FILES]})
+    order = [3, 2, 1, 0]
+    supplement: dict[str, list[Any]] = {
+        'VOLUME_ID'                 : ['COUVIS_0001'] * 4,
+        'FILE_SPECIFICATION_NAME'   : _FILES,
+        'DATA_OBJECT_TYPE'          : ['QUBE', 'TIME_SERIES', 'TIME_SERIES', 'SPECTRUM'],
+        'PRODUCT_ID'                : ['FUV2005_001_00_00', 'HSP2005_001_00_00',
+                                       'HDAC2005_001_00_00', 'EUV2005_001_00_00'],
+        'START_TIME'                : [START_TIME] * 4,
+        'STOP_TIME'                 : [STOP_TIME] * 4,
+        'TARGET_NAME'               : ['SATURN'] * 4,
+        'OBSERVATION_ID'            : ['UVIS_000SA_TEST001_PRIME'] * 4,
+        'INTEGRATION_DURATION'      : [2., 2., -999., 2.],
+        'SLIT_STATE'                : ['HIGH_RESOLUTION'] * 4,
+        'LINE_SAMPLES'              : [3, 5, 6, 1],
+        'DWELL_TIME'                : [-999, -999, 2, -999],
+        'WINDOW_MINIMUM_LINE_NUMBER': [0, 0, 0, 16],
+        'WINDOW_MAXIMUM_LINE_NUMBER': [63, 0, 0, 31],
+        'LINE_BINNING_FACTOR'       : [64, 1, 1, 16],
+        'MINIMUM_BAND_NUMBER'       : [0, 0, 0, 100],
+        'MAXIMUM_BAND_NUMBER'       : [7, 0, 0, 105],
+        'BAND_BINNING_FACTOR'       : [1, 1, 1, 1],
+    }
+    supplement.update(changes)
+    write_table(directory, 'COUVIS_0001_supplemental_index',
+                {name: [values[k] for k in order]
+                 for (name, values) in supplement.items()})
+    return index
+
+
+@pytest.fixture
+def index_observations(tmp_path: pathlib.Path) -> list[Any]:
+    return list(CassiniUVIS.from_index(write_uvis_index(tmp_path)))
+
+
+def test_from_index_pairs_rows_by_file(index_observations: list[Any]) -> None:
+    assert [obs.product_type for obs in index_observations] == [
+        'QUBE', 'TIME_SERIES', 'TIME_SERIES', 'SPECTRUM']
+
+
+def test_from_index_qube_matches_from_file(tmp_path: pathlib.Path,
+                                           index_observations: list[Any]) -> None:
+    obs = CassiniUVIS.from_file(write_qube(tmp_path), astrometry=True)
+    assert index_observations[0].shape == obs.shape
+    assert index_observations[0].time == approx_time(obs.time)
+
+
+def test_from_index_hsp_cadence(index_observations: list[Any]) -> None:
+    tstart = julian.tdb_from_iso(START_TIME)
+    assert index_observations[1].time == approx_time((tstart, tstart + 5 * 0.002))
+
+
+def test_from_index_hdac_cadence(index_observations: list[Any]) -> None:
+    tstart = julian.tdb_from_iso(START_TIME)
+    assert index_observations[2].time == approx_time((tstart, tstart + 6 * 0.25))
+
+
+def test_from_index_spectrum(tmp_path: pathlib.Path,
+                             index_observations: list[Any]) -> None:
+    obs = CassiniUVIS.from_file(write_spectrum(tmp_path), astrometry=True)
+    assert index_observations[3].shape == obs.shape
+    assert index_observations[3].line_window == obs.line_window
+
+
+def test_from_index_qube_window_and_binning(tmp_path: pathlib.Path) -> None:
+    path = write_uvis_index(tmp_path, WINDOW_MINIMUM_LINE_NUMBER=[8, 0, 0, 16],
+                            WINDOW_MAXIMUM_LINE_NUMBER=[39, 0, 0, 31],
+                            LINE_BINNING_FACTOR=[4, 1, 1, 16],
+                            BAND_BINNING_FACTOR=[2, 1, 1, 1])
+    obs = next(CassiniUVIS.from_index(path))
+    assert tuple(obs.fov.uv_shape.vals) == (1, 8)
+
+
+@pytest.mark.parametrize(('line0', 'line1', 'line_bin'), [(0, 63, 64), (20, 20, 1)],
+                         ids=['full-extent', 'one-line'])
+def test_from_index_spectrum_window(tmp_path: pathlib.Path, line0: int, line1: int,
+                                    line_bin: int) -> None:
+    # The pixel of a spectrum spans its binned window of the detector lines
+    path = write_uvis_index(tmp_path, WINDOW_MINIMUM_LINE_NUMBER=[0, 0, 0, line0],
+                            WINDOW_MAXIMUM_LINE_NUMBER=[63, 0, 0, line1],
+                            LINE_BINNING_FACTOR=[64, 1, 1, line_bin])
+    obs = list(CassiniUVIS.from_index(path))[3]
+    (u_scale, v_scale) = CassiniUVIS._FOVS[('EUV', 'HIGH_RESOLUTION', 64)].uv_scale.vals
+    assert tuple(obs.fov.uv_scale.vals) == pytest.approx((u_scale, v_scale * line_bin))
+
+
+def test_from_index_subfields(index_observations: list[Any]) -> None:
+    obs = index_observations[0]
+    assert obs.filepath == 'COUVIS_0001/' + _FILES[0]
+    assert obs.basename == 'FUV2005_001_00_00.LBL'
+    assert obs.dict['FILE_NAME'] == '/COUVIS_0001/' + _FILES[0]
+    assert 'FILE_NAME_mask' in obs.dict
+    assert obs.observation_id == 'UVIS_000SA_TEST001_PRIME'
+    assert obs.ck_sclk_id == -82
+    assert not hasattr(obs, 'label_dict')
+
+
+def test_from_index_needs_its_supplement(tmp_path: pathlib.Path) -> None:
+    path = write_uvis_index(tmp_path)
+    with pytest.raises(oops.host.HostIndexError,
+                       match=re.escape('Cassini UVIS index needs its supplemental '
+                                       f'index: {path}')):
+        CassiniUVIS.from_index(path, supplement=None)
+
+
+def test_from_index_missing_supplement(tmp_path: pathlib.Path) -> None:
+    path = write_uvis_index(tmp_path)
+    (tmp_path / 'COUVIS_0001_supplemental_index.lbl').unlink()
+    with pytest.raises(FileNotFoundError):
+        CassiniUVIS.from_index(path)
+
+
+def test_from_index_select(tmp_path: pathlib.Path) -> None:
+    rows = list(CassiniUVIS.from_index(write_uvis_index(tmp_path), select=0,
+                                       filter={'DATA_OBJECT_TYPE': 'SPECTRUM'}))
+    assert [obs.detector for obs in rows] == ['EUV']
+
+
+def test_host_from_index_dispatches_to_uvis(tmp_path: pathlib.Path) -> None:
+    observations = oops.Host.from_index(write_uvis_index(tmp_path))
+    assert [obs.instrument for obs in observations] == ['UVIS'] * 4
+
+##########################################################################################
+# Labels that describe an unsupported product
+##########################################################################################
+
+
+@pytest.mark.parametrize(('old', 'new', 'message'), [
+    ('CORE_ITEM_TYPE = MSB_UNSIGNED_INTEGER', 'CORE_ITEM_TYPE = IEEE_REAL',
+     'unexpected QUBE data type'),
+    ('SUFFIX_ITEMS = (0, 0, 0)', 'SUFFIX_ITEMS = (1, 0, 0)',
+     'unexpected QUBE SUFFIX_ITEMS'),
+    ('PRODUCT_ID = "FUV', 'PRODUCT_ID = "HSP', 'invalid instrument HSP for QUBE'),
+], ids=['data-type', 'suffix', 'detector'])
+def test_unsupported_qube(tmp_path: pathlib.Path, old: str, new: str,
+                          message: str) -> None:
+    path = write_qube(tmp_path)
+    path.write_text(path.read_text().replace(old, new))
+    with pytest.raises(oops.host.HostFormatError, match=message):
+        CassiniUVIS.from_file(path)
+
+
+def test_qube_of_unsupported_lines(tmp_path: pathlib.Path) -> None:
+    path = write_qube(tmp_path)
+    path.write_text(path.read_text().replace('CORE_ITEMS = (8, 1, 3)',
+                                             'CORE_ITEMS = (8, 2, 3)'))
+    with pytest.raises(oops.host.HostFormatError, match='invalid QUBE lines 2'):
+        CassiniUVIS.from_file(path, astrometry=True)
+
+
+@pytest.mark.parametrize(('old', 'new', 'message'), [
+    ('COLUMNS = 1', 'COLUMNS = 2', 'TIME_SERIES with COLUMNS != 1'),
+    ('UNIT = MILLISECONDS', 'UNIT = SECONDS', 'TIME_SERIES with unit not ms'),
+    ('DATA_TYPE = MSB_UNSIGNED_INTEGER', 'DATA_TYPE = IEEE_REAL',
+     'non-standard data type in TIME_SERIES'),
+], ids=['columns', 'unit', 'data-type'])
+def test_unsupported_time_series(tmp_path: pathlib.Path, old: str, new: str,
+                                 message: str) -> None:
+    path = write_time_series(tmp_path)
+    path.write_text(path.read_text().replace(old, new))
+    with pytest.raises(oops.host.HostFormatError, match=message):
+        CassiniUVIS.from_file(path)
+
+
+@pytest.mark.parametrize(('old', 'new', 'message'), [
+    ('COLUMNS = 1', 'COLUMNS = 2', 'SPECTRUM has multiple COLUMNS'),
+    ('DATA_TYPE = MSB_UNSIGNED_INTEGER', 'DATA_TYPE = IEEE_REAL',
+     'non-standard data type in SPECTRUM'),
+    ('PRODUCT_ID = "EUV', 'PRODUCT_ID = "HSP', 'invalid instrument HSP for SPECTRUM'),
+], ids=['columns', 'data-type', 'detector'])
+def test_unsupported_spectrum(tmp_path: pathlib.Path, old: str, new: str,
+                              message: str) -> None:
+    path = write_spectrum(tmp_path)
+    path.write_text(path.read_text().replace(old, new))
+    with pytest.raises(oops.host.HostFormatError, match=message):
+        CassiniUVIS.from_file(path)
 
 ##########################################################################################

@@ -7,11 +7,13 @@ import pathlib
 import re
 from typing import Any
 
+import cspyce
 import julian
 import numpy as np
 import oops
 import pytest
-from conftest import FakeSpice, FakeSpiceDB, pds3_lines
+from conftest import approx_time, FakeSpice, FakeSpiceDB, pds3_lines, write_table
+from filecache import FCPath
 from oops.host import HostFormatError, HostIndexError, WrongHostError
 from pdsparser import Pds3Label
 
@@ -63,25 +65,44 @@ def cube_core(samples: int, bands: int, lines: int) -> np.ndarray:
     return values.reshape(lines, bands, samples).swapaxes(1, 2)
 
 
-def cube_bytes(samples: int, bands: int, lines: int) -> bytes:
-    """A cube with one sample suffix and four band suffixes, as VIMS writes it."""
+def cube_bytes(samples: int, bands: int, lines: int,
+               backplanes: np.ndarray | None = None, *, core_dtype: str = '>i2',
+               suffix_dtype: str = '>i4',
+               sample_suffix_items: int = SAMPLE_SUFFIX_ITEMS) -> bytes:
+    """A cube with sample suffixes and band suffixes, as VIMS writes it.
+
+    The core is written as `core_dtype` and the suffixes as `suffix_dtype`. The band
+    suffixes are zero, four of them, unless `backplanes` gives their values in
+    (backplane, line, sample) order.
+    """
 
     core = cube_core(samples, bands, lines)
+    if backplanes is None:
+        backplanes = np.zeros((BAND_SUFFIX_ITEMS, lines, samples), dtype='int32')
     chunks = []
     for line in range(lines):
         for band in range(bands):
-            chunks.append(core[line, :, band].astype('>i2').tobytes())
-            chunks.append(np.zeros(SAMPLE_SUFFIX_ITEMS, dtype='>i4').tobytes())
-        chunks.append(np.zeros(BAND_SUFFIX_ITEMS * (samples + SAMPLE_SUFFIX_ITEMS),
-                               dtype='>i4').tobytes())
+            chunks.append(core[line, :, band].astype(core_dtype).tobytes())
+            chunks.append(np.zeros(sample_suffix_items, dtype=suffix_dtype).tobytes())
+        for backplane in backplanes[:, line, :]:
+            chunks.append(backplane.astype(suffix_dtype).tobytes())
+            chunks.append(np.zeros(sample_suffix_items, dtype=suffix_dtype).tobytes())
     return b''.join(chunks)
 
 
 def write_pds3_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 352,
-                    lines: int = 2, **changes: Any) -> pathlib.Path:
-    """Write a detached PDS3 label and its cube; return the label's path."""
+                    lines: int = 2, suffix_names: list[str] = BAND_SUFFIX_NAME,
+                    backplanes: np.ndarray | None = None,
+                    **changes: Any) -> pathlib.Path:
+    """Write a detached PDS3 label and its cube; return the label's path.
 
-    data = cube_bytes(samples, bands, lines)
+    The cube's band suffixes are named `suffix_names` and hold `backplanes`, as
+    :func:`cube_bytes` describes.
+    """
+
+    if backplanes is None:
+        backplanes = np.zeros((len(suffix_names), lines, samples), dtype='int32')
+    data = cube_bytes(samples, bands, lines, backplanes)
     (directory / 'v0000000001_1.qub').write_bytes(bytes(RECORD_BYTES) + data)
 
     text = ['PDS_VERSION_ID = PDS3', 'RECORD_TYPE = FIXED_LENGTH',
@@ -91,8 +112,8 @@ def write_pds3_cube(directory: pathlib.Path, *, samples: int = 4, bands: int = 3
     text += pds3_lines(vims_keywords(**changes))
     text += ['OBJECT = SPECTRAL_QUBE', '  AXES = 3', '  AXIS_NAME = (SAMPLE, BAND, LINE)',
              f'  CORE_ITEMS = ({samples}, {bands}, {lines})',
-             f'  SUFFIX_ITEMS = ({SAMPLE_SUFFIX_ITEMS}, {BAND_SUFFIX_ITEMS}, 0)']
-    text += pds3_lines({'BAND_SUFFIX_NAME': BAND_SUFFIX_NAME}, indent='  ')
+             f'  SUFFIX_ITEMS = ({SAMPLE_SUFFIX_ITEMS}, {len(suffix_names)}, 0)']
+    text += pds3_lines({'BAND_SUFFIX_NAME': suffix_names}, indent='  ')
     text += ['END_OBJECT = SPECTRAL_QUBE', 'END', '']
     path = directory / 'v0000000001_1.lbl'
     path.write_text('\r\n'.join(text))
@@ -240,7 +261,7 @@ def test_image_subfields(image_pair: Observations) -> None:
     assert [obs.sampling for obs in image_pair] == ['NORMAL', 'NORMAL']
     assert {obs.host for obs in image_pair} == {'Cassini'}
     assert {obs.instrument for obs in image_pair} == {'VIMS'}
-    assert {obs.basename for obs in image_pair} == {'v0000000001_1.lbl'}
+    assert {obs.basename for obs in image_pair} == {'v0000000001_1.qub'}
     assert vis.dict is ir.dict
 
 
@@ -261,14 +282,17 @@ def test_image_fovs(image_pair: Observations) -> None:
 def test_image_times(image_pair: Observations) -> None:
     (vis, ir) = image_pair
     tstart = julian.tdb_from_iso(START_TIME)
-    assert vis.time[0] == pytest.approx(tstart)
-    assert ir.time[0] == pytest.approx(tstart)
+    assert vis.time[0] == approx_time(tstart)
+    assert ir.time[0] == approx_time(tstart)
 
 
-def test_image_label_has_fmt_content(image_pair: Observations) -> None:
-    qube = image_pair[0].dict['SPECTRAL_QUBE']
-    assert qube['CORE_NAME'] == 'RAW DATA NUMBER'
-    assert image_pair[0].dict['QUBE'] is qube
+def test_image_metadata(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, TARGET_DESC='N/A')
+    (vis, _) = CassiniVIMS.from_file(path)
+    assert vis.label_dict == Pds3Label(path, method='strict', sources=False).as_dict()
+    assert 'TARGET_DESC' not in vis.dict
+    assert vis.dict['SPECTRAL_QUBE']['CORE_NAME'] == 'RAW DATA NUMBER'
+    assert not hasattr(vis, 'header_dict')
 
 
 def test_from_file_leaves_parsed_label_unchanged(tmp_path: pathlib.Path) -> None:
@@ -283,7 +307,16 @@ def test_isis_cube(tmp_path: pathlib.Path) -> None:
     core = cube_core(4, 352, 2)
     assert np.array_equal(vis.data, core[:, :, :VIS_BANDS])
     assert np.array_equal(ir.data, core[:, :, VIS_BANDS:])
-    assert ir.dict['PACKING_FLAG'] == 'OFF'
+    assert ir.header_dict['QUBE']['PACKING'] == 'OFF'
+    assert ir.observation_id == 'VIMS_000SA_TEST001_PRIME'
+    assert ir.image_abspath == (tmp_path / 'v0000000001_1.qub').resolve()
+    assert not hasattr(ir, 'label_dict')
+
+
+def test_isis_cube_metadata_at_top_level(tmp_path: pathlib.Path) -> None:
+    (_, ir) = CassiniVIMS.from_file(write_isis_cube(tmp_path))
+    assert ir.dict['TARGET_NAME'] == 'SATURN'
+    assert ir.dict['START_TIME'] == ir.header_dict['QUBE']['START_TIME']
 
 
 def test_astrometry_reads_no_data(tmp_path: pathlib.Path) -> None:
@@ -335,7 +368,7 @@ def test_point_with_vis_on(tmp_path: pathlib.Path) -> None:
     assert type(vis) is oops.observation.Pixel
     assert vis.data.shape == (2, 96)
     assert vis.cadence.shape == (2,)
-    assert vis.time[0] == pytest.approx(ir.time[0])
+    assert vis.time[0] == approx_time(ir.time[0])
     assert vis.cadence.texp == pytest.approx(1. * vims._TIME_FACTOR)
 
 
@@ -362,6 +395,62 @@ def test_unsupported_shape(tmp_path: pathlib.Path) -> None:
         CassiniVIMS.from_file(path, astrometry=True)
 
 
+@pytest.mark.parametrize(('changes', 'message'), [
+    ({'bands': 100}, 'unrecognized band axis size 100 in '),
+    ({'SWATH_WIDTH': 3, 'SWATH_LENGTH': 1}, 'mismatched array shape and size in '),
+    ({'lines': 4, 'SWATH_WIDTH': 2, 'SWATH_LENGTH': 2}, 'invalid SWATH_LENGTH 2 in '),
+], ids=['band-count', 'frame-size', 'swath-length'])
+def test_invalid_cube_shape(tmp_path: pathlib.Path, changes: dict[str, Any],
+                            message: str) -> None:
+    path = write_pds3_cube(tmp_path, **changes)
+    with pytest.raises(HostFormatError, match=message):
+        CassiniVIMS.from_file(path, astrometry=True)
+
+
+@pytest.mark.parametrize(('bands', 'power', 'channel'), [
+    (256, ['ON', 'OFF'], 1),
+    (96, ['OFF', 'ON'], 0),
+], ids=['ir-only', 'vis-only'])
+def test_cube_of_one_channel(tmp_path: pathlib.Path, bands: int, power: list[str],
+                             channel: int) -> None:
+    path = write_pds3_cube(tmp_path, bands=bands, POWER_STATE_FLAG=power)
+    pair = CassiniVIMS.from_file(path)
+    assert np.array_equal(pair[channel].data, cube_core(4, bands, 2))
+
+
+def test_packed_one_line_frames(tmp_path: pathlib.Path) -> None:
+    # Two one-line frames of four samples become one frame of two lines, whose lines
+    # are a frame apart
+    path = write_pds3_cube(tmp_path, SWATH_WIDTH=4, SWATH_LENGTH=1)
+    (vis, _) = CassiniVIMS.from_file(path, astrometry=True)
+    assert vis.cadence.min_tstride == pytest.approx((1. + 0.52) * vims._TIME_FACTOR)
+
+
+@pytest.mark.parametrize(('power', 'off'), [
+    (['ON', 'OFF'], [True, False]),
+    (['OFF', 'ON'], [False, True]),
+], ids=['vis-off', 'ir-off'])
+def test_single_line_with_a_channel_off(tmp_path: pathlib.Path, power: list[str],
+                                        off: list[bool]) -> None:
+    path = write_pds3_cube(tmp_path, lines=1, SWATH_LENGTH=1, POWER_STATE_FLAG=power)
+    pair = CassiniVIMS.from_file(path, astrometry=True)
+    assert [obs is None for obs in pair] == off
+
+
+def test_vis_high_resolution_fov(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, SAMPLING_MODE_ID=['NORMAL', 'HI-RES'])
+    (vis, _) = CassiniVIMS.from_file(path, astrometry=True)
+    assert tuple(vis.fov.uv_scale.vals) == pytest.approx(
+        tuple(vims._VIS_HIRES_SCALE.vals))
+
+
+def test_full_swath_vis_fov(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, samples=64, lines=64, bands=96, SWATH_WIDTH=64,
+                           SWATH_LENGTH=64, POWER_STATE_FLAG=['OFF', 'ON'])
+    (vis, _) = CassiniVIMS.from_file(path, astrometry=True)
+    assert vis.fov is vims._VIS_FULL_FOV
+
+
 def test_misaligned_suffix(tmp_path: pathlib.Path) -> None:
     label = {'SPECTRAL_QUBE': {'CORE_ITEMS': (1, 256, 1), 'SUFFIX_ITEMS': (0, 1)},
              'RECORD_BYTES': 512}
@@ -371,20 +460,75 @@ def test_misaligned_suffix(tmp_path: pathlib.Path) -> None:
         CassiniVIMS._load_data_and_times(path, 0, label)
 
 
-def test_validate_index_file_names() -> None:
-    index_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
-    supp_row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_SPECIFICATION_NAME': 'data/v2.LBL'}
-    with pytest.raises(HostIndexError,
-                       match=re.escape('file names do not match: "v1.QUB", "v2.LBL"')):
-        CassiniVIMS._validate_index(index_row, supp_row)
+def load_cube(directory: pathlib.Path, *, core_type: str = 'SUN_INTEGER',
+              core_dtype: str = '>i2', suffix_types: dict[str, Any] | None = None,
+              suffix_dtype: str = '>i4', sample_suffix_items: int = 1,
+              ) -> tuple[np.ndarray, np.ndarray | None]:
+    """Write a 4 x 8 x 2 cube with time backplanes of whole seconds from 1000 and read it
+    with `CassiniVIMS._load_data_and_times`.
+
+    The core is written as `core_dtype` and described as `core_type`; the suffixes are
+    written as `suffix_dtype` and described by `suffix_types`, a dictionary of the
+    SAMPLE_SUFFIX_ITEM_TYPE and BAND_SUFFIX_ITEM_TYPE items.
+    """
+
+    seconds = 1000 + np.arange(8).reshape(2, 4)
+    path = directory / 'cube.qub'
+    path.write_bytes(cube_bytes(4, 8, 2, time_backplanes(seconds), core_dtype=core_dtype,
+                                suffix_dtype=suffix_dtype,
+                                sample_suffix_items=sample_suffix_items))
+    qube = {'CORE_ITEMS': (4, 8, 2), 'CORE_ITEM_BYTES': np.dtype(core_dtype).itemsize,
+            'CORE_ITEM_TYPE': core_type, 'SUFFIX_ITEMS': (sample_suffix_items, 2, 0),
+            'BAND_SUFFIX_NAME': _TIME_SUFFIXES, **(suffix_types or {})}
+    label = {'SPECTRAL_QUBE': qube, 'RECORD_BYTES': RECORD_BYTES}
+    result: tuple[np.ndarray, np.ndarray | None] = CassiniVIMS._load_data_and_times(
+        FCPath(path), 0, label)
+    return result
+
+
+@pytest.mark.parametrize(('core_type', 'core_dtype'), [
+    ('PC_INTEGER', '<i2'),
+    ('MSB_UNSIGNED_INTEGER', '>u2'),
+    ('PC_REAL', '<f4'),
+], ids=['little-endian', 'unsigned', 'real'])
+def test_load_core_types(tmp_path: pathlib.Path, core_type: str, core_dtype: str) -> None:
+    (data, _) = load_cube(tmp_path, core_type=core_type, core_dtype=core_dtype)
+    assert np.array_equal(data, cube_core(4, 8, 2))
+
+
+@pytest.mark.parametrize(('suffix_types', 'suffix_dtype', 'sample_suffix_items'), [
+    ({'SAMPLE_SUFFIX_ITEM_TYPE': 'PC_INTEGER'}, '<i4', 1),
+    ({'SAMPLE_SUFFIX_ITEM_TYPE': 'SUN_UNSIGNED_INTEGER'}, '>u4', 1),
+    ({'SAMPLE_SUFFIX_ITEM_TYPE': 'SUN_REAL'}, '>f4', 1),
+    ({'SAMPLE_SUFFIX_ITEM_TYPE': ['SUN_INTEGER', 'SUN_INTEGER']}, '>i4', 1),
+    ({'BAND_SUFFIX_ITEM_TYPE': 'PC_INTEGER'}, '<i4', 0),
+], ids=['little-endian', 'unsigned', 'real', 'list', 'band-suffix-type'])
+def test_load_suffix_types(tmp_path: pathlib.Path, suffix_types: dict[str, Any],
+                           suffix_dtype: str, sample_suffix_items: int) -> None:
+    (_, times) = load_cube(tmp_path, suffix_types=suffix_types, suffix_dtype=suffix_dtype,
+                           sample_suffix_items=sample_suffix_items)
+    assert times == approx_time(1000 + np.arange(8).reshape(2, 4))
+
+
+@pytest.mark.parametrize(('kwargs', 'message'), [
+    ({'core_type': 'VAX_INTEGER'}, 'unrecognized CORE_ITEM_TYPE VAX_INTEGER in '),
+    ({'core_type': 'SUN_CHARACTER'}, 'unrecognized CORE_ITEM_TYPE SUN_CHARACTER in '),
+    ({'suffix_types': {'SAMPLE_SUFFIX_ITEM_TYPE': 'VAX_INTEGER'}},
+     'unrecognized suffix item type VAX_INTEGER in '),
+    ({'suffix_types': {'SAMPLE_SUFFIX_ITEM_TYPE': 'SUN_CHARACTER'}},
+     'unrecognized suffix item type SUN_CHARACTER in '),
+], ids=['core-byte-order', 'core-type', 'suffix-byte-order', 'suffix-type'])
+def test_load_unrecognized_types(tmp_path: pathlib.Path, kwargs: dict[str, Any],
+                                 message: str) -> None:
+    with pytest.raises(HostFormatError, match=message):
+        load_cube(tmp_path, **kwargs)
 
 
 def test_from_index_requires_supplement() -> None:
-    row = {'VOLUME_ID': 'COVIMS_0001', 'FILE_NAME': 'v1.QUB'}
     with pytest.raises(HostIndexError,
-                       match=re.escape('Cassini VIMS needs a supplemental index: '
+                       match=re.escape('Cassini VIMS index needs its supplemental index: '
                                        'INDEX.LBL')):
-        CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
+        CassiniVIMS.from_index('INDEX.LBL', supplement=None)
 
 
 @pytest.mark.parametrize(('key', 'expected'), [
@@ -432,13 +576,14 @@ def test_from_index_uses_backplane_sclk() -> None:
                     CORE_LINES=24, BACKPLANE_SCLK_START_COUNT='1294638282.666')
     [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
     assert ir.cadence.shape == (24,)
-    assert ir.time[0] == pytest.approx(1294638282.666)
+    # The start goes through a START_TIME written to the millisecond
+    assert ir.time[0] == pytest.approx(1294638282.666, rel=0., abs=1.e-3)
 
 
 def test_from_index_blank_backplane_sclk_uses_start_time() -> None:
     row = index_row(BACKPLANE_SCLK_START_COUNT='              ')
     [(_, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
-    assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+    assert ir.time[0] == approx_time(julian.tdb_from_iso(START_TIME))
 
 
 def test_label_from_index_row_leaves_row_unchanged() -> None:
@@ -451,7 +596,7 @@ def test_from_index_image_matches_from_file(image_pair: Observations) -> None:
     [pair] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[index_row()])
     for (from_index, from_file) in zip(pair, image_pair, strict=True):
         assert type(from_index) is type(from_file)
-        assert from_index.time == pytest.approx(from_file.time)
+        assert from_index.time == approx_time(from_file.time)
         assert tuple(from_index.fov.uv_shape.vals) == tuple(from_file.fov.uv_shape.vals)
 
 
@@ -469,7 +614,7 @@ def test_from_index_point_assumes_full_buffer(mode: str, steps: int) -> None:
     assert vis is None
     assert type(ir) is oops.observation.Pixel
     assert ir.cadence.shape == (steps,)
-    assert ir.time[0] == pytest.approx(julian.tdb_from_iso(START_TIME))
+    assert ir.time[0] == approx_time(julian.tdb_from_iso(START_TIME))
 
 
 def test_from_index_point_with_vis_on() -> None:
@@ -477,7 +622,7 @@ def test_from_index_point_with_vis_on() -> None:
     [(vis, ir)] = CassiniVIMS.from_index('INDEX.LBL', row_dicts=[row])
     assert type(vis) is oops.observation.Pixel
     assert vis.cadence.shape == (64,)
-    assert vis.time[0] == pytest.approx(ir.time[0])
+    assert vis.time[0] == approx_time(ir.time[0])
 
 
 def test_from_index_point_with_ir_off() -> None:
@@ -549,6 +694,20 @@ def test_star_lightsource_from_observation_id(tmp_path: pathlib.Path, obs_id: st
     source = oops.lightsource.star_lookup(star)
     assert [obs.lightsource for obs in pair] == [source, source]
     assert [obs.observation_id for obs in pair] == [obs_id, obs_id]
+
+
+def test_unknown_star_in_observation_id(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, OBSERVATION_ID='VIMS_000SA_NOSUCHSTAROCC001_PRIME')
+    pair = CassiniVIMS.from_file(path)
+    assert [obs.lightsource for obs in pair] == ['SUN', 'SUN']
+
+
+def test_star_repair_with_an_alternative_name(tmp_path: pathlib.Path,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(vims._OBS_CODE_REPAIRS, 'ALPBO', ('alf Boo', 'VIMS ALPBO'))
+    path = write_pds3_cube(tmp_path, OBSERVATION_ID='VIMS_000SA_ALPBOOCC001_PRIME')
+    (_, ir) = CassiniVIMS.from_file(path)
+    assert 'VIMS ALPBO' in ir.lightsource.alt_names
 
 
 def test_star_target_from_label(tmp_path: pathlib.Path) -> None:
@@ -634,17 +793,17 @@ def test_detection_in_row(row: dict[str, str], expected: bool) -> None:
     (_VIMS_INDEX_KEYWORDS, 'COVIMS_0040'),
     ([], 'COVIMS_0040'),
 ], ids=['from-label', 'from-row'])
-def test_read_index_rows_accepts_vims_index(tmp_path: pathlib.Path, keywords: list[str],
-                                            volume_id: str) -> None:
+def test_index_rows_accepts_vims_index(tmp_path: pathlib.Path, keywords: list[str],
+                                       volume_id: str) -> None:
     path = write_index(tmp_path, keywords, volume_id)
-    rows = CassiniVIMS._read_index_rows(path, supplement=None)
+    rows = CassiniVIMS._index_rows(path, supplement=None)
     assert [row['VOLUME_ID'] for row in rows] == [volume_id]
 
 
-def test_read_index_rows_rejects_other_index(tmp_path: pathlib.Path) -> None:
+def test_index_rows_rejects_other_index(tmp_path: pathlib.Path) -> None:
     path = write_index(tmp_path, [], 'COISS_2001')
     with pytest.raises(WrongHostError, match='not a Cassini VIMS index'):
-        CassiniVIMS._read_index_rows(path, supplement=None)
+        CassiniVIMS._index_rows(path, supplement=None)
 
 ##########################################################################################
 # select
@@ -707,5 +866,222 @@ def test_meshgrid_and_times_rejects_other_instruments(image_pair: Observations) 
     obs.insert_subfield('instrument', 'ISS')
     with pytest.raises(WrongHostError, match='not a VIMS observation: ISS'):
         CassiniVIMS.meshgrid_and_times(obs)
+
+##########################################################################################
+# File subfields, metadata, timing and failures
+##########################################################################################
+
+
+def test_path_attributes(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path)
+    (vis, _) = CassiniVIMS.from_file(path)
+    cube = tmp_path / 'v0000000001_1.qub'
+    assert vis.filepath == FCPath(cube)
+    assert vis.image_abspath == cube.resolve()
+    assert vis.label_abspath == path.resolve()
+    assert not hasattr(vis, 'abspath')
+
+
+def test_astrometry_has_no_image_abspath(tmp_path: pathlib.Path) -> None:
+    (vis, _) = CassiniVIMS.from_file(write_pds3_cube(tmp_path), astrometry=True)
+    assert not hasattr(vis, 'image_abspath')
+
+
+def test_pointing_subfields(image_pair: Observations) -> None:
+    assert [obs.ck_object_id for obs in image_pair] == [-82000, -82000]
+    assert [obs.ck_sclk_id for obs in image_pair] == [-82, -82]
+    assert [obs.spice_frame_is_frozen for obs in image_pair] == [False, False]
+
+
+def test_vis_exposure_floor(tmp_path: pathlib.Path) -> None:
+    (vis, _) = CassiniVIMS.from_file(write_pds3_cube(tmp_path,
+                                                     EXPOSURE_DURATION=[100., 0.]))
+    assert vis.cadence.texp == 1.e-8
+
+
+def test_truncated_cube(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path)
+    cube = tmp_path / 'v0000000001_1.qub'
+    cube.write_bytes(cube.read_bytes()[:-1000])
+    with pytest.raises(HostFormatError,
+                       match=re.escape(f'{FCPath(cube)} ends before the cube that its '
+                                       'label describes')):
+        CassiniVIMS.from_file(path)
+
+
+def test_label_without_a_needed_item(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path)
+    path.write_text(path.read_text().replace(f'STOP_TIME = {STOP_TIME}', ''))
+    with pytest.raises(HostFormatError,
+                       match=re.escape(f"{path}: KeyError: 'STOP_TIME'")):
+        CassiniVIMS.from_file(path, astrometry=True)
+
+
+def test_rejects_another_hosts_label(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path, INSTRUMENT_ID='ISSNA')
+    with pytest.raises(WrongHostError, match='not a Cassini VIMS PDS3 label'):
+        CassiniVIMS.from_file(path)
+
+
+def test_rejects_unknown_keywords(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'enclose'"):
+        CassiniVIMS.from_file(write_pds3_cube(tmp_path), enclose=True)
+
+
+def test_clock_seconds_read_the_fraction_as_a_decimal(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # The clock kernel reads the digits after the point as 1/256 s ticks
+    def scs2e(code: int, count: str) -> float:
+        (seconds, ticks) = count.split('.')
+        return float(seconds) + int(ticks) / 256.
+
+    monkeypatch.setattr(cspyce, 'scs2e', scs2e)
+    assert CassiniVIMS._tdb_from_clock_seconds(1640775127.5) == 1640775127.5
+
+##########################################################################################
+# Label-text corrections
+##########################################################################################
+
+
+@pytest.mark.parametrize(('text', 'expected'), [
+    ('GAIN_MODE_ID = (N/A, LOW)\n', 'GAIN_MODE_ID = ("N/A", LOW)\n'),
+    ('GAIN_MODE_ID = (LOW, N/A)\n', 'GAIN_MODE_ID = (LOW, "N/A")\n'),
+    ('FLAG = OFF/* IR high resolution,\n     IR low resolution */\nX = 1\n',
+     'FLAG = OFF/* IR high resolution,      IR low resolution */\nX = 1\n'),
+], ids=['n/a-first', 'n/a-last', 'two-line-comment'])
+def test_correct_label_text(text: str, expected: str) -> None:
+    assert CassiniVIMS._correct_label_text(text, FCPath('v.lbl')) == expected
+
+
+def test_correct_label_text_leaves_a_good_label() -> None:
+    text = 'DESCRIPTION = "N/A"\nFLAG = OFF /* one line */\nEND\n'
+    assert CassiniVIMS._correct_label_text(text, FCPath('v.lbl')) == text
+
+
+def test_corrects_a_label_that_strict_refuses(tmp_path: pathlib.Path) -> None:
+    path = write_pds3_cube(tmp_path)
+    path.write_bytes(path.read_bytes().replace(
+        b'PACKING_FLAG = "OFF"',
+        b'PACKING_FLAG = "OFF"/* first line\r\n    second line */\r\n'
+        b'GAIN_MODE_ID = (N/A, LOW)'))
+    (vis, _) = CassiniVIMS.from_file(path, astrometry=True)
+    assert vis.label_dict['GAIN_MODE_ID'] == ['N/A', 'LOW']
+    assert vis.dict['GAIN_MODE_ID'] == [None, 'LOW']
+
+##########################################################################################
+# from_index() with its tables
+##########################################################################################
+
+
+def write_vims_index(directory: pathlib.Path) -> pathlib.Path:
+    """Write a two-row VIMS index and its supplement, in the other order; return the
+    index label's path."""
+
+    rows = [index_row(), index_row(FILE_NAME='v0000000002_1.qub', TARGET_NAME='TITAN')]
+    names = [name for name in rows[0] if name != 'FILE_SPECIFICATION_NAME']
+    columns: dict[str, list[Any]] = {name: [row[name] for row in rows] for name in names}
+    columns['PATH_NAME'] = ['/data/2005001T000000'] * 2
+    index = write_table(directory, 'COVIMS_0001_index', columns)
+    write_table(directory, 'COVIMS_0001_supplemental_index',
+                {'VOLUME_ID': ['COVIMS_0001'] * 2,
+                 'FILE_SPECIFICATION_NAME': ['data/2005001T000000/v0000000002_1.lbl',
+                                             'data/2005001T000000/v0000000001_1.lbl']})
+    return index
+
+
+def test_from_index_pairs_rows_by_file(tmp_path: pathlib.Path) -> None:
+    pairs = list(CassiniVIMS.from_index(write_vims_index(tmp_path)))
+    assert [ir.filepath for (_, ir) in pairs] == [
+        'COVIMS_0001/data/2005001T000000/v0000000001_1.lbl',
+        'COVIMS_0001/data/2005001T000000/v0000000002_1.lbl']
+    assert [ir.target for (_, ir) in pairs] == ['SATURN', 'TITAN']
+
+
+def test_from_index_dict_is_the_row(tmp_path: pathlib.Path) -> None:
+    [(_, ir), _] = CassiniVIMS.from_index(write_vims_index(tmp_path))
+    assert ir.dict['FILE_NAME'] == 'v0000000001_1.qub'
+    assert 'FILE_NAME_mask' in ir.dict
+    assert 'SPECTRAL_QUBE' not in ir.dict
+
+
+def test_from_index_missing_supplement(tmp_path: pathlib.Path) -> None:
+    path = write_vims_index(tmp_path)
+    (tmp_path / 'COVIMS_0001_supplemental_index.lbl').unlink()
+    with pytest.raises(FileNotFoundError):
+        CassiniVIMS.from_index(path)
+
+##########################################################################################
+# Time backplanes and parsed content
+##########################################################################################
+
+_TIME_SUFFIXES = ['SLICE_TIME_SECONDS', 'SLICE_TIME_TICKS']
+
+
+def time_backplanes(seconds: np.ndarray) -> np.ndarray:
+    """Time backplanes of a cube with whole seconds, in (backplane, line, sample)
+    order."""
+
+    return np.stack([seconds, np.zeros_like(seconds)]).astype('int32')
+
+
+def test_time_backplane_gives_the_start(tmp_path: pathlib.Path) -> None:
+    seconds = 1000 + np.arange(8).reshape(2, 4)
+    path = write_pds3_cube(tmp_path, suffix_names=_TIME_SUFFIXES,
+                           backplanes=time_backplanes(seconds))
+    (vis, ir) = CassiniVIMS.from_file(path)
+    assert ir.time[0] == approx_time(1000.)
+    assert vis.time[0] == approx_time(1000.)
+
+
+def test_time_backplane_with_only_its_first_time(tmp_path: pathlib.Path) -> None:
+    seconds = np.full((2, 4), -8192)
+    seconds[0, 0] = 1000
+    path = write_pds3_cube(tmp_path, suffix_names=_TIME_SUFFIXES,
+                           backplanes=time_backplanes(seconds))
+    (_, ir) = CassiniVIMS.from_file(path)
+    assert ir.time[0] == approx_time(1000.)
+
+
+def test_time_backplane_with_invalid_times(tmp_path: pathlib.Path) -> None:
+    seconds = 1000 + np.arange(8).reshape(2, 4)
+    seconds[1, 1] = -8192
+    path = write_pds3_cube(tmp_path, suffix_names=_TIME_SUFFIXES,
+                           backplanes=time_backplanes(seconds))
+    with pytest.raises(HostFormatError, match='invalid embedded times in '):
+        CassiniVIMS.from_file(path)
+
+
+@pytest.mark.parametrize(('samples', 'lines', 'changes'), [
+    (4, 2, {}),
+    (4, 1, {'SWATH_LENGTH': 1}),
+    (2, 1, {'SWATH_WIDTH': 1, 'SWATH_LENGTH': 1}),
+], ids=['image', 'single-line', 'point'])
+def test_overwritten_channel_times_each_pixel(
+        tmp_path: pathlib.Path, samples: int, lines: int,
+        changes: dict[str, Any]) -> None:
+    # With OVERWRITTEN_CHANNEL_FLAG ON, the IR pixels follow the time backplane, so the
+    # last pixel starts at its own time
+    seconds = 1000 + np.arange(samples * lines).reshape(lines, samples)
+    path = write_pds3_cube(tmp_path, samples=samples, lines=lines,
+                           suffix_names=_TIME_SUFFIXES,
+                           backplanes=time_backplanes(seconds),
+                           OVERWRITTEN_CHANNEL_FLAG='ON', POWER_STATE_FLAG=['ON', 'OFF'],
+                           **changes)
+    (_, ir) = CassiniVIMS.from_file(path)
+    assert ir.time[1] == approx_time(seconds.max() + 0.1 * vims._TIME_FACTOR)
+
+
+@pytest.mark.parametrize(('order', 'power', 'message'), [
+    ([1, 0, 2, 3, 4, 5, 6, 7], ['ON', 'OFF'], 'invalid embedded times in '),
+    (list(range(8)), ['ON', 'ON'], 'OCCULTATION mode with VIS channel ON in '),
+], ids=['times-out-of-order', 'vis-on'])
+def test_overwritten_channel_refused(
+        tmp_path: pathlib.Path, order: list[int], power: list[str], message: str) -> None:
+    seconds = 1000 + np.array(order).reshape(2, 4)
+    path = write_pds3_cube(tmp_path, suffix_names=_TIME_SUFFIXES,
+                           backplanes=time_backplanes(seconds),
+                           OVERWRITTEN_CHANNEL_FLAG='ON', POWER_STATE_FLAG=power)
+    with pytest.raises(HostFormatError, match=message):
+        CassiniVIMS.from_file(path)
 
 ##########################################################################################

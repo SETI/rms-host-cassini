@@ -28,9 +28,11 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   (`-W -n`), codespell and PyMarkdown. `ruff format` is disabled.
   `.github/workflows/run-tests.yml` runs the same set. `scripts/setup-venv.sh` builds the
   `venv/` that the scripts expect; set `VENV` to use another.
-- The `oops.Host` API first appears in rms-oops 0.4.0, the minimum version in
-  `pyproject.toml`. The `ObsArray` entry in `nitpick_ignore_regex` in `docs/conf.py`
-  stays: oops never documents that type alias.
+- The host contract that these hosts build on (`_index_rows`, `_set_path_attributes`,
+  `_correct_label_text`) is unreleased: `pyproject.toml` installs rms-oops from its
+  `rf_261124_host_contract` branch. Give it a minimum version once a release has it.
+  The `ObsArray` entry in `nitpick_ignore_regex` in `docs/conf.py` stays: oops never
+  documents that type alias.
 - The type information is published in two stubs: `host_cassini/__init__.pyi` declares
   the three hosts in full, and `host_cassini/oops/__init__.pyi` re-exports them. `stubtest`
   checks them against the runtime in the check script and in CI, so adding, renaming or
@@ -38,13 +40,13 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
   The `[tool.mypy] exclude`, the override list in `pyproject.toml` and
   `.stubtest-allowlist` keep it off the stub-less modules. Each `type: ignore[override]`
   marks a real mismatch with `oops.Host`: every `from_file` names its first parameter
-  `fileinfo`, every `from_index` returns a list narrower than the base class's, and
-  CassiniUVIS's `select` accepts no channel name.
+  `fileinfo`, every `from_index` returns an iterator narrower than the base class's,
+  and the `select` of CassiniISS and CassiniUVIS accepts no channel name.
 - `docs/conf.py` resolves the short class names in docstrings (`FCPath`, `Observation`,
   ...) through intersphinx with `_SHORT_NAMES`. Add a name there when a nitpicky build
   reports a class from another RMS package.
 - Coverage must stay at or above 65% (`fail_under` in `pyproject.toml`, and the project and
-  patch targets in `codecov.yml`); it is at 87%, held down by `vims.py` at 71%. The ubuntu /
+  patch targets in `codecov.yml`); it is at 100%, line and branch. The ubuntu /
   Python 3.13 CI job uploads to Codecov and fails if the upload fails. The upload
   authenticates through GitHub OIDC (`use_oidc`), so it needs no `CODECOV_TOKEN` secret.
 - Tests never touch SPICE kernels or spicedb. `tests/oops/conftest.py` replaces them with
@@ -62,10 +64,17 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - The hosts apply the standard overrides through `oops.Host._apply_overrides()` and `select`
   through `oops.Host._apply_select()`. `_apply_select()` needs a tuple, so UVIS wraps a
   single observation in one first. What the instruments share lives in `oops/_cassini.py`:
-  `_CMATRIX_ROTATION`, `_pds3_options_with_defaults()`, and the OBSERVATION_ID helpers
-  `_cassini_obs_id_code()` and `_fix_cassini_ring_target()`. Keep them out of
+  `_CMATRIX_ROTATION`, `_pds3_options_with_defaults()`, the OBSERVATION_ID helpers
+  `_cassini_obs_id_code()` and `_fix_cassini_ring_target()`, `_file_errors()`, the null
+  handling of `_without_nulls()`, and the clock conversions. Keep them out of
   `oops/__init__.py`, which the instrument modules can't import from without a circular
   import.
+- Every PDS3 product label is parsed with the "strict" method, after the host's
+  `_correct_label_text()`, which corrects each defect that strict refuses in the current
+  archive; there is no second try with another method. Index and supplement labels are
+  read as written. Each `from_file` reads and interprets its files inside
+  `_file_errors()`, which turns a failure into a host error naming the file; index rows
+  get no such checks.
 - Each host's public `initialize()` chooses the kernels. It is optional: `from_file()` and
   `from_index()` call it with the defaults, and after the first call later calls are
   ignored until `_reset()`.
@@ -81,7 +90,10 @@ the two published `.pyi` stubs and `stubtest` apply here to the stubs described 
 - `_Cassini` in `host_cassini/oops/_cassini.py` is never instantiated; all its state
   lives in class attributes. CK and SPK kernels load lazily by "month": the 1997-10-01 to
   2017-10-01 mission is split into 240 equal periods, each padded by `SLOP`. Before `TOUR`
-  the Jupiter system is used, after it the Saturn system.
+  the Jupiter system is used, after it the Saturn system. Whatever order the months load
+  in, the furnished kernels of each kind keep the order of the full list kept in
+  `CK_KERNELS` or `SPK_KERNELS`, the later taking precedence, and the cruise C kernels of
+  `_CRUISE_CKS`, which the SPICE database does not list, come first.
 - Running anything needs a SPICE kernel database through `spicedb` (`SPICE_PATH`, or
   `$OOPS_RESOURCES/SPICE`, plus `SPICE_SQLITE_DB_NAME`). It must contain the kernel sets
   `CAS-SPK-*`, `CAS-CK-*` and `CAS-CK-GAPFILL`. `spicedb` currently ships inside rms-oops.

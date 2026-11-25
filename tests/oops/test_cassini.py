@@ -3,6 +3,8 @@
 ##########################################################################################
 """Tests for the mission-level support in host_cassini.oops._cassini."""
 
+import pathlib
+import re
 from typing import Any
 
 import cspyce
@@ -12,11 +14,15 @@ import pytest
 import spicedb
 from conftest import (FakeKernel, FakeSpice, FakeSpiceDB, kernel_for_months,
                       tdb_in_month)
+from oops import OopsValueError
 from oops.body import Body
+from oops.host import HostFormatError, VicarHostError, WrongHostError
+from vicar import VicarError
 
-from host_cassini.oops._cassini import (_Cassini, _cassini_obs_id_code,
-                                        _fix_cassini_ring_target,
-                                        _pds3_options_with_defaults)
+from host_cassini.oops._cassini import (_Cassini, _cassini_obs_id_code, _cruise_kernels,
+                                        _file_errors, _fix_cassini_ring_target, _is_null,
+                                        _metadata_subfields, _pds3_options_with_defaults,
+                                        _sclk_from_tdb, _tdb_from_sclk, _without_nulls)
 
 ##########################################################################################
 # Mission constants
@@ -100,44 +106,67 @@ def _month_lists(contents: dict[int, list[FakeKernel]]) -> np.ndarray:
     return lists
 
 
+def _load(t0: float, t1: float, loaded: np.ndarray, lists: np.ndarray,
+          kernel_dict: dict[str, Any]) -> None:
+    # load_kernels, given every kernel of the monthly lists in the order of the months
+    kernels: list[FakeKernel] = []
+    for entry in lists:
+        kernels += [kernel for kernel in entry if kernel not in kernels]
+    _Cassini.load_kernels(t0, t1, loaded, kernels, lists, kernel_dict)
+
+
 def test_load_kernels_loads_only_the_month() -> None:
     lists = _month_lists({9: [FakeKernel('a.bc')], 10: [FakeKernel('b.bc')],
                           11: [FakeKernel('c.bc')]})
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists, {})
     assert list(np.nonzero(loaded)[0]) == [10]
 
 
 def test_load_kernels_furnishes_only_the_month(fake_spicedb: FakeSpiceDB) -> None:
     lists = _month_lists({9: [FakeKernel('a.bc')], 10: [FakeKernel('b.bc')],
                           11: [FakeKernel('c.bc')]})
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
     assert fake_spicedb.furnished() == ['b.bc']
 
 
 def test_load_kernels_furnishes_each_kernel_once(fake_spicedb: FakeSpiceDB) -> None:
     shared = FakeKernel('shared.bc')
     lists = _month_lists({10: [shared, FakeKernel('a.bc')], 11: [shared]})
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(11.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(11.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'), lists, {})
     assert fake_spicedb.furnished() == ['shared.bc', 'a.bc']
 
 
 def test_load_kernels_records_furnished_kernels() -> None:
     kernel = FakeKernel('a.bc')
     kernel_dict: dict[str, Any] = {}
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'),
-                          _month_lists({10: [kernel]}), kernel_dict)
+    _load(tdb_in_month(10.5), tdb_in_month(10.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'),
+          _month_lists({10: [kernel]}), kernel_dict)
     assert kernel_dict == {'a.bc': kernel}
+
+
+def test_load_kernels_records_no_kernel_that_failed_to_furnish(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    def furnish_kernels(*args: Any, **kwargs: Any) -> None:
+        raise OSError('no such file')
+
+    monkeypatch.setattr(spicedb, 'furnish_kernels', furnish_kernels)
+    kernel_dict: dict[str, Any] = {}
+    with pytest.raises(OSError, match='no such file'):
+        _load(tdb_in_month(10.5), tdb_in_month(10.5),
+              np.zeros(_Cassini.MONTHS, dtype='bool'),
+              _month_lists({10: [FakeKernel('a.bc')]}), kernel_dict)
+    assert kernel_dict == {}
 
 
 def test_load_kernels_skips_kernels_already_furnished(fake_spicedb: FakeSpiceDB) -> None:
     kernel = FakeKernel('a.bc')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5),
-                          np.zeros(_Cassini.MONTHS, dtype='bool'),
-                          _month_lists({10: [kernel]}), {'a.bc': kernel})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5),
+          np.zeros(_Cassini.MONTHS, dtype='bool'),
+          _month_lists({10: [kernel]}), {'a.bc': kernel})
     assert fake_spicedb.furnished() == []
 
 
@@ -145,14 +174,14 @@ def test_load_kernels_skips_months_already_loaded(fake_spicedb: FakeSpiceDB) -> 
     lists = _month_lists({10: [FakeKernel('a.bc')], 11: [FakeKernel('b.bc')]})
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
     loaded[10] = True
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(11.5), loaded, lists, {})
+    _load(tdb_in_month(10.5), tdb_in_month(11.5), loaded, lists, {})
     assert fake_spicedb.furnished() == ['b.bc']
 
 
 def test_load_kernels_marks_a_month_with_no_kernels_loaded() -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded,
+          _month_lists({}), {})
     assert loaded[10]
 
 
@@ -160,33 +189,33 @@ def test_load_kernels_does_not_repeat_a_loaded_month(fake_spicedb: FakeSpiceDB) 
     lists = _month_lists({10: [FakeKernel('a.bc')]})
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
     kernel_dict: dict[str, Any] = {}
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
-                          kernel_dict)
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
+          kernel_dict)
     kernel_dict.clear()
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
-                          kernel_dict)
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), loaded, lists,
+          kernel_dict)
     assert fake_spicedb.furnished() == ['a.bc']
 
 
 def test_load_kernels_covers_a_time_range() -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(13.5), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(10.5), tdb_in_month(13.5), loaded,
+          _month_lists({}), {})
     assert list(np.nonzero(loaded)[0]) == [10, 11, 12, 13]
 
 
 @pytest.mark.parametrize('month', [-10.0, 250.0], ids=['before-mission', 'after-mission'])
 def test_load_kernels_ignores_times_outside_mission(month: float) -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(month), tdb_in_month(month), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(month), tdb_in_month(month), loaded,
+          _month_lists({}), {})
     assert not loaded.any()
 
 
 def test_load_kernels_clips_to_last_month() -> None:
     loaded = np.zeros(_Cassini.MONTHS, dtype='bool')
-    _Cassini.load_kernels(tdb_in_month(239.5), tdb_in_month(239.5), loaded,
-                          _month_lists({}), {})
+    _load(tdb_in_month(239.5), tdb_in_month(239.5), loaded,
+          _month_lists({}), {})
     assert list(np.nonzero(loaded)[0]) == [239]
 
 
@@ -199,8 +228,9 @@ def test_load_kernels_clips_to_last_month() -> None:
 def test_load_methods_use_their_own_kernel_tables(method: str, args: tuple[float, ...],
                                                   kind: str) -> None:
     other = 'SPK' if kind == 'CK' else 'CK'
-    _Cassini.initialize_kernels([kernel_for_months('k', 20.1, 20.2)],
-                                getattr(_Cassini, kind + '_LIST'))
+    kernels = [kernel_for_months('k', 20.1, 20.2)]
+    setattr(_Cassini, kind + '_KERNELS', kernels)
+    _Cassini.initialize_kernels(kernels, getattr(_Cassini, kind + '_LIST'))
     getattr(_Cassini, method)(*args)
     assert list(getattr(_Cassini, kind + '_DICT')) == ['k']
     assert not getattr(_Cassini, other + '_LOADED').any()
@@ -244,14 +274,14 @@ def test_initialize_selects_kernel_sets(fake_spicedb: FakeSpiceDB, kind: str, se
 
 def test_initialize_distributes_selected_kernels(fake_spicedb: FakeSpiceDB) -> None:
     spk = kernel_for_months('s.bsp', 30.2, 30.4)
-    ck = kernel_for_months('c.bc', 40.2, 40.4)
+    ck = kernel_for_months('c.bc', 200.2, 200.4)
     jup_ck = kernel_for_months('jup.bc', 37.2, 37.4)
     fake_spicedb.spk_kernels = [spk]
     fake_spicedb.ck_kernels = {'CAS-CK-RECONSTRUCTED': [ck], 'CAS-CK-JUP': [jup_ck]}
     _Cassini.initialize()
     assert _Cassini.SPK_LIST[30] == [spk]
-    assert _Cassini.CK_LIST[40] == [ck]
-    assert _Cassini.CK_LIST[37] == [jup_ck]
+    assert _Cassini.CK_LIST[200] == [ck]
+    assert _Cassini.CK_LIST[37][-1] is jup_ck
 
 
 @pytest.mark.parametrize(('kind', 'select'), [('spk', 'select_spk'), ('ck', 'select_ck')])
@@ -470,10 +500,10 @@ def test_no_kernels_reach_cspyce() -> None:
 
 
 @pytest.mark.parametrize(('options', 'expected'), [
-    (None, {'method': 'fast', 'sources': False}),
-    ({}, {'method': 'fast', 'sources': False}),
-    ({'method': 'strict', 'sources': True}, {'method': 'strict', 'sources': True}),
-    ({'other': 1}, {'other': 1, 'method': 'fast', 'sources': False}),
+    (None, {'method': 'strict', 'sources': False}),
+    ({}, {'method': 'strict', 'sources': False}),
+    ({'method': 'fast', 'sources': True}, {'method': 'fast', 'sources': True}),
+    ({'other': 1}, {'other': 1, 'method': 'strict', 'sources': False}),
 ], ids=['none', 'empty', 'given', 'other-option'])
 def test_pds3_options_with_defaults(options: dict[str, Any] | None,
                                     expected: dict[str, Any]) -> None:
@@ -523,5 +553,206 @@ def test_fix_target_without_observation_id() -> None:
 ], ids=['iss', 'uvis', 'vims', 'too-short', 'other-instrument'])
 def test_cassini_obs_id_code(obs_id: str, expected: str) -> None:
     assert _cassini_obs_id_code(obs_id) == expected
+
+##########################################################################################
+# The cruise C kernels
+##########################################################################################
+
+
+def _month_of(iso: str) -> int:
+    return int((julian.tdb_from_iso(iso) - _Cassini.TDB0) // _Cassini.DTDB)
+
+
+def _filespecs(kernels: list[Any]) -> list[str]:
+    return [kernel.filespec for kernel in kernels]
+
+
+_CRUISE_MID_1999 = _month_of('1999-02-15T00:00:00')    # 99001_99093rc.bc alone
+_RECONSTRUCTED_2003 = kernel_for_months('Cassini/CK-reconstructed/03236_04002ra.bc',
+                                        _month_of('2003-08-24T12:00:00') + 0.1,
+                                        _month_of('2004-01-02T12:00:00') + 0.1)
+
+
+def test_cruise_kernels_are_listed_in_their_directory() -> None:
+    kernels = _cruise_kernels()
+    assert len(kernels) == 31
+    assert kernels[0].filespec == 'Cassini/CK-cruise/97288_98002rc.bc'
+
+
+def test_cruise_kernels_resolve_under_the_spice_path(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # spicedb resolves each filespec against the SPICE root that SPICE_PATH gives
+    monkeypatch.setenv('SPICE_PATH', str(tmp_path))
+    monkeypatch.setattr(spicedb, 'SPICE_PATH', None)
+    monkeypatch.setattr(spicedb, 'SPICE_FILECACHE_PREFIX', None)
+    expected = []
+    for kernel in _cruise_kernels():
+        path = tmp_path / 'Cassini' / 'CK-cruise' / kernel.filespec.rpartition('/')[2]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'')
+        expected.append(path)
+    prefix = spicedb.get_spice_filecache_prefix()
+    assert [prefix.retrieve(kernel.filespec) for kernel in _cruise_kernels()] == expected
+
+
+def test_cruise_kernels_reach_a_month_they_cover() -> None:
+    _Cassini.initialize()
+    assert _filespecs(_Cassini.CK_LIST[_CRUISE_MID_1999]) == [
+        'Cassini/CK-cruise/99001_99093rc.bc']
+
+
+def test_cruise_kernels_miss_a_month_they_do_not_cover() -> None:
+    _Cassini.initialize()
+    assert _Cassini.CK_LIST[_month_of('2010-06-15T00:00:00')] == []
+
+
+@pytest.mark.parametrize('ck', ['predicted', 'none'])
+def test_cruise_kernels_only_with_reconstructed_pointing(ck: str) -> None:
+    _Cassini.initialize(ck=ck)
+    assert _Cassini.CK_LIST[_CRUISE_MID_1999] == []
+
+
+def test_cruise_kernels_come_before_reconstructed_kernels(
+        fake_spicedb: FakeSpiceDB) -> None:
+    fake_spicedb.ck_kernels = {'CAS-CK-RECONSTRUCTED': [_RECONSTRUCTED_2003]}
+    _Cassini.initialize()
+    month = _month_of('2003-11-15T00:00:00')
+    assert _filespecs(_Cassini.CK_LIST[month])[-1] == _RECONSTRUCTED_2003.filespec
+
+
+def test_reconstructed_kernel_is_furnished_after_a_new_cruise_kernel(
+        fake_spicedb: FakeSpiceDB) -> None:
+    # The reconstructed kernel, furnished for September 2003, is furnished again after the
+    # cruise kernels that November adds, so that it keeps its precedence
+    fake_spicedb.ck_kernels = {'CAS-CK-RECONSTRUCTED': [_RECONSTRUCTED_2003]}
+    _Cassini.initialize()
+    _Cassini.load_ck(julian.tdb_from_iso('2003-09-15T00:00:00'))
+    _Cassini.load_ck(julian.tdb_from_iso('2003-11-15T00:00:00'))
+    assert fake_spicedb.furnished()[-1] == _RECONSTRUCTED_2003.filespec
+
+
+def _load_order(fake_spicedb: FakeSpiceDB) -> list[str]:
+    # The furnished filespecs from first to last, each placed where it was furnished last
+    order: list[str] = []
+    for filespec in fake_spicedb.furnished():
+        if filespec in order:
+            order.remove(filespec)
+        order.append(filespec)
+    return order
+
+
+def test_reconstructed_kernel_wins_after_a_month_with_no_new_kernel(
+        fake_spicedb: FakeSpiceDB) -> None:
+    # November 2003 loads first; July then adds a cruise kernel that also covers
+    # September, and September, which brings no new kernel, loads last
+    fake_spicedb.ck_kernels = {'CAS-CK-RECONSTRUCTED': [_RECONSTRUCTED_2003]}
+    _Cassini.initialize()
+    for iso in ('2003-11-15T00:00:00', '2003-07-20T00:00:00', '2003-09-15T00:00:00'):
+        _Cassini.load_ck(julian.tdb_from_iso(iso))
+    tdb = julian.tdb_from_iso('2003-09-15T00:00:00')
+    covering = {kernel.filespec for kernel in _cruise_kernels() + [_RECONSTRUCTED_2003]
+                if julian.tdb_from_iso(kernel.start_time) <= tdb
+                <= julian.tdb_from_iso(kernel.stop_time)}
+    assert [filespec for filespec in _load_order(fake_spicedb)
+            if filespec in covering][-1] == _RECONSTRUCTED_2003.filespec
+
+
+def test_load_kernels_furnishes_again_after_a_new_kernel(
+        fake_spicedb: FakeSpiceDB) -> None:
+    # The later kernel, furnished for month 10, follows the new kernel of month 11 in the
+    # full list, so it is furnished again although month 11 does not list it
+    (early, later) = (FakeKernel('early.bc'), FakeKernel('later.bc'))
+    _Cassini.load_kernels(tdb_in_month(10.5), tdb_in_month(11.5),
+                          np.zeros(_Cassini.MONTHS, dtype='bool'), [early, later],
+                          _month_lists({10: [later], 11: [early]}), {})
+    assert fake_spicedb.furnished() == ['later.bc', 'early.bc', 'later.bc']
+
+
+def test_load_kernels_furnishes_in_order(fake_spicedb: FakeSpiceDB) -> None:
+    _load(tdb_in_month(10.5), tdb_in_month(10.5), np.zeros(_Cassini.MONTHS, dtype='bool'),
+          _month_lists({10: [FakeKernel('a.bc')]}), {})
+    assert fake_spicedb.named('furnish_kernels')[0][1] == {'fast': False}
+
+##########################################################################################
+# Clock counts
+##########################################################################################
+
+
+def test_tdb_from_sclk(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[int, str]] = []
+
+    def scs2e(code: int, count: str) -> float:
+        calls.append((code, count))
+        return 12.5
+
+    monkeypatch.setattr(cspyce, 'scs2e', scs2e)
+    assert _tdb_from_sclk('1294562649.000') == 12.5
+    assert calls == [(-82, '1294562649.000')]
+
+
+def test_sclk_from_tdb_drops_the_partition() -> None:
+    assert _sclk_from_tdb(1294562649.) == '1294562649.000'
+
+##########################################################################################
+# Reading labels and image files
+##########################################################################################
+
+
+@pytest.mark.parametrize(('error', 'expected', 'message'), [
+    (KeyError('START_TIME'), HostFormatError, "x.LBL: KeyError: 'START_TIME'"),
+    (ValueError('bad'), HostFormatError, 'x.LBL: ValueError: bad'),
+    (VicarError('bad header'), VicarHostError, 'x.LBL: bad header'),
+], ids=['key', 'value', 'vicar'])
+def test_file_errors_names_the_file(error: Exception, expected: type[Exception],
+                                    message: str) -> None:
+    with pytest.raises(expected, match=re.escape(message)), _file_errors('x.LBL'):
+        raise error
+
+
+@pytest.mark.parametrize('error', [
+    KeyError('SPICE(CKINSUFFDATA) -- pxform -- no pointing'),
+    WrongHostError('not a Cassini ISS PDS3 label'),
+    OopsValueError('invalid timeshift letters: X'),
+    RuntimeError('other'),
+], ids=['spice', 'host', 'oops', 'other'])
+def test_file_errors_passes_other_errors(error: Exception) -> None:
+    with pytest.raises(type(error)) as info, _file_errors('x.LBL'):
+        raise error
+    assert info.value is error
+
+
+@pytest.mark.parametrize(('value', 'fill', 'expected'), [
+    (None, False, True),
+    (' unk ', False, True),
+    ('SATURN', False, False),
+    (True, False, False),
+    (-999., True, True),
+    (-999., False, False),
+    (['N/A', 'NULL'], False, True),
+    (['N/A', 1], False, False),
+    ([], False, False),
+    ({'A': 1}, False, False),
+], ids=['none', 'null-text', 'text', 'bool', 'fill', 'not-fill', 'null-list',
+        'mixed-list', 'empty-list', 'dict'])
+def test_is_null(value: Any, fill: bool, expected: bool) -> None:
+    assert _is_null(value, fill) is expected
+
+
+def test_without_nulls() -> None:
+    dict_ = {'A': 'UNK', 'B': [1., -999.], 'C': {'D': 'N/A', 'E': 2}, 'F': -999.}
+    assert _without_nulls(dict_, frozenset({'B'})) == {'B': [1., None], 'C': {'E': 2},
+                                                       'F': -999.}
+
+
+def test_metadata_subfields() -> None:
+    meta = {'TARGET_NAME': 'SATURN', 'OBSERVATION_ID': 'X'}
+    assert _metadata_subfields(meta) == {'dict': meta, 'ck_object_id': -82000,
+                                         'ck_sclk_id': -82,
+                                         'spice_frame_is_frozen': False,
+                                         'label_target': 'SATURN', 'observation_id': 'X'}
+
+
+def test_metadata_subfields_without_items() -> None:
+    assert 'label_target' not in _metadata_subfields({})
 
 ##########################################################################################

@@ -2,6 +2,7 @@
 # host_cassini/oops/_cassini.py
 ##########################################################################################
 
+import contextlib
 import re
 
 import numpy as np
@@ -9,8 +10,9 @@ import numpy as np
 import julian
 import spicedb
 import cspyce
-import oops
+from vicar     import VicarError
 
+import oops
 from oops.body import Body
 
 
@@ -26,6 +28,64 @@ from oops.body import Body
 # _CMATRIX_ROTATION to build the observation frame. The generic
 # Snapshot.get_spice_cmatrix() uses this matrix as attribute `spice_to_frame`.
 _CMATRIX_ROTATION = oops.Matrix3([[-1,0,0],[0,-1,0],[0,0,1]])
+
+# The NAIF ID of the Cassini spacecraft clock
+_CASSINI_SCLK = -82
+
+# The subfields that every Cassini observation carries about its pointing: the C kernels
+# tabulate it for the spacecraft, -82000 (CASSINI_SC_COORD), against the Cassini clock,
+# and every instrument frame is a frame chain from SPICE, never a frozen C-matrix.
+_POINTING_SUBFIELDS = {
+    'ck_object_id'         : -82000,
+    'ck_sclk_id'           : _CASSINI_SCLK,
+    'spice_frame_is_frozen': False,
+}
+
+# The cruise C kernels, in Cassini/CK-cruise/ under the SPICE resources directory, each
+# with the start and stop of its coverage, from ckcov. The SPICE database lists none of
+# them, and it is never changed, so without this table no cruise image outside the
+# Jupiter flyby has pointing (issue 42). The table goes when the kernel database is
+# replaced. The files are listed by start time, so that a later one is furnished after,
+# and takes precedence over, an earlier one that it overlaps.
+_CRUISE_CK_DIRECTORY = 'Cassini/CK-cruise/'
+_CRUISE_CKS = (
+    ('97288_98002rc.bc', '1997-10-15T00:01:15.375', '1998-01-02T00:56:56.743'),
+    ('98002_98091rc.bc', '1998-01-02T00:56:56.743', '1998-04-01T00:04:10.096'),
+    ('98091_98185rc.bc', '1998-04-01T00:04:10.096', '1998-07-04T12:00:32.369'),
+    ('98185_98279rc.bc', '1998-07-04T12:00:32.369', '1998-10-06T00:10:58.052'),
+    ('98279_99001rc.bc', '1998-10-06T00:10:58.052', '1999-01-01T00:00:02.445'),
+    ('99001_99093rc.bc', '1999-01-01T00:00:02.445', '1999-04-03T04:03:13.494'),
+    ('99093_99182rc.bc', '1999-04-03T04:03:13.494', '1999-07-01T00:00:27.021'),
+    ('99182_99274rc.bc', '1999-07-01T00:00:27.021', '1999-10-01T00:04:36.747'),
+    ('99274_00001rc.bc', '1999-10-01T00:04:36.747', '2000-01-01T02:09:34.947'),
+    ('00001_00092rc.bc', '2000-01-01T02:09:34.947', '2000-04-01T00:00:03.152'),
+    ('00092_00183rc.bc', '2000-04-01T00:00:03.152', '2000-07-01T00:00:03.362'),
+    ('00183_00275rc.bc', '2000-07-01T00:00:03.362', '2000-10-01T00:00:01.695'),
+    ('00275_01001rc.bc', '2000-10-01T00:00:01.695', '2001-01-01T02:39:40.851'),
+    ('01001_01091rc.bc', '2001-01-01T02:39:40.851', '2001-04-01T00:00:03.117'),
+    ('01091_01182rc.bc', '2001-04-01T00:00:03.117', '2001-07-01T00:00:04.053'),
+    ('01182_01274rc.bc', '2001-07-01T00:00:04.053', '2001-10-01T00:00:03.826'),
+    ('01274_02001rc.bc', '2001-10-01T00:00:03.826', '2002-01-01T00:00:03.986'),
+    ('02001_02091rc.bc', '2002-01-01T00:00:03.986', '2002-04-01T00:00:01.067'),
+    ('02091_02182rc.bc', '2002-04-01T00:00:01.067', '2002-07-01T00:00:01.346'),
+    ('02182_02274rc.bc', '2002-07-01T00:00:01.346', '2002-10-01T00:00:01.236'),
+    ('02274_03001rc.bc', '2002-10-01T00:00:01.236', '2003-01-01T00:00:01.191'),
+    ('03001_03091rc.bc', '2003-01-01T00:00:01.191', '2003-04-01T00:00:02.212'),
+    ('03091_03182rc.bc', '2003-04-01T00:00:02.212', '2003-07-01T00:00:01.770'),
+    ('03182_03274rc.bc', '2003-07-01T00:00:01.770', '2003-10-01T00:00:01.872'),
+    ('03274_04001rc.bc', '2003-10-01T00:00:01.872', '2004-01-01T00:00:02.006'),
+    ('03313_03323ra.bc', '2003-11-09T00:00:03.891', '2003-11-18T23:59:58.009'),
+    ('03323_03333ra.bc', '2003-11-19T00:00:02.009', '2003-11-28T23:59:56.377'),
+    ('03333_03343ra.bc', '2003-11-29T00:00:00.377', '2003-12-07T05:40:19.728'),
+    ('03343_03353ra.bc', '2003-12-09T03:46:54.643', '2003-12-18T23:56:45.331'),
+    ('03353_03363ra.bc', '2003-12-19T00:14:33.324', '2003-12-28T23:59:59.695'),
+    ('03363_04002ra.bc', '2003-12-29T00:00:03.695', '2004-01-01T23:59:57.442'),
+)
+
+# The kernel set name and load priority given to the cruise C kernels, below the 100 of
+# CAS-CK-RECONSTRUCTED in the SPICE database
+_CRUISE_CK_NAME = 'CAS-CK-CRUISE'
+_CRUISE_CK_PRIORITY = 90
 
 
 class _Cassini:
@@ -45,11 +105,15 @@ class _Cassini:
             deciding which kernels apply to it.
         CK_LOADED (numpy.ndarray): Boolean array with one flag per month, True if the C
             kernels for that month have been furnished.
+        CK_KERNELS (list[KernelInfo]): Every C kernel that the months draw on, in load
+            order.
         CK_LIST (numpy.ndarray): Object array holding, for each month, the list of
             KernelInfo objects for the C kernels needed within that month.
         CK_DICT (dict[str, KernelInfo]): The furnished C kernels, keyed by filespec.
         SPK_LOADED (numpy.ndarray): Boolean array with one flag per month, True if the SP
             kernels for that month have been furnished.
+        SPK_KERNELS (list[KernelInfo]): Every SP kernel that the months draw on, in load
+            order.
         SPK_LIST (numpy.ndarray): Object array holding, for each month, the list of
             KernelInfo objects for the SP kernels needed within that month.
         SPK_DICT (dict[str, KernelInfo]): The furnished SP kernels, keyed by filespec.
@@ -78,12 +142,14 @@ class _Cassini:
     # geometry calculation involving Cassini, a quick call to load_ck(time) or
     # load_spk(time) will ensure that the information is available.
 
-    CK_LOADED = np.zeros(MONTHS, dtype='bool')      # True if month was loaded
-    CK_LIST   = np.empty(MONTHS, dtype='object')    # Kernels needed by month
-    CK_DICT   = {}      # Dictionary keyed by filespec returns kernel info object, but
+    CK_LOADED  = np.zeros(MONTHS, dtype='bool')     # True if month was loaded
+    CK_KERNELS = []                                 # Every kernel, in load order
+    CK_LIST    = np.empty(MONTHS, dtype='object')   # Kernels needed by month
+    CK_DICT    = {}     # Dictionary keyed by filespec returns kernel info object, but
                         # only if loaded.
 
     SPK_LOADED  = np.zeros(MONTHS, dtype='bool')
+    SPK_KERNELS = []
     SPK_LIST    = np.empty(MONTHS, dtype='object')
     SPK_DICT    = {}
 
@@ -102,7 +168,9 @@ class _Cassini:
             ck (str, optional): The set of C kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no C kernels automatically,
                 leaving their handling to the caller. 'reconstructed' also loads the
-                reconstructed C kernels of the Jupiter flyby.
+                reconstructed C kernels of the Jupiter flyby and the cruise C kernels,
+                which the reconstructed kernels take precedence over where both cover a
+                time.
             spk (str, optional): The set of SP kernels to load, 'reconstructed' or
                 'predicted' (case-insensitive); 'none' to load no SP kernels
                 automatically, leaving their handling to the caller.
@@ -141,6 +209,7 @@ class _Cassini:
             kernels = spicedb.select_spk(-82, name='CAS-SPK-' + spk,
                                          time=(_Cassini.START_TIME, _Cassini.STOP_TIME),
                                          asof=asof)
+            _Cassini.SPK_KERNELS = kernels
             _Cassini.initialize_kernels(kernels, _Cassini.SPK_LIST)
 
         ck = ck.upper()
@@ -154,12 +223,17 @@ class _Cassini:
                                         time=(_Cassini.START_TIME, _Cassini.STOP_TIME),
                                         asof=asof)
 
-            # The reconstructed C kernels of the Jupiter flyby are a set of their own
+            # The reconstructed C kernels of the Jupiter flyby are a set of their own. The
+            # cruise C kernels come first, so that reconstructed pointing, furnished after
+            # them, takes precedence where both cover a time, as late in 2003.
             if ck == 'RECONSTRUCTED':
-                kernels = kernels + spicedb.select_ck(
-                    -82, name='CAS-CK-JUP',
-                    time=(_Cassini.START_TIME, _Cassini.STOP_TIME), asof=asof)
+                kernels = (_cruise_kernels() + kernels
+                           + spicedb.select_ck(-82, name='CAS-CK-JUP',
+                                               time=(_Cassini.START_TIME,
+                                                     _Cassini.STOP_TIME),
+                                               asof=asof))
 
+            _Cassini.CK_KERNELS = kernels
             _Cassini.initialize_kernels(kernels, _Cassini.CK_LIST)
 
         # Load extra kernels if necessary
@@ -179,10 +253,12 @@ class _Cassini:
         _Cassini.loaded_instruments = []
 
         _Cassini.CK_LOADED = np.zeros(_Cassini.MONTHS, dtype='bool')
+        _Cassini.CK_KERNELS = []
         _Cassini.CK_LIST = np.empty(_Cassini.MONTHS, dtype='object')
         _Cassini.CK_DICT = {}
 
         _Cassini.SPK_LOADED = np.zeros(_Cassini.MONTHS, dtype='bool')
+        _Cassini.SPK_KERNELS = []
         _Cassini.SPK_LIST = np.empty(_Cassini.MONTHS, dtype='object')
         _Cassini.SPK_DICT = {}
 
@@ -197,8 +273,8 @@ class _Cassini:
         Parameters:
             t (float): The time in seconds.
         """
-        _Cassini.load_kernels(t, t, _Cassini.CK_LOADED, _Cassini.CK_LIST,
-                              _Cassini.CK_DICT)
+        _Cassini.load_kernels(t, t, _Cassini.CK_LOADED, _Cassini.CK_KERNELS,
+                              _Cassini.CK_LIST, _Cassini.CK_DICT)
 
     @staticmethod
     def load_cks(t0, t1):
@@ -212,8 +288,8 @@ class _Cassini:
             t0 (float): The start time in seconds.
             t1 (float): The stop time in seconds.
         """
-        _Cassini.load_kernels(t0, t1, _Cassini.CK_LOADED, _Cassini.CK_LIST,
-                              _Cassini.CK_DICT)
+        _Cassini.load_kernels(t0, t1, _Cassini.CK_LOADED, _Cassini.CK_KERNELS,
+                              _Cassini.CK_LIST, _Cassini.CK_DICT)
 
     @staticmethod
     def load_spk(t):
@@ -224,8 +300,8 @@ class _Cassini:
         Parameters:
             t (float): The time in seconds.
         """
-        _Cassini.load_kernels(t, t, _Cassini.SPK_LOADED, _Cassini.SPK_LIST,
-                              _Cassini.SPK_DICT)
+        _Cassini.load_kernels(t, t, _Cassini.SPK_LOADED, _Cassini.SPK_KERNELS,
+                              _Cassini.SPK_LIST, _Cassini.SPK_DICT)
 
     @staticmethod
     def load_spks(t0, t1):
@@ -240,20 +316,29 @@ class _Cassini:
             t0 (float): The start time in seconds.
             t1 (float): The stop time in seconds.
         """
-        _Cassini.load_kernels(t0, t1, _Cassini.SPK_LOADED, _Cassini.SPK_LIST,
-                              _Cassini.SPK_DICT)
+        _Cassini.load_kernels(t0, t1, _Cassini.SPK_LOADED, _Cassini.SPK_KERNELS,
+                              _Cassini.SPK_LIST, _Cassini.SPK_DICT)
 
     @staticmethod
-    def load_kernels(t0, t1, loaded, lists, kernel_dict):
+    def load_kernels(t0, t1, loaded, kernels, lists, kernel_dict):
         """Furnish every kernel in the given lists that applies within a time range.
+
+        Whatever order the months are loaded in, the furnished kernels stay in the order
+        of `kernels`, so that a later kernel takes precedence over an earlier one wherever
+        both cover a time. When a month brings kernels that are new, every furnished
+        kernel from the first new one onward in `kernels` is furnished again, in that
+        order.
 
         Parameters:
             t0 (float): The start time in seconds TDB.
             t1 (float): The stop time in seconds TDB.
             loaded (numpy.ndarray): Boolean array with one flag per month, True if that
                 month's kernels have already been furnished; it is updated in place.
+            kernels (list[KernelInfo]): Every kernel that the months draw on, in load
+                order.
             lists (numpy.ndarray): Object array holding, for each month of the mission,
-                the list of KernelInfo objects needed within that month.
+                the list of KernelInfo objects needed within that month, in the order of
+                `kernels`.
             kernel_dict (dict[str, KernelInfo]): The furnished KernelInfo objects, keyed
                 by filespec; it is updated in place.
         """
@@ -265,14 +350,21 @@ class _Cassini:
         m1 = max(m1, 0)         # ignore time limits outside mission duration
         m2 = min(m2, _Cassini.MONTHS - 1)
 
-        # Load any months not already loaded
+        # Load any months not already loaded. SPICE gives precedence to the kernel
+        # furnished last, so every furnished kernel that follows a new one in the full
+        # list is furnished again after it; otherwise a cruise C kernel new to this month
+        # would take precedence over the reconstructed kernel that an earlier month
+        # furnished, even in a later month that brings no new kernel (issue 42).
         for m in range(m1, m2+1):
             if not loaded[m]:
-                for kernel in lists[m]:
-                    filespec = kernel.filespec
-                    if filespec not in kernel_dict:
-                        spicedb.furnish_kernels([kernel])
-                        kernel_dict[filespec] = kernel
+                new = {kernel.filespec: kernel for kernel in lists[m]
+                       if kernel.filespec not in kernel_dict}
+                if new:
+                    first = [kernel.filespec for kernel in kernels].index(next(iter(new)))
+                    spicedb.furnish_kernels([kernel for kernel in kernels[first:]
+                                             if kernel.filespec in kernel_dict
+                                             or kernel.filespec in new], fast=False)
+                    kernel_dict.update(new)
                 loaded[m] = True
 
     ######################################################################################
@@ -507,12 +599,229 @@ def _fix_cassini_ring_target(target, dict_, tstart):
 def _pds3_options_with_defaults(options):
     """The PDS3 option dictionary with defaults.
 
-    Specifying sources=False prevents the Host module from overriding with sources=True.
+    The default method is "strict", the one method with which the Cassini hosts read
+    every label of the current archive, with the corrections of each host's
+    ``_correct_label_text``; the "fast" method silently splits a quoted METHOD_DESC that
+    holds "=" over two lines in thousands of ISS labels. Specifying sources=False
+    prevents the Host module from overriding with sources=True.
+
+    Parameters:
+        options (dict[str, Any] | None): The options given by the caller, if any; not
+            modified.
+
+    Returns:
+        dict[str, Any]: A copy of `options`, with method "strict" and sources False
+        unless it gives others.
     """
 
     options = {} if options is None else options.copy()
-    options.setdefault('method', 'fast')
+    options.setdefault('method', 'strict')
     options.setdefault('sources', False)
     return options
+
+
+def _metadata_subfields(meta):
+    """The subfields of a UVIS or VIMS observation that come from its metadata.
+
+    Parameters:
+        meta (dict[str, Any]): The metadata: the label without its null values, or the
+            merged index row.
+
+    Returns:
+        dict[str, Any]: The subfields `dict`, which is `meta`, `ck_object_id`,
+        `ck_sclk_id` and `spice_frame_is_frozen`, and `label_target` and
+        `observation_id` when `meta` gives TARGET_NAME and OBSERVATION_ID.
+    """
+
+    subfields = {'dict': meta, **_POINTING_SUBFIELDS}
+    for (item, name) in (('TARGET_NAME', 'label_target'),
+                         ('OBSERVATION_ID', 'observation_id')):
+        if item in meta:
+            subfields[name] = meta[item]
+    return subfields
+
+
+def _cruise_kernels():
+    """The cruise C kernels, as kernel information for the monthly kernel lists.
+
+    Returns:
+        list[KernelInfo]: One for each entry of `_CRUISE_CKS`, in table order, named for
+        its file in `_CRUISE_CK_DIRECTORY`, which spicedb resolves against the root of
+        the SPICE resources, as it does every file named in the SPICE database.
+    """
+
+    return [spicedb.KernelInfo([_CRUISE_CK_NAME, None, 'CK', _CRUISE_CK_DIRECTORY + name,
+                                start, stop, None, _CASSINI_SCLK, _CRUISE_CK_PRIORITY,
+                                None])
+            for (name, start, stop) in _CRUISE_CKS]
+
+
+def _tdb_from_sclk(count):
+    """The time in seconds TDB of a Cassini spacecraft clock count.
+
+    Parameters:
+        count (str): The clock count, such as "1294562649.000"; the digits after the
+            point count 1/256 s ticks.
+
+    Returns:
+        float: The time in seconds TDB, from the Cassini spacecraft clock kernel.
+    """
+
+    return cspyce.scs2e(_CASSINI_SCLK, count)
+
+
+def _sclk_from_tdb(tdb):
+    """The Cassini spacecraft clock count of a time, without its partition.
+
+    Parameters:
+        tdb (float): The time in seconds TDB.
+
+    Returns:
+        str: The clock count, such as "1294562649.000", from the Cassini spacecraft clock
+        kernel.
+    """
+
+    return cspyce.sce2s(_CASSINI_SCLK, tdb).rpartition('/')[2]
+
+##########################################################################################
+# Reading labels and image files
+##########################################################################################
+
+# The number that the Cassini labels write for a value that was not determined. It is
+# missing only in the keywords that a host lists, where it cannot be a real value, such
+# as a temperature or a data rate; elsewhere, as in a position vector, -999 can be real.
+_FILL_VALUE = -999.
+
+
+@contextlib.contextmanager
+def _file_errors(filepath):
+    """A context within which every label and image file of a Cassini product is read
+    and interpreted, so that each failure to do so raises a host error naming the file.
+
+    Within it, a failure to read the VICAR content of a file raises VicarHostError, and a
+    KeyError, IndexError, TypeError or ValueError, such as a label that lacks a keyword
+    that the host needs, a value that cannot be read as its keyword requires, or an image
+    file that ends before its array, raises HostFormatError. Each message begins with the
+    file. A host error, an exception of oops itself, and an error that SPICE reports,
+    whose message begins with its code, such as "SPICE(CKINSUFFDATA)", pass unchanged.
+
+    Parameters:
+        filepath (str | pathlib.Path | FCPath | None): The file that the caller passed,
+            the label or the image file, named in the error.
+
+    Raises:
+        VicarHostError: For a failure to read VICAR content.
+        HostFormatError: For any other failure to read or interpret the file.
+    """
+
+    try:
+        yield
+    except (oops.host.HostError, oops.OopsException):
+        raise
+    except VicarError as err:
+        raise oops.host.VicarHostError(f'{filepath}: {err}') from err
+    except (KeyError, IndexError, TypeError, ValueError) as err:
+        if _is_spice_error(err):
+            raise
+        raise oops.host.HostFormatError(f'{filepath}: {type(err).__name__}: {err}'
+                                        ) from err
+
+
+def _read_label(host, fileinfo, *, astrometry, pds3_options):
+    """The parsed PDS3 label of a Cassini product, read by its host.
+
+    Parameters:
+        host (type): The host class, whose correction of label text is applied.
+        fileinfo (str | pathlib.Path | FCPath | Pds3Label): The path to the label, or the
+            label already parsed, which is returned as it is.
+        astrometry (bool): True if the observations are for astrometry only.
+        pds3_options (dict[str, Any]): The options for the PDS3 label parser.
+
+    Returns:
+        Pds3Label: The parsed label.
+
+    Raises:
+        PdsHostError: If the label cannot be parsed with the options given, or holds a
+            value that cannot be converted, such as the date 2005-02-30. The message
+            names the label.
+    """
+
+    try:
+        return host._read_fileinfo(fileinfo, formats='P', astrometry=astrometry,
+                                   pds3_options=pds3_options)
+    except oops.OopsValueError as err:
+        raise oops.host.PdsHostError(f'cannot parse the PDS3 label {fileinfo}: {err}'
+                                     ) from err
+
+
+def _is_spice_error(err):
+    """True if an exception is an error that SPICE reported through cspyce.
+
+    Parameters:
+        err (Exception): The exception.
+
+    Returns:
+        bool: True if its message begins with a SPICE error code, as in
+        "SPICE(NOFRAMECONNECT) -- ...".
+    """
+
+    return (len(err.args) > 0 and isinstance(err.args[0], str)
+            and err.args[0].startswith('SPICE('))
+
+
+def _is_null(value, fill=False):
+    """True if a value of a label or header states nothing.
+
+    Parameters:
+        value (Any): The value of a keyword.
+        fill (bool, optional): True if -999 is a fill value in this keyword.
+
+    Returns:
+        bool: True if `value` is None or text that PDS3 writes for no value, as
+        ``oops.host.is_pds3_null`` tells ("UNK", "UNKNOWN", "N/A", "NULL", "NOT
+        APPLICABLE", "---" or the empty string, in any case and with any surrounding
+        blanks); -999 if `fill` is True; or a non-empty list, tuple or set of nothing but
+        these.
+    """
+
+    if value is None or oops.host.is_pds3_null(value):
+        return True
+    if isinstance(value, (str, bool)):
+        return False
+    if isinstance(value, (int, float)):
+        return fill and value == _FILL_VALUE
+    if isinstance(value, (list, tuple, set, frozenset)) and len(value) > 0:
+        return all(_is_null(item, fill) for item in value)
+    return False
+
+
+def _without_nulls(dict_, fill_keys=frozenset()):
+    """A copy of the content of a label or header without its missing values.
+
+    Parameters:
+        dict_ (dict[str, Any]): The keywords of a label or header.
+        fill_keys (collections.abc.Container[str], optional): The keywords in which -999
+            is a fill value.
+
+    Returns:
+        dict[str, Any]: The keywords whose values are not missing in the sense of
+        :func:`_is_null`. In a list some of whose elements are missing, each of them is
+        None: every list in a Cassini label is a sequence whose positions carry meaning,
+        such as the front and back temperatures of OPTICS_TEMPERATURE or the two filters
+        of FILTER_NAME. Each dictionary inside, such as an OBJECT, is treated the same
+        way.
+    """
+
+    result = {}
+    for (key, value) in dict_.items():
+        fill = key in fill_keys
+        if _is_null(value, fill):
+            continue
+        if isinstance(value, dict):
+            value = _without_nulls(value, fill_keys)
+        elif isinstance(value, list):
+            value = [None if _is_null(item, fill) else item for item in value]
+        result[key] = value
+    return result
 
 ##########################################################################################
