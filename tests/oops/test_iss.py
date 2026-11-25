@@ -1340,6 +1340,18 @@ def test_from_index_merges_a_given_supplement(tmp_path: pathlib.Path) -> None:
     assert [obs.dict['EXTRA'] for obs in snapshots] == ['A', 'B']
 
 
+def test_from_index_supplement_must_agree(tmp_path: pathlib.Path) -> None:
+    supplement = write_table(tmp_path, 'extra',
+                             {'VOLUME_ID': ['COISS_2009', 'COISS_2009'],
+                              'FILE_SPECIFICATION_NAME': [_NAC_FILE, _WAC_FILE],
+                              'EXPOSURE_DURATION': [1000.0, 600.0]})
+    snapshots = CassiniISS.from_index(write_index(tmp_path), supplement=supplement)
+    next(snapshots)
+    with pytest.raises(oops.host.HostIndexError,
+                       match='index row 1 does not match its supplement row'):
+        next(snapshots)
+
+
 def test_from_index_missing_supplement(tmp_path: pathlib.Path) -> None:
     with pytest.raises(FileNotFoundError):
         CassiniISS.from_index(write_index(tmp_path), supplement=tmp_path / 'none.lbl')

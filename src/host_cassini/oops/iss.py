@@ -541,8 +541,8 @@ class CassiniISS(oops.Host):
             supplement (str | pathlib.Path | FCPath | object | None, optional): The path
                 to the PDS label of a supplemental index file, in any directory, whose
                 columns are merged into each row; its rows must list the same files as
-                the index in the same order. Where both tables give a column, the index
-                value is kept. The default, `oops.Host.SUPPLEMENT`, reads the file beside
+                the index in the same order, and every other column that both tables
+                give must agree. The default, `oops.Host.SUPPLEMENT`, reads the file beside
                 `filepath` whose name has "_supplemental_index" in place of "_index", if
                 it exists; no ISS index has one. None reads the index alone.
             label (Pds3Label, optional): The PDS label of `filepath` if it has already
